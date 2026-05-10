@@ -8,7 +8,7 @@ export class NodePlugin implements BuildPlugin {
 	bundle = 'esbuild' as const;
 
 	generateEntryPoint(ctx: BuildContext): string {
-		const { agents, roles } = ctx;
+		const { agents, roles, appEntry } = ctx;
 		const rolesJson = JSON.stringify(roles);
 		// Inline the user-defined models map as a JSON literal. Definitions are
 		// JSON-serializable by construction (see `defineOpenAICompletionsModel`),
@@ -35,21 +35,17 @@ export class NodePlugin implements BuildPlugin {
 			.map((a, index) => `  ${JSON.stringify(a.name)}: ${agentVarName(a.name, index)},`)
 			.join('\n');
 
-		// Webhook agent names. `createFlueApp` accepts any iterable of names
-		// and snapshots it once internally, so a plain array literal is fine.
+		// Webhook agent names. `configureFlueRuntime` snapshots whatever
+		// iterable is handed to it, so a plain array literal is fine.
 		const webhookNames = JSON.stringify(webhookAgents.map((a) => a.name));
 
-		// Manifest for /agents endpoint
-		const manifest = JSON.stringify(
-			{
-				agents: agents.map((a) => ({
-					name: a.name,
-					triggers: a.triggers,
-				})),
-			},
-			null,
-			2,
-		);
+		// User-supplied app.ts (if any). The generated entry imports the user's
+		// default export and dispatches all requests through `app.fetch`. When
+		// no app.ts is present, the generated entry constructs a thin default
+		// Hono that mounts `flue()` and renders canonical error envelopes.
+		const userAppImport = appEntry
+			? `import userApp from '${appEntry.replace(/\\/g, '/')}';`
+			: '';
 
 		// All HTTP routing, SSE/webhook/sync mode handling, agent dispatch,
 		// and error rendering live in the SDK's runtime modules. The
@@ -64,10 +60,12 @@ import {
   InMemorySessionStore,
   bashFactoryToSessionEnv,
   resolveModel,
-  createFlueApp,
+  configureFlueRuntime,
+  createDefaultFlueApp,
 } from '@flue/sdk/internal';
 
 ${agentImports}
+${userAppImport}
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -94,8 +92,6 @@ const webhookAgentNames = ${webhookNames};
 // agents with \`webhook: true\`, preventing accidental public exposure of
 // agents that the user only intended to invoke from their CI pipeline.
 const isLocalMode = process.env.FLUE_MODE === 'local';
-
-const manifest = ${manifest};
 
 // ─── Sandbox Environments ───────────────────────────────────────────────────
 
@@ -145,19 +141,42 @@ function createContextForRequest(id, payload, req) {
   });
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────────
+// ─── Runtime seed ───────────────────────────────────────────────────────────
 
-// All HTTP routing and per-agent dispatch lives in the SDK's runtime module.
-// Webhook + SSE foreground execution use the default in-process runners
-// (just-call-the-handler) — no DO keepalive / fiber wrapping is needed on
-// Node.
-const app = createFlueApp({
-  manifest,
-  handlers,
+// Seed the public flue() sub-app with everything it needs to dispatch agent
+// requests in-process. Must run before \`flue()\` handles any request — by
+// virtue of being a top-level statement, it executes before \`serve(...)\`
+// below binds the listener. User app.ts files that call \`flue()\` at top
+// level are also fine because Hono routes are lazy: they read this config
+// only when a request arrives.
+configureFlueRuntime({
+  target: 'node',
   webhookAgents: webhookAgentNames,
   allowNonWebhook: isLocalMode,
+  handlers,
   createContext: createContextForRequest,
 });
+
+// ─── App composition ────────────────────────────────────────────────────────
+
+${
+	appEntry
+		? `// User-supplied app.ts: their default export owns the entire request
+// pipeline. We just verify it exposes a fetch method and pass the
+// listener through. flue() is available for them to mount, but the
+// composition is theirs to author.
+const app = userApp;
+if (!app || typeof app.fetch !== 'function') {
+  throw new Error(
+    '[flue] app.ts default export must be a Hono app or an object with a fetch(request) method.'
+  );
+}`
+		: `// No app.ts: build the default app via the SDK so the generated entry
+// stays \`hono\`-free (users only need hono in their node_modules when
+// they author their own app.ts). The default mounts \`flue()\` at root
+// and renders canonical Flue envelopes for unmatched paths.
+const app = createDefaultFlueApp();`
+}
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 

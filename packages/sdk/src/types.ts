@@ -687,6 +687,18 @@ export interface BuildContext {
 	 * on `root`, regardless of this value.
 	 */
 	output: string;
+	/**
+	 * Absolute path to the user's `app.{ts,js,mts,mjs}` entry, if one
+	 * exists in the source root. When set, the generated server entry
+	 * imports the user's app and dispatches all requests through its
+	 * `fetch` method instead of constructing a default Hono app. When
+	 * undefined, the generated entry falls back to a default Hono app
+	 * with Flue's built-in routes mounted via `flue()`.
+	 *
+	 * Discovery follows the same extension priority as agents:
+	 * `app.ts` > `app.mts` > `app.js` > `app.mjs`.
+	 */
+	appEntry?: string;
 	options: BuildOptions;
 }
 

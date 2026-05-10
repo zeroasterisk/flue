@@ -687,12 +687,18 @@ class CloudflareReloader implements DevReloader {
 	 *     so we have to re-parse them. (Plain body edits redo a tiny amount
 	 *     of work but the rebuild is cheap and idempotent.)
 	 *   - Changes to `roles/*.md` — roles are baked into the entry as JSON.
+	 *   - Adds/removes/edits of `app.{ts,mts,js,mjs}` — discovery flips the
+	 *     entry between the user-app form and the default-app fallback,
+	 *     and the import path is baked into `_entry.ts`. Body edits are
+	 *     handled by wrangler's source watcher, but emitting a rebuild on
+	 *     the path itself is cheap and means add/remove is correctly
+	 *     observed even when the user toggles the file in/out.
 	 *   - Changes to the user's `wrangler.jsonc` — affects the merged config.
 	 *
 	 * Notes we explicitly DO ignore for rebuild purposes (wrangler handles
-	 * them): edits to imported source files outside of `agents/`/`roles/`,
-	 * AGENTS.md, and `.agents/skills/` (those are runtime-discovered, not
-	 * baked into the entry).
+	 * them): edits to imported source files outside of `agents/`/`roles/`/
+	 * `app.*`, AGENTS.md, and `.agents/skills/` (those are runtime-
+	 * discovered, not baked into the entry).
 	 */
 	shouldRebuildOn(relPath: string): boolean {
 		// Env-file changes come through the watcher as absolute paths — match
@@ -714,6 +720,7 @@ class CloudflareReloader implements DevReloader {
 		// is harmless.
 		if (normalized.startsWith('agents/') || normalized.startsWith('.flue/agents/')) return true;
 		if (normalized.startsWith('roles/') || normalized.startsWith('.flue/roles/')) return true;
+		if (/^(?:\.flue\/)?app\.(?:ts|mts|js|mjs)$/.test(normalized)) return true;
 		return false;
 	}
 

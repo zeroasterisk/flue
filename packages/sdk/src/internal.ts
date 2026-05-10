@@ -21,28 +21,28 @@ export type { FlueContextConfig, FlueContextInternal } from './client.ts';
 export { InMemorySessionStore } from './session.ts';
 export { bashFactoryToSessionEnv } from './sandbox.ts';
 
-// Error framework. Re-exported here only for the names that generated
-// server entries import directly. Helpers used purely inside the SDK's own
-// runtime modules (e.g. `parseJsonBody`, `toSseData`, `validateAgentRequest`)
-// are imported from `../error-utils.ts` directly and don't need to appear
-// on this surface. If a future generated entry needs more, add it here.
+// Runtime modules consumed by the generated server entries.
 //
-// Generated-entry usage:
-//   - Node entry: none (delegates to `createFlueApp`).
-//   - Cloudflare entry: `toHttpResponse` for the worker's outer fetch
-//     try/catch; the four error subclasses for pre-routing checks.
-export { toHttpResponse } from './error-utils.ts';
-export {
-	AgentNotFoundError,
-	InvalidRequestError,
-	MethodNotAllowedError,
-	RouteNotFoundError,
-} from './errors.ts';
-
-// Runtime modules consumed by the generated server entries. The two targets
-// share the per-agent dispatch logic (handle-agent.ts) and the Node target
-// additionally consumes the Hono app builder (flue-middleware.ts). Both are
-// internal — the public surface in Phase 2 will live on `@flue/sdk` root.
+//   - `handleAgentRequest` is the per-agent dispatcher (webhook / SSE /
+//     sync). Used directly by the Cloudflare entry's `dispatchAgent`
+//     wrapper to layer in DO-specific keepalive / fiber handling. The
+//     Node target reaches the same dispatcher through `flue()`.
+//
+//   - `configureFlueRuntime` seeds the module-scoped config that
+//     `flue()` reads at request time. Called once per generated entry,
+//     before the listener (Node) or `default.fetch` (Cloudflare) takes
+//     traffic.
+//
+//   - `createDefaultFlueApp` is the no-`app.ts` fallback. Lives in the
+//     SDK so the generated entry doesn't have to import `hono` (which
+//     keeps user projects from needing it as a direct dep when they
+//     don't author their own `app.ts`).
+//
+// The user-facing `flue()` itself is re-exported from `@flue/sdk/app`,
+// not here. Error helpers (`toHttpResponse`, the FlueError subclasses)
+// are not re-exported either — generated entries no longer need them
+// directly; everything error-shaped flows through `flue()` /
+// `createDefaultFlueApp` and their `onError` handlers.
 export { handleAgentRequest } from './runtime/handle-agent.ts';
 export type {
 	AgentHandler,
@@ -51,8 +51,8 @@ export type {
 	RunHandlerFn,
 	StartWebhookFn,
 } from './runtime/handle-agent.ts';
-export { createFlueApp } from './runtime/flue-middleware.ts';
-export type { AgentManifest, FlueMiddlewareConfig } from './runtime/flue-middleware.ts';
+export { configureFlueRuntime, createDefaultFlueApp } from './runtime/flue-app.ts';
+export type { FlueRuntime } from './runtime/flue-app.ts';
 
 /**
  * Resolve a `provider/model-id` string into a pi-ai `Model` object.
