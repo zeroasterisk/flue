@@ -163,6 +163,17 @@ export interface CompactionConfig {
 
 // ─── Provider Runtime Settings ──────────────────────────────────────────────
 
+/**
+ * Per-provider transport-level settings. Set via
+ * `configureProvider(slug, settings)` from `@flue/sdk/app`, applied at
+ * model-resolution time (`baseUrl`, `headers`), apiKey-lookup time
+ * (`session.ts:getProviderApiKey`), and request-payload time
+ * (`storeResponses`).
+ *
+ * Type still lives in the public types barrel because external connectors
+ * occasionally need to reference the shape; the actual write path is
+ * `configureProvider`, not a field on any agent-author API.
+ */
 export interface ProviderSettings {
 	/**
 	 * Provider endpoint used by built-in models. Useful for API gateways,
@@ -208,8 +219,6 @@ export interface ProviderSettings {
 	storeResponses?: boolean;
 }
 
-export type ProvidersConfig = Record<string, ProviderSettings>;
-
 // ─── Agent Config (internal, passed to the harness at runtime) ──────────────
 
 export interface AgentConfig {
@@ -226,13 +235,8 @@ export interface AgentConfig {
 	model: Model<any> | undefined;
 	/** Agent-wide default role. Per-session and per-call roles override this. */
 	role?: string;
-	/** Provider runtime settings applied when resolving models. */
-	providers?: ProvidersConfig;
 	/** Resolve model config to a Model instance. Throws on invalid model strings. */
-	resolveModel: (
-		model: ModelConfig | undefined,
-		providers?: ProvidersConfig,
-	) => Model<any> | undefined;
+	resolveModel: (model: ModelConfig | undefined) => Model<any> | undefined;
 	/**
 	 * Agent-wide default reasoning effort. Per-call and role-level values
 	 * override this. The harness substitutes `"medium"` when unset; see
@@ -327,27 +331,6 @@ export interface AgentInit {
 	 * models that support it.
 	 */
 	thinkingLevel?: ThinkingLevel;
-
-	/**
-	 * Provider runtime settings for every model used by this agent, including
-	 * role-level and per-call model selections.
-	 *
-	 * Example:
-	 *
-	 * ```ts
-	 * await init({
-	 *   model: 'anthropic/claude-sonnet-4-6',
-	 *   providers: {
-	 *     anthropic: {
-	 *       baseUrl: env.ANTHROPIC_BASE_URL,
-	 *       headers: { 'X-Custom-Auth': env.GATEWAY_KEY },
-	 *       apiKey: 'dummy',
-	 *     },
-	 *   },
-	 * });
-	 * ```
-	 */
-	providers?: ProvidersConfig;
 
 	/**
 	 * Agent-wide tools. Every prompt(), skill(), and task() call can use these.

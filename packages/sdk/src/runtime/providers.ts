@@ -38,6 +38,7 @@ import {
 	CLOUDFLARE_AI_BINDING_API,
 	CLOUDFLARE_AI_BINDING_PROVIDER,
 } from '../cloudflare-model.ts';
+import type { ProviderSettings } from '../types.ts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -212,6 +213,93 @@ export function getRegisteredApiKey(provider: string): string | undefined {
  */
 export const registerApiProvider = piRegisterApiProvider;
 
+// ─── Provider override registry ─────────────────────────────────────────────
+//
+// Companion to {@link registerProvider}. Where `registerProvider` adds a
+// brand-new URL prefix backed by a freshly-constructed Model template,
+// `configureProvider` patches an EXISTING provider — typically one of pi-ai's
+// built-in catalog entries (`anthropic`, `openai`, `google`, …) whose
+// `cost`/`contextWindow`/`thinkingLevelMap` we want to keep, but whose
+// transport-level settings (baseUrl for a corporate gateway, an apiKey
+// sourced from a runtime env var, additional default headers) we need to
+// override.
+//
+// Keyed by pi-ai provider slug — the value of `Model.provider`, which is
+// what `init({ model: 'anthropic/...' })` resolves to and what
+// `AssistantMessage.provider` carries on every turn. Distinct from
+// `userModels` which is keyed by URL prefix; the two are different concepts
+// even though they often coincide (URL prefix `'anthropic'` happens to
+// resolve to provider `'anthropic'`).
+//
+// Last-write-wins, module-scoped. Same lifecycle story as the rest of the
+// runtime registry: populated once per isolate at module init, read at
+// request time.
+
+/**
+ * Provider settings applied on top of the resolved Model literal. Mirrors
+ * `ProviderSettings` from `types.ts` — same shape, exported for explicit
+ * documentation at the call site of {@link configureProvider}.
+ */
+export type ProviderConfiguration = ProviderSettings;
+
+const providerOverrides = new Map<string, ProviderSettings>();
+
+/**
+ * Override settings for an existing provider. Use this when the provider
+ * already exists (either in pi-ai's built-in catalog or via a prior
+ * `registerProvider` call) and you only want to patch transport-level
+ * concerns:
+ *
+ * - `baseUrl` — route through a corporate gateway / proxy / litellm
+ * - `apiKey`  — supply a key from `process.env` or a Cloudflare binding
+ *               (sourced at module top-level where `env` is in scope)
+ * - `headers` — merged into the model's default headers, override on collision
+ * - `storeResponses` — opt-in to OpenAI's server-side persistence on the
+ *                       Responses API; see `ProviderSettings.storeResponses`
+ *                       for the narrow conditions that require this
+ *
+ * ```ts
+ * import { configureProvider } from '@flue/sdk/app';
+ *
+ * configureProvider('anthropic', {
+ *   baseUrl: 'https://gateway.example.com/anthropic',
+ *   apiKey: process.env.GATEWAY_KEY,
+ * });
+ * ```
+ *
+ * Keyed by **pi-ai provider slug** (the `provider` field on the resolved
+ * Model), not by the URL prefix the user types. For pi-ai's built-ins the
+ * two coincide; for `registerProvider` entries the slug defaults to the
+ * registry name unless overridden. Cloudflare-AI-binding registrations
+ * always resolve to provider `'workers-ai'` — that's the slug to pass here
+ * if you need to override anything on that path.
+ *
+ * Last-write-wins: calling `configureProvider` twice with the same slug
+ * overwrites entirely (no merge). If you need to patch incrementally,
+ * read the current settings via {@link getProviderConfiguration} first.
+ */
+export function configureProvider(
+	provider: string,
+	settings: ProviderConfiguration,
+): void {
+	providerOverrides.set(provider, settings);
+}
+
+/**
+ * Read accessor for the override registry. Returns the configured settings
+ * for `provider` or `undefined` if none. Internal — consumed by
+ * `internal.ts:resolveModel` (for `baseUrl`/`headers`),
+ * `session.ts:getProviderApiKey` (for `apiKey`), and
+ * `session.ts:applyProviderPayloadOverrides` (for `storeResponses`). Not
+ * exported from `@flue/sdk/app`; users treat the registry as write-only via
+ * {@link configureProvider}.
+ */
+export function getProviderConfiguration(
+	provider: string,
+): ProviderSettings | undefined {
+	return providerOverrides.get(provider);
+}
+
 // ─── Internal helpers ───────────────────────────────────────────────────────
 
 /**
@@ -297,5 +385,4 @@ function effectiveProviderSlug(name: string, def: ProviderRegistration): string 
 	}
 	return def.provider ?? name;
 }
-
 

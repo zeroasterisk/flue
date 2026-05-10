@@ -9,8 +9,8 @@
  * User agent code should never import from here.
  */
 import { getModel, type Api, type KnownProvider, type Model } from '@mariozechner/pi-ai';
-import { resolveRegisteredModel } from './runtime/providers.ts';
-import type { ModelConfig, ProviderSettings, ProvidersConfig } from './types.ts';
+import { getProviderConfiguration, resolveRegisteredModel } from './runtime/providers.ts';
+import type { ModelConfig, ProviderSettings } from './types.ts';
 
 export { createFlueContext } from './client.ts';
 export type { FlueContextConfig, FlueContextInternal } from './client.ts';
@@ -68,16 +68,14 @@ export type { FlueRuntime } from './runtime/flue-app.ts';
  *      of the model string before the first `/`.
  *   2. pi-ai's static catalog via `getModel`.
  *
- * Reads from {@link resolveRegisteredModel} so the registry's lifecycle
- * stays owned by `runtime/providers.ts`. The previous build-time
- * `userModels` 3rd argument (inlined from `flue.config.ts: models`) is
- * gone — that field has been removed from the public config surface in
- * favor of `registerProvider` calls in `app.ts`.
+ * After resolution, `configureProvider()` overrides (keyed by the resolved
+ * Model's pi-ai provider slug) are applied to patch transport-level
+ * settings like `baseUrl` and `headers`. Read from
+ * {@link getProviderConfiguration}; apiKey and storeResponses live on the
+ * same registry but flow through `session.ts:getProviderApiKey` and
+ * `session.ts:applyProviderPayloadOverrides` respectively.
  */
-export function resolveModel(
-	model: ModelConfig | undefined,
-	providers?: ProvidersConfig,
-): Model<Api> | undefined {
+export function resolveModel(model: ModelConfig | undefined): Model<Api> | undefined {
 	if (model === false || model === undefined) return undefined;
 
 	const modelString = model;
@@ -107,10 +105,10 @@ export function resolveModel(
 		// `resolveRegisteredModel` decides the final `provider` slug per
 		// registration shape (binding entries hardcode `'workers-ai'`,
 		// HTTP entries default to the registry name unless overridden).
-		// Read the override key off the constructed model so
-		// `init({ providers: { ... } })` keys off the same field that
-		// surfaces on AssistantMessage records.
-		return applyProviderSettings(built, providers?.[built.provider]);
+		// Apply configureProvider() overrides keyed by that resolved slug
+		// so the override key matches the field that surfaces on
+		// AssistantMessage records.
+		return applyProviderSettings(built, getProviderConfiguration(built.provider));
 	}
 
 	// 2. pi-ai catalog. `getModel` is overloaded on literal provider/modelId;
@@ -124,7 +122,7 @@ export function resolveModel(
 				`is not registered with @mariozechner/pi-ai or via registerProvider().`,
 		);
 	}
-	return applyProviderSettings(resolved, providers?.[provider]);
+	return applyProviderSettings(resolved, getProviderConfiguration(provider));
 }
 
 function applyProviderSettings<TApi extends Api>(

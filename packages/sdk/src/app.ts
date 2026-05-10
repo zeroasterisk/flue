@@ -5,12 +5,25 @@
  * middleware, request rewriting, auth, custom model providers, etc.)
  * import everything they need from this subpath:
  *
- *     import { flue, registerProvider, type Fetchable } from '@flue/sdk/app';
+ *     import {
+ *       flue,
+ *       registerProvider,
+ *       configureProvider,
+ *       type Fetchable,
+ *     } from '@flue/sdk/app';
  *     import { Hono } from 'hono';
  *
+ *     // Define a brand-new prefix backed by a fresh Model template.
  *     registerProvider('my-anthropic', {
  *       api: 'openai-completions',
  *       baseUrl: 'https://api.anthropic.com/v1',
+ *       apiKey: process.env.ANTHROPIC_API_KEY,
+ *     });
+ *
+ *     // Patch transport-level settings on a built-in provider while keeping
+ *     // pi-ai's catalog (cost, contextWindow, thinkingLevelMap, …).
+ *     configureProvider('anthropic', {
+ *       baseUrl: process.env.ANTHROPIC_BASE_URL,
  *       apiKey: process.env.ANTHROPIC_API_KEY,
  *     });
  *
@@ -39,7 +52,9 @@ export { flue } from './runtime/flue-app.ts';
 export {
 	registerProvider,
 	registerApiProvider,
+	configureProvider,
 	type ProviderRegistration,
+	type ProviderConfiguration,
 	type HttpProviderRegistration,
 	type CloudflareAIBindingRegistration,
 	type CloudflareAIBinding,

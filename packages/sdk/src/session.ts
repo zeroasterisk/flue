@@ -38,7 +38,7 @@ import {
 	type ResultToolBundle,
 	ResultUnavailableError,
 } from './result.ts';
-import { getRegisteredApiKey } from './runtime/providers.ts';
+import { getProviderConfiguration, getRegisteredApiKey } from './runtime/providers.ts';
 import {
 	assertRoleExists,
 	resolveEffectiveRole as resolveEffectiveRoleName,
@@ -504,11 +504,11 @@ export class Session implements FlueSession {
 
 		const roleModel = resolveRoleModel(this.config.roles, roleName);
 		if (roleModel) {
-			model = this.config.resolveModel(roleModel, this.config.providers);
+			model = this.config.resolveModel(roleModel);
 		}
 
 		if (promptModel) {
-			model = this.config.resolveModel(promptModel, this.config.providers);
+			model = this.config.resolveModel(promptModel);
 		}
 
 		return this.requireModel(model, callSite);
@@ -539,20 +539,25 @@ export class Session implements FlueSession {
 	}
 
 	private getProviderApiKey(provider: string): string | undefined {
-		// Precedence: explicit `init({ providers: { ... } })` override → the
-		// apiKey on a `registerProvider()` registration → undefined (pi-ai
-		// then falls back to its own env-var lookup, e.g. ANTHROPIC_API_KEY).
-		// The registry fallback lets users declare an apiKey once on the
-		// registration in `app.ts` and have it apply to every agent that
-		// uses the registered provider, without having to repeat the
-		// `providers: { ... }` block at every init() site.
-		const explicit = this.config.providers?.[provider]?.apiKey;
-		if (explicit !== undefined) return explicit;
+		// Precedence: an explicit `configureProvider()` override (the
+		// runtime-side replacement for the old `init({ providers })` apiKey
+		// field) → the apiKey on a `registerProvider()` registration →
+		// undefined (pi-ai then falls back to its own env-var lookup, e.g.
+		// ANTHROPIC_API_KEY).
+		//
+		// configureProvider wins because that's the explicit "I want to patch
+		// this specific pi-ai provider" call; registerProvider wins as a
+		// fallback so users that defined a brand-new prefix with an apiKey
+		// don't also need to call configureProvider for it.
+		const override = getProviderConfiguration(provider)?.apiKey;
+		if (override !== undefined) return override;
 		return getRegisteredApiKey(provider);
 	}
 
 	/**
-	 * Mutate the outgoing provider request payload based on `ProviderSettings`.
+	 * Mutate the outgoing provider request payload based on the provider's
+	 * runtime configuration (set via `configureProvider()` from
+	 * `@flue/sdk/app`).
 	 *
 	 * Currently only handles `storeResponses` for the OpenAI Responses API
 	 * (`openai-responses` and `azure-openai-responses`), which sets `store: true`
@@ -566,7 +571,7 @@ export class Session implements FlueSession {
 		if (model.api !== 'openai-responses' && model.api !== 'azure-openai-responses') {
 			return undefined;
 		}
-		const settings = this.config.providers?.[model.provider];
+		const settings = getProviderConfiguration(model.provider);
 		if (settings?.storeResponses !== true) {
 			return undefined;
 		}
