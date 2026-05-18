@@ -7,26 +7,26 @@ import { CloudflarePlugin } from './build-plugin-cloudflare.ts';
 import { NodePlugin } from './build-plugin-node.ts';
 import { bundleSkillImports } from './skill-bundle.ts';
 import type {
-	AgentInfo,
+	ActionInfo,
 	BuildContext,
 	BuildOptions,
 	BuildPlugin,
 } from './types.ts';
 
-interface ParsedAgentFile {
+interface ParsedActionFile {
 	triggers: {
 		webhook?: boolean;
 	};
 }
 
-/** Extract static agent metadata at build time without evaluating the agent module. */
-function parseAgentFile(filePath: string): ParsedAgentFile {
+/** Extract static action metadata at build time without evaluating the action module. */
+function parseActionFile(filePath: string): ParsedActionFile {
 	return {
 		triggers: parseTriggers(filePath),
 	};
 }
 
-function parseTriggers(filePath: string): ParsedAgentFile['triggers'] {
+function parseTriggers(filePath: string): ParsedActionFile['triggers'] {
 	const source = fs.readFileSync(filePath, 'utf-8');
 	const ast = ts.createSourceFile(
 		filePath,
@@ -35,7 +35,7 @@ function parseTriggers(filePath: string): ParsedAgentFile['triggers'] {
 		true,
 		scriptKindForFile(filePath),
 	);
-	let result: ParsedAgentFile['triggers'] | undefined;
+	let result: ParsedActionFile['triggers'] | undefined;
 
 	for (const statement of ast.statements) {
 		if (isTriggersReExport(statement)) {
@@ -72,13 +72,13 @@ function isTriggersReExport(statement: ts.Statement): boolean {
 function parseTriggersInitializer(
 	filePath: string,
 	initializer: ts.Expression,
-): ParsedAgentFile['triggers'] {
+): ParsedActionFile['triggers'] {
 	const expr = unwrapExpression(initializer);
 	if (!ts.isObjectLiteralExpression(expr)) {
 		throwUnsupportedTriggers(filePath, 'expected a static object literal');
 	}
 
-	const result: ParsedAgentFile['triggers'] = {};
+	const result: ParsedActionFile['triggers'] = {};
 	for (const property of expr.properties) {
 		if (ts.isSpreadAssignment(property)) {
 			throwUnsupportedTriggers(filePath, 'spread properties are not supported');
@@ -157,17 +157,15 @@ export interface BuildResult {
 /**
  * Build a project into a deployable artifact.
  *
- * `options.root` is the project root — typically the user's cwd. Source files
- * agent handlers are discovered from one of two locations inside the root,
- * with the same precedence rule the CLI uses:
+ * `options.root` is the project root — typically the user's cwd. Action
+ * handlers are discovered from one of two locations inside the root, with the
+ * same precedence rule the CLI uses:
  *
  *   - If `<root>/.flue/` exists, it is the source root. Look for
- *     `.flue/agents/`. The bare `<root>/agents/` is ignored entirely.
- *   - Otherwise, look at `<root>/agents/`.
+ *     `.flue/actions/`. The bare `<root>/actions/` is ignored entirely.
+ *   - Otherwise, look at `<root>/actions/`.
  *
  * Build output lands in `options.output` (defaults to `<root>/dist`).
- *
- * AGENTS.md and .agents/skills/ are NOT bundled — discovered at runtime from session cwd.
  */
 export async function build(options: BuildOptions): Promise<BuildResult> {
 	const root = path.resolve(options.root);
@@ -184,14 +182,23 @@ export async function build(options: BuildOptions): Promise<BuildResult> {
 	console.log(`[flue] Output: ${output}`);
 	console.log(`[flue] Target: ${plugin.name}`);
 
-	const agents = discoverAgents(sourceRoot);
+	const actions = discoverActions(sourceRoot);
 	const appEntry = discoverAppEntry(sourceRoot);
 
-	if (agents.length === 0) {
+	if (actions.length === 0) {
+		const legacyAgentFiles = discoverLegacyAgentHandlerFiles(sourceRoot);
+		if (legacyAgentFiles.length > 0) {
+			throw new Error(
+				`[flue] Handler files now belong in actions/.\n\n` +
+					`Found old handler-path files in: ${path.join(sourceRoot, 'agents')}/\n` +
+					`${legacyAgentFiles.map((file) => `  - ${file}`).join('\n')}\n\n` +
+					`Move them to: ${path.join(sourceRoot, 'actions')}/`,
+			);
+		}
 		throw new Error(
-			`[flue] No agent files found.\n\n` +
-				`Expected at: ${path.join(sourceRoot, 'agents')}/\n` +
-				`Add at least one agent file (e.g. hello.ts).`,
+			`[flue] No action files found.\n\n` +
+				`Expected at: ${path.join(sourceRoot, 'actions')}/\n` +
+				`Add at least one action file (e.g. hello.ts).`,
 		);
 	}
 
@@ -199,27 +206,27 @@ export async function build(options: BuildOptions): Promise<BuildResult> {
 		console.log(`[flue] Custom app entry: ${path.relative(root, appEntry) || appEntry}`);
 	}
 
-	// NOTE: agents without triggers are valid. They aren't exposed as HTTP
+	// NOTE: actions without triggers are valid. They aren't exposed as HTTP
 	// routes in deployed builds, but the `flue run` CLI can still invoke them
 	// locally (see FLUE_MODE=local in the Node plugin). This supports the
-	// "CI-only agent" pattern documented in the README.
-	const webhookAgents = agents.filter((a) => a.triggers.webhook);
-	const triggerlessAgents = agents.filter((a) => !a.triggers.webhook);
+	// "CI-only action" pattern documented in the README.
+	const webhookActions = actions.filter((a) => a.triggers.webhook);
+	const triggerlessActions = actions.filter((a) => !a.triggers.webhook);
 
-	console.log(`[flue] Found ${agents.length} agent(s): ${agents.map((a) => a.name).join(', ')}`);
-	if (webhookAgents.length > 0) {
-		console.log(`[flue] Webhook agents: ${webhookAgents.map((a) => a.name).join(', ')}`);
+	console.log(`[flue] Found ${actions.length} action(s): ${actions.map((a) => a.name).join(', ')}`);
+	if (webhookActions.length > 0) {
+		console.log(`[flue] Webhook actions: ${webhookActions.map((a) => a.name).join(', ')}`);
 	}
-	if (triggerlessAgents.length > 0) {
+	if (triggerlessActions.length > 0) {
 		console.log(
-			`[flue] CLI-only agents (no HTTP route in deployed build): ${triggerlessAgents.map((a) => a.name).join(', ')}`,
+			`[flue] CLI-only actions (no HTTP route in deployed build): ${triggerlessActions.map((a) => a.name).join(', ')}`,
 		);
 	}
 
 	fs.mkdirSync(output, { recursive: true });
 
 	const manifest = {
-		agents: agents.map((a) => ({
+		agents: actions.map((a) => ({
 			name: a.name,
 			triggers: a.triggers,
 		})),
@@ -229,7 +236,7 @@ export async function build(options: BuildOptions): Promise<BuildResult> {
 	console.log(`[flue] Generated: ${manifestPath}`);
 
 	const ctx: BuildContext = {
-		agents,
+		actions,
 		manifest,
 		root,
 		output,
@@ -374,7 +381,7 @@ function resolvePlugin(options: BuildOptions): BuildPlugin {
  *
  * If `<root>/.flue/` exists, it is the source root. Otherwise the source root
  * is the project root itself. The two layouts never mix — if `.flue/` exists,
- * the bare layout is ignored entirely (even if a `<root>/agents/` directory
+ * the bare layout is ignored entirely (even if a `<root>/actions/` directory
  * also happens to be present).
  *
  * The project root (cwd) stays the same in both cases — `.flue/` only shifts
@@ -387,16 +394,16 @@ export function resolveSourceRoot(root: string): string {
 	return root;
 }
 
-function discoverAgents(sourceRoot: string): AgentInfo[] {
-	const agentsDir = path.join(sourceRoot, 'agents');
-	if (!fs.existsSync(agentsDir)) return [];
+function discoverActions(sourceRoot: string): ActionInfo[] {
+	const actionsDir = path.join(sourceRoot, 'actions');
+	if (!fs.existsSync(actionsDir)) return [];
 
 	return fs
-		.readdirSync(agentsDir)
+		.readdirSync(actionsDir)
 		.filter((f) => /\.(ts|js|mts|mjs)$/.test(f))
 		.map((f) => {
-			const filePath = path.join(agentsDir, f);
-			const { triggers } = parseAgentFile(filePath);
+			const filePath = path.join(actionsDir, f);
+			const { triggers } = parseActionFile(filePath);
 			return {
 				name: f.replace(/\.(ts|js|mts|mjs)$/, ''),
 				filePath,
@@ -405,14 +412,20 @@ function discoverAgents(sourceRoot: string): AgentInfo[] {
 		});
 }
 
+function discoverLegacyAgentHandlerFiles(sourceRoot: string): string[] {
+	const agentsDir = path.join(sourceRoot, 'agents');
+	if (!fs.existsSync(agentsDir)) return [];
+	return fs.readdirSync(agentsDir).filter((f) => /\.(ts|js|mts|mjs)$/.test(f));
+}
+
 /**
- * Discover an optional `app.{ts,mts,js,mjs}` entry alongside `agents/`.
+ * Discover an optional `app.{ts,mts,js,mjs}` entry alongside `actions/`.
  * Returns the absolute path to the first match found, or
  * undefined when no app entry is present.
  *
- * Extension priority matches {@link discoverAgents}: `.ts` > `.mts`
+ * Extension priority matches {@link discoverActions}: `.ts` > `.mts`
  * > `.js` > `.mjs`. Source-files-only — we don't probe inside the
- * `agents/` subdir.
+ * `actions/` subdir.
  */
 function discoverAppEntry(sourceRoot: string): string | undefined {
 	for (const ext of ['ts', 'mts', 'js', 'mjs']) {

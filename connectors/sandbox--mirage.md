@@ -39,9 +39,9 @@ Things to know before installing:
 
 Pick the location based on the user's project layout:
 
-- **`.flue/` layout** (project has files at the root and uses `.flue/agents/`
+- **`.flue/` layout** (project has files at the root and uses `.flue/actions/`
   etc.): write to `./.flue/connectors/mirage.ts`.
-- **Root layout** (the project root itself contains `agents/` and friends):
+- **Root layout** (the project root itself contains `actions/` and friends):
   write to `./connectors/mirage.ts`.
 
 If neither feels right (uncommon layout, multiple workspaces, etc.), ask the

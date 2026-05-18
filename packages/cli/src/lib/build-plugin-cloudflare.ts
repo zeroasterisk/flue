@@ -47,14 +47,14 @@ export class CloudflarePlugin implements BuildPlugin {
 	}
 
 	async generateEntryPoint(ctx: BuildContext): Promise<string> {
-		const { agents, appEntry } = ctx;
+		const { actions, appEntry } = ctx;
 		const manifestJson = JSON.stringify(ctx.manifest);
 		const runtimeVersion = JSON.stringify(ctx.runtimeVersion);
 		validateCloudflareAgentNames(ctx);
 
-		const webhookAgents = agents.filter((a) => a.triggers.webhook);
+		const webhookAgents = actions.filter((a) => a.triggers.webhook);
 
-		const agentImports = agents
+		const agentImports = actions
 			.map((a, index) => {
 				const varName = agentVarName(a.name, index);
 				const filePath = a.filePath.replace(/\\/g, '/');
@@ -65,7 +65,7 @@ export class CloudflarePlugin implements BuildPlugin {
 		const agentClasses = webhookAgents
 			.map((a) => {
 				const className = agentClassName(a.name);
-				const handlerVar = agentVarName(a.name, agents.indexOf(a));
+				const handlerVar = agentVarName(a.name, actions.indexOf(a));
 				return `export class ${className} extends Agent {
   async onRequest(request) {
     return dispatchAgent(request, this, ${JSON.stringify(a.name)}, ${handlerVar});
@@ -377,7 +377,7 @@ configureFlueRuntime({
   runtimeVersion: ${runtimeVersion},
   manifest: ${manifestJson},
   webhookAgents: webhookAgentNames,
-  // Cloudflare deploys never run in local mode — the trigger-less agents
+  // Cloudflare deploys never run in local mode — the trigger-less actions
   // simply have no DO class to land in.
   allowNonWebhook: false,
   routeAgentRequest: (request, env) => routeAgentRequest(request, env),
@@ -422,7 +422,7 @@ export default {
 
 	async additionalOutputs(ctx: BuildContext): Promise<Record<string, string>> {
 		const outputs: Record<string, string> = {};
-		const webhookAgents = ctx.agents.filter((a) => a.triggers.webhook);
+		const webhookAgents = ctx.actions.filter((a) => a.triggers.webhook);
 
 		// Per-agent DO bindings: one per webhook agent. Flue no longer forces a
 		// `Sandbox` binding, container entry, or Dockerfile — users who want
@@ -528,7 +528,7 @@ function agentVarName(name: string, index: number): string {
 const CLOUDFLARE_AGENT_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 function validateCloudflareAgentNames(ctx: BuildContext): void {
-	const invalidAgents = ctx.agents.filter((agent) => !CLOUDFLARE_AGENT_NAME_PATTERN.test(agent.name));
+	const invalidAgents = ctx.actions.filter((agent) => !CLOUDFLARE_AGENT_NAME_PATTERN.test(agent.name));
 	if (invalidAgents.length === 0) return;
 
 	const invalidList = invalidAgents

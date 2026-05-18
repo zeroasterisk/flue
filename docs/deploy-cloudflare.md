@@ -6,10 +6,12 @@ By the end, you will have a Flue agent running on Cloudflare Workers, and you wi
 
 ## Project layout
 
-The project root is your project directory. Source files (agents, roles, and any other code your agents import) live in one of two places, analogous to Next.js's `src/` folder:
+The project root is your project directory. Flue scans action handlers from one of two places, analogous to Next.js's `src/` folder:
 
-- `./agents/`, `./roles/` — bare layout, source at the project root.
-- `./.flue/agents/`, `./.flue/roles/` — `.flue/` source layout. When you opt into this, treat `.flue/` as the home for everything agent-related (connectors, session stores, helpers, …).
+- `./actions/` — bare layout, source at the project root.
+- `./.flue/actions/` — `.flue/` source layout. When you opt into this, treat `.flue/` as the home for everything action-related (connectors, session stores, helpers, …).
+
+Only `actions/` is structural. Agent definitions, skills, tools, and any other TypeScript your actions import can live wherever you prefer.
 
 If `./.flue/` exists, Flue reads sources from there; otherwise it reads from the project root. The two layouts never mix. By default `flue build` writes to `./dist/` at the project root; pass `--output <path>` to redirect the build elsewhere. `wrangler.jsonc` and any `Dockerfile` you ship live at the project root, regardless of where the build lands. Examples in this guide use the `./.flue/` layout — drop the prefix if you prefer the bare layout.
 
@@ -30,7 +32,7 @@ npm install -D @flue/cli wrangler
 
 ### 2. Create your first agent
 
-`.flue/agents/translate.ts`:
+`.flue/actions/translate.ts`:
 
 ```typescript
 import type { FlueContext } from '@flue/runtime';
@@ -183,7 +185,7 @@ R2 is a good source for that workspace, but it is not a live filesystem mount. H
 
 This is one of the most powerful patterns on Cloudflare: a support agent that searches a knowledge base to answer customer questions. The knowledge base can be stored in R2, hydrated once into the Workspace, and then searched through the `code` tool with `state.searchFiles`, `state.glob`, `state.readFile`, and related APIs.
 
-`.flue/agents/support.ts`:
+`.flue/actions/support.ts`:
 
 ```typescript
 import type { FlueContext } from '@flue/runtime';
@@ -311,7 +313,7 @@ FROM docker.io/cloudflare/sandbox:0.9.2
 
 The base image is published by Cloudflare and bundles the control-plane HTTP server that `@cloudflare/sandbox` needs to communicate with the container, along with `node`, `git`, `curl`, and a working directory at `/workspace`. Pin the tag to match the `@cloudflare/sandbox` version in your `package.json` — they're versioned together. Add your own `RUN` lines to install extra tools as needed.
 
-`.flue/agents/assistant.ts`:
+`.flue/actions/assistant.ts`:
 
 ```typescript
 import type { FlueContext } from '@flue/runtime';
@@ -443,7 +445,7 @@ npx flue build --target cloudflare
 npx wrangler deploy --secrets-file .env
 ```
 
-Every agent with `triggers = { webhook: true }` gets an HTTP endpoint automatically. The route follows the pattern `/agents/<name>/<id>` — for example, `.flue/agents/translate.ts` becomes `/agents/translate/:id`.
+Every agent with `triggers = { webhook: true }` gets an HTTP endpoint automatically. The route follows the pattern `/agents/<name>/<id>` — for example, `.flue/actions/translate.ts` becomes `/agents/translate/:id`.
 
 ```bash
 # Hit your deployed agent

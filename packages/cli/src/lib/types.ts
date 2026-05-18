@@ -7,18 +7,18 @@
  * build/dev tooling moved from `@flue/sdk` into `@flue/cli` so the runtime
  * package would stop carrying tooling types.
  */
-export interface AgentInfo {
+export interface ActionInfo {
 	name: string;
 	filePath: string;
 	triggers: { webhook?: boolean };
 }
 
 export interface BuildContext {
-	agents: AgentInfo[];
+	actions: ActionInfo[];
 	manifest: { agents: Array<{ name: string; triggers: { webhook?: boolean } }> };
 	/**
-	 * The project root — typically the user's cwd. Source files
-	 * (agents/) live here directly, or under `<root>/.flue/`
+	 * The project root — typically the user's cwd. Action files
+	 * (`actions/`) live here directly, or under `<root>/.flue/`
 	 * if that directory exists (the `.flue/`-as-src layout).
 	 */
 	root: string;
@@ -41,7 +41,7 @@ export interface BuildContext {
 	 * undefined, the generated entry falls back to a default Hono app
 	 * with Flue's built-in routes mounted via `flue()`.
 	 *
-	 * Discovery follows the same extension priority as agents:
+	 * Discovery follows the same extension priority as actions:
 	 * `app.ts` > `app.mts` > `app.js` > `app.mjs`.
 	 */
 	appEntry?: string;
@@ -98,7 +98,7 @@ export interface BuildOptions {
 	/**
 	 * The project root — typically the cwd of the `flue` invocation.
 	 *
-	 * Source files (agents) are discovered from `<root>/.flue/`
+	 * Action files are discovered from `<root>/.flue/`
 	 * if that directory exists, otherwise from `<root>/` directly.
 	 * The two layouts never mix — `.flue/` wins unconditionally if present.
 	 */

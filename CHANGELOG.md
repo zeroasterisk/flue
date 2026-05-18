@@ -8,6 +8,7 @@
 - **Local host sandbox connector.** `flue add local` now installs the host-bound `local()` sandbox factory for Node targets, including the explicit env allowlist behavior that keeps host secrets out of shell commands unless the agent author opts in.
 - **Agents, tools, and skills are values.** `defineAgent()` and `defineTool()` establish the new agent-as-value authoring model. `init({ agent })` invokes a definition, `session.skill(skillValue)` runs bundled skill values, and declared subagents can be delegated through `session.task({ agent })` or the built-in task tool.
 - **Tagged markdown bundling.** The CLI now inlines `SKILL.md` imports tagged with `with { type: 'skill' }` and prose imports tagged with `with { type: 'text' }` before Node or Wrangler bundling. Skill support files are bundled into `resources`; large single resources warn at build time.
+- **Action handler layout.** Flue now scans `actions/` or `.flue/actions/` for trigger handlers, leaving `agents/`, `skills/`, and `tools/` as optional project organization conventions.
 
 ### Breaking Changes
 
@@ -15,6 +16,7 @@
 - **Built-in tool constructors are no longer root exports.** `createTools` and `BUILTIN_TOOL_NAMES` were internal runtime plumbing rather than supported authoring APIs, so they are no longer re-exported from `@flue/runtime`.
 - **Instructions and roles moved to agent definitions.** `init({ instructions })` now errors with a `defineAgent()` migration message. Roles are removed from runtime APIs; use explicit subagents and `task({ agent })` delegation instead. `FlueContext` remains as a deprecated type alias for `ActionContext` for one minor version.
 - **Automatic sandbox skill/context discovery is paused.** Phase 1 no longer discovers sandbox `AGENTS.md` or `.agents/skills/` during init. The opt-in `loadFromSandbox` replacement arrives in Phase 3.
+- **Handler files moved to `actions/`.** Rename `agents/<name>.ts` to `actions/<name>.ts`, or `.flue/agents/<name>.ts` to `.flue/actions/<name>.ts`. Cloudflare Durable Object class names remain basename-derived, so this directory rename preserves existing durable storage identity.
 
 ## 0.7.0 - 2026-05-18
 
@@ -329,7 +331,7 @@ Big release! We are working hard to stabilize our APIs and add any missing and e
   - `registerApiProvider` — re-exported from pi-ai for entirely new wire protocols.
   - `configureProvider(slug, settings)` — patch `baseUrl` / `apiKey` / `headers` / `storeResponses` on an existing pi-ai catalog provider or previously registered prefix.
 
-- **`.flue/`-as-source layout.** When `<root>/.flue/` exists, source files (`agents/`, `roles/`, optional `app.ts`) are read from there; otherwise from `<root>/` directly. `.flue/` wins unconditionally if present.
+- **`.flue/`-as-source layout.** When `<root>/.flue/` exists, source files (`agents/`, `roles/`, optional `app.ts`) are read from there; otherwise from `<root>/` directly. `.flue/` wins unconditionally if present. Phase 2 later renames scanned handler files to `actions/`; see the Unreleased breaking-change note above.
 
 - **AbortSignal cancellation across `prompt()` / `skill()` / `task()` / `shell()`.** Pass `signal: AbortSignal` (e.g. `AbortSignal.timeout(5000)`) on the options bag, or use the new `CallHandle.abort(reason?)` method on the returned handle. Aborts reject with a standard `DOMException` named `AbortError` whose `cause` is the signal's reason. Aborting a `prompt()` also tears down in-flight `bash` tool commands, not just the model loop. `SessionEnv.exec()` also accepts `signal?` alongside `timeout?`.
 

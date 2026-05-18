@@ -44,7 +44,7 @@
  *                   contract, what the caller can do to fix it. Always
  *                   rendered. NEVER includes:
  *                     - sibling/neighbor enumeration (leaks namespace)
- *                     - filesystem paths or "agents/" / "skills/" / etc.
+ *                     - filesystem paths or "actions/" / "skills/" / etc.
  *                       (leaks framework internals)
  *                     - source-code-level fix instructions ("add ... to your
  *                       agent definition") (caller can't act on these)
@@ -75,9 +75,8 @@
  *     // builds:
  *     //   message: `Agent "foo" is not registered.`
  *     //   details: `Verify the agent name is correct.`
- *     //   dev:     `Available agents: "echo", "greeter". Agents are
- *     //            loaded from the project root's "agents/" directory at
- *     //            build time. ...`
+ *     //   dev:     `Available agents: "echo", "greeter". Agent routes are
+ *     //            loaded from action handlers in "actions/" at build time. ...`
  *
  * The wire response in production omits `dev`; in `flue dev` / `flue run`
  * it includes `dev`. That separation is what lets the dev field be richly
@@ -280,8 +279,8 @@ export class AgentNotFoundError extends FlueHttpError {
 			// or framework details to a public caller.
 			dev:
 				`Available agents: ${formatList(available)}.\n` +
-				`Agents are loaded from the project root's "agents/" directory at build time. ` +
-				`Verify the agent file is present in the project root being served.`,
+				`Agent routes are loaded from action handlers in the project root's "actions/" directory at build time. ` +
+				`Verify the action file is present in the project root being served.`,
 			status: 404,
 		});
 	}

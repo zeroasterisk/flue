@@ -11,7 +11,7 @@
  *      `Sentry.captureException(...)` calls with Flue correlation tags.
  *
  * Read top-to-bottom — there are no other Sentry-related files in the
- * project. Every agent in `.flue/agents/` is a plain Flue handler;
+ * project. Every action in `.flue/actions/` is a plain Flue handler;
  * none of them know that Sentry exists.
  *
  *

@@ -19,7 +19,7 @@ npm install -D @flue/cli
 
 ### 2. Create your first agent
 
-`.flue/agents/hello.ts`:
+`.flue/actions/hello.ts`:
 
 ```typescript
 import type { FlueContext } from '@flue/runtime';
@@ -134,7 +134,7 @@ Your agent often needs to interact with tools like `gh`, `npm`, or `git`. With `
 
 In GitHub Actions, this means you set the secrets you want the agent's CLIs to see in the workflow `env:` block, then forward them explicitly into the sandbox. The runner is your isolation boundary; flue makes the inner boundary (host → spawned shell) explicit.
 
-`.flue/agents/triage.ts`:
+`.flue/actions/triage.ts`:
 
 ```typescript
 import { type FlueContext } from '@flue/runtime';

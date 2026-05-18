@@ -6,10 +6,12 @@ By the end, you will have a Flue agent running as a Node.js server, and you will
 
 ## Project layout
 
-The project root is your project directory. Source files (agents, roles, and any other code your agents import) live in one of two places, analogous to Next.js's `src/` folder:
+The project root is your project directory. Flue scans action handlers from one of two places, analogous to Next.js's `src/` folder:
 
-- `./agents/`, `./roles/` — bare layout, source at the project root.
-- `./.flue/agents/`, `./.flue/roles/` — `.flue/` source layout. When you opt into this, treat `.flue/` as the home for everything agent-related (connectors, session stores, helpers, …).
+- `./actions/` — bare layout, source at the project root.
+- `./.flue/actions/` — `.flue/` source layout. When you opt into this, treat `.flue/` as the home for everything action-related (connectors, session stores, helpers, …).
+
+Only `actions/` is structural. Agent definitions, skills, tools, and any other TypeScript your actions import can live wherever you prefer.
 
 If `./.flue/` exists, Flue reads sources from there; otherwise it reads from the project root. The two layouts never mix. By default `flue build` writes to `./dist/` at the project root; pass `--output <path>` to redirect the build elsewhere. Examples in this guide use the `./.flue/` layout — drop the prefix if you prefer the bare layout.
 
@@ -28,7 +30,7 @@ npm install -D @flue/cli
 
 ### 2. Create your first agent
 
-`.flue/agents/translate.ts`:
+`.flue/actions/translate.ts`:
 
 ```typescript
 import type { FlueContext } from '@flue/runtime';
@@ -87,7 +89,7 @@ curl http://localhost:3583/agents/translate/test-1 \
   -d '{"text": "Hello world", "language": "French"}'
 ```
 
-Every agent with `triggers = { webhook: true }` gets an HTTP endpoint automatically. The route follows the pattern `/agents/<name>/<id>` — for example, `.flue/agents/translate.ts` becomes `/agents/translate/:id`.
+Every agent with `triggers = { webhook: true }` gets an HTTP endpoint automatically. The route follows the pattern `/agents/<name>/<id>` — for example, `.flue/actions/translate.ts` becomes `/agents/translate/:id`.
 
 For a one-shot production-style run (no watcher), use `flue build` + the generated server. The built server reads `process.env` directly, so source your env file in your shell or pass values explicitly:
 
@@ -168,7 +170,7 @@ Run flue itself inside an isolation boundary you trust — a CI runner, a contai
 
 Env exposure is opt-in. By default only shell essentials (`PATH`, `HOME`, locale, etc.) are inherited from `process.env`; anything else — API keys, tokens, deploy credentials — has to be passed explicitly via `local({ env: { ... } })`. That keeps the model's `bash` tool from seeing host secrets by accident.
 
-`.flue/agents/reviewer.ts`:
+`.flue/actions/reviewer.ts`:
 
 ```typescript
 import type { FlueContext } from '@flue/runtime';

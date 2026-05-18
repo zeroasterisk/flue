@@ -8,17 +8,17 @@ export class NodePlugin implements BuildPlugin {
 	bundle = 'esbuild' as const;
 
 	generateEntryPoint(ctx: BuildContext): string {
-		const { agents, appEntry } = ctx;
+		const { actions, appEntry } = ctx;
 		const manifestJson = JSON.stringify(ctx.manifest);
 		const runtimeVersion = JSON.stringify(ctx.runtimeVersion);
 
-		const webhookAgents = agents.filter((a) => a.triggers.webhook);
+		const webhookAgents = actions.filter((a) => a.triggers.webhook);
 
 		// Generate import statements for all agent handlers. We register every
 		// agent — including trigger-less ones — in the handler map so that the
 		// CLI's `flue run` can invoke them in local mode. The `webhookAgents`
 		// list below gates which are reachable over public HTTP when deployed.
-		const agentImports = agents
+		const agentImports = actions
 			.map((a, index) => {
 				const varName = agentVarName(a.name, index);
 				const filePath = a.filePath.replace(/\\/g, '/');
@@ -26,8 +26,8 @@ export class NodePlugin implements BuildPlugin {
 			})
 			.join('\n');
 
-		// Build the handler map — includes ALL agents, not just webhook ones.
-		const handlerMapEntries = agents
+		// Build the handler map — includes ALL actions, not just webhook ones.
+		const handlerMapEntries = actions
 			.map((a, index) => `  ${JSON.stringify(a.name)}: ${agentVarName(a.name, index)},`)
 			.join('\n');
 
@@ -78,9 +78,9 @@ const webhookAgentNames = ${webhookNames};
 
 // When the CLI starts this server via \`flue run\`, it sets FLUE_MODE=local.
 // In local mode the HTTP route accepts any registered agent (including
-// trigger-less CI-only agents). In any other mode the route is restricted to
-// agents with \`webhook: true\`, preventing accidental public exposure of
-// agents that the user only intended to invoke from their CI pipeline.
+// trigger-less CI-only actions). In any other mode the route is restricted to
+// actions with \`webhook: true\`, preventing accidental public exposure of
+// actions that the user only intended to invoke from their CI pipeline.
 const isLocalMode = process.env.FLUE_MODE === 'local';
 
 // ─── Sandbox Environments ───────────────────────────────────────────────────
@@ -174,7 +174,7 @@ const server = serve({
 console.log('[flue] Server listening on http://localhost:' + port);
 if (isLocalMode) {
   console.log('[flue] Mode: local (all agents invokable, including trigger-less)');
-  console.log('[flue] Available agents: ' + ${JSON.stringify(agents.map((a) => a.name).join(', '))});
+  console.log('[flue] Available agents: ' + ${JSON.stringify(actions.map((a) => a.name).join(', '))});
 } else {
   console.log('[flue] Available agents: ' + ${JSON.stringify(webhookAgents.map((a) => a.name).join(', '))});
 }

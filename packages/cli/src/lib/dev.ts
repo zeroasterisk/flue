@@ -311,8 +311,8 @@ interface WatcherHandle {
  * Watch the root for changes. Uses `fs.watch` recursive (Node 20+).
  *
  * Watched roots:
- *   - `<root>` — agents/, tagged markdown sources, plus
- *     `.flue/agents/` if the root uses the .flue/
+ *   - `<root>` — actions/, tagged markdown sources, plus
+ *     `.flue/actions/` if the root uses the .flue/
  *     source layout.
  *   - For Cloudflare: also `<root>/wrangler.jsonc` (and `.json`),
  *     since changes there require a worker restart.
@@ -670,9 +670,9 @@ class CloudflareReloader implements DevReloader {
 	 * affects what `_entry.ts` or `wrangler.jsonc` look like.
 	 *
 	 * Concretely, we trigger a Flue-side rebuild for:
-	 *   - File adds/removes in `agents/` (the agent set determines DO classes
+	 *   - File adds/removes in `actions/` (the action set determines DO classes
 	 *     and binding declarations).
-	 *   - Changes to `agents/*.ts` — these MAY change the exported `triggers`,
+	 *   - Changes to `actions/*.ts` — these MAY change the exported `triggers`,
 	 *     so we have to re-parse them. (Plain body edits redo a tiny amount
 	 *     of work but the rebuild is cheap and idempotent.)
 	 *   - Changes to tagged markdown import targets — the shared skill/text bundler regenerates output.
@@ -685,7 +685,7 @@ class CloudflareReloader implements DevReloader {
 	 *   - Changes to the user's `wrangler.jsonc` — affects the merged config.
 	 *
 	 * Notes we explicitly DO ignore for rebuild purposes (wrangler handles
-	 * them): edits to imported source files outside of `agents/`, tagged markdown,
+	 * them): edits to imported source files outside of `actions/`, tagged markdown,
 	 * and `app.*`.
 	 */
 	shouldRebuildOn(relPath: string): boolean {
@@ -702,18 +702,18 @@ class CloudflareReloader implements DevReloader {
 		) {
 			return true;
 		}
-		// Source files can live under either layout: bare (`agents/foo.ts`)
-		// or `.flue/`-as-src (`.flue/agents/foo.ts`). Match both prefixes —
+		// Source files can live under either layout: bare (`actions/foo.ts`)
+		// or `.flue/`-as-src (`.flue/actions/foo.ts`). Match both prefixes —
 		// only one is ever in use for a given root, so accepting both
 		// is harmless.
-		if (normalized.startsWith('agents/') || normalized.startsWith('.flue/agents/')) return true;
+		if (normalized.startsWith('actions/') || normalized.startsWith('.flue/actions/')) return true;
 		if (/\.(md|markdown)$/i.test(normalized)) return true;
 		if (/^(?:\.flue\/)?app\.(?:ts|mts|js|mjs)$/.test(normalized)) return true;
 		return false;
 	}
 
 	async reload(buildChanged: boolean): Promise<void> {
-		// The whole point of the Cloudflare path: most edits hit `agents/`
+		// The whole point of the Cloudflare path: most edits hit `actions/`
 		// bodies, and wrangler's bundler reloads workerd on its own when an
 		// imported source file changes. So if the build itself wrote nothing
 		// new (entry + wrangler.jsonc both byte-identical), there's nothing
@@ -935,9 +935,9 @@ function pickExampleAgentName(output: string, root: string): string | null {
 	// Resolve the source root the same way build() does so this works for both
 	// the bare layout and the .flue/-as-src layout.
 	try {
-		const agentsDir = path.join(resolveSourceRoot(root), 'agents');
-		if (!fs.existsSync(agentsDir)) return null;
-		for (const e of fs.readdirSync(agentsDir)) {
+		const actionsDir = path.join(resolveSourceRoot(root), 'actions');
+		if (!fs.existsSync(actionsDir)) return null;
+		for (const e of fs.readdirSync(actionsDir)) {
 			const m = e.match(/^([a-zA-Z0-9_-]+)\.(ts|js|mts|mjs)$/);
 			if (m && m[1]) return m[1];
 		}

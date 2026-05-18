@@ -9,7 +9,7 @@ import type { RunStore } from './run-store.ts';
 import type { RunSubscriberRegistry } from './run-subscribers.ts';
 
 /**
- * Agent handler signature — the default export of a `.flue/agents/<name>.ts`
+ * Action handler signature — the default export of a `.flue/actions/<name>.ts`
  * file. Receives a context, may return any JSON-serializable value (or
  * undefined for fire-and-forget agents).
  */

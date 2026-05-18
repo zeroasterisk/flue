@@ -5,7 +5,7 @@ for error reporting.
 
 This example is intended to be read top-to-bottom as documentation. The
 entire integration lives in [`.flue/app.ts`](.flue/app.ts) — every agent
-in `.flue/agents/` is a plain Flue handler that doesn't import Sentry,
+in `.flue/actions/` is a plain Flue handler that doesn't import Sentry,
 doesn't import the bridge, and doesn't know that error reporting is
 happening.
 
@@ -62,7 +62,7 @@ examples/sentry/
 ├── README.md                 ← you are here
 └── .flue/
     ├── app.ts                ← Sentry.init + observe(...) bridge
-    └── agents/
+    └── actions/
         ├── hello.ts          ← success case — no Sentry traffic
         ├── boom.ts           ← run-fatal throw — captures via run_end
         └── explicit.ts       ← non-fatal log.error — captures while run continues

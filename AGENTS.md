@@ -5,7 +5,7 @@ Agent framework where agents are directories compiled into deployable server art
 ## Terminology
 
 ```
-Agent (definition)              — `agents/<name>.ts`; named by its file
+Action (handler)                — `actions/<name>.ts`; named by its file
 └─ AgentInstance                — URL `<id>`; exposed to handlers as `ctx.id`
    └─ Run                       — one HTTP invocation; exposed as `ctx.runId`
       └─ Harness                — one `init({ name })` call; defaults to `"default"`
@@ -19,7 +19,7 @@ Use `harness` as the variable name for the return value of `init()`. Agents have
 ## Project Structure
 
 - `packages/runtime/` — Runtime library (`@flue/runtime`). Session management, agent harness, tools, sandbox plumbing. What a built Flue app depends on.
-- `packages/cli/` — CLI + build/dev tooling (`@flue/cli`). Owns `flue dev`/`run`/`build`/`init`/`add`/`logs`, the esbuild plugins, agent-file parsing, env-file loading, and the `flue.config.ts` resolver. Eventually rolls up into the `flue` npm package; for now `defineConfig` is imported via `@flue/cli/config`.
+- `packages/cli/` — CLI + build/dev tooling (`@flue/cli`). Owns `flue dev`/`run`/`build`/`init`/`add`/`logs`, the esbuild plugins, action-file parsing, env-file loading, and the `flue.config.ts` resolver. Eventually rolls up into the `flue` npm package; for now `defineConfig` is imported via `@flue/cli/config`.
 - `examples/hello-world/` — Test root with example agents covering the runtime's surfaces.
 - `examples/cloudflare/` — Test root for Cloudflare-specific features (Workers AI binding, etc.).
 
@@ -42,10 +42,12 @@ Three commands:
 
 `--root` points at the project root. Defaults to the current working directory if omitted. By default, the build is written to `<root>/dist/`; use `--output <path>` to redirect the build elsewhere.
 
-Source files (agents, roles) live in one of two places, analogous to Next.js's `src/` folder:
+Action handlers live in one of two places, analogous to Next.js's `src/` folder:
 
-- `<root>/.flue/agents/`, `<root>/.flue/roles/` if a `.flue/` directory exists.
-- Otherwise `<root>/agents/`, `<root>/roles/` directly.
+- `<root>/.flue/actions/` if a `.flue/` directory exists.
+- Otherwise `<root>/actions/` directly.
+
+Only `actions/` is scanned. Agent definitions, skills, tools, and other supporting modules may live wherever the project prefers.
 
 The two layouts never mix — if `.flue/` is present, the bare layout is ignored entirely.
 
