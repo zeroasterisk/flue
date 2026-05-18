@@ -253,7 +253,7 @@ export const InstanceSummarySchema = v.object({
 	instanceId: v.string(),
 });
 
-export const ListAgentsResponseSchema = v.object({
+export const ListActionsResponseSchema = v.object({
 	items: v.array(AgentManifestEntrySchema),
 	nextCursor: v.optional(v.string()),
 });
@@ -268,8 +268,8 @@ export const ListRunsResponseSchema = v.object({
 	nextCursor: v.optional(v.string()),
 });
 
-export const AgentNameParamSchema = v.object({ name: v.string() });
-export const AgentInstanceParamSchema = v.object({ name: v.string(), id: v.string() });
+export const ActionNameParamSchema = v.object({ name: v.string() });
+export const ActionInstanceParamSchema = v.object({ name: v.string(), id: v.string() });
 
 const ListLimitSchema = v.optional(
 	v.pipe(

@@ -596,21 +596,21 @@ describe('admin() routes', () => {
 		);
 		const runId = ((await invoke.json()) as { _meta: { runId: string } })._meta.runId;
 
-		const agents = await app.fetch(new Request('http://localhost/admin/agents'));
-		expect(agents.status).toBe(200);
-		expect(((await agents.json()) as { items: { name: string }[] }).items.map((a) => a.name)).toEqual([
+		const actions = await app.fetch(new Request('http://localhost/admin/actions'));
+		expect(actions.status).toBe(200);
+		expect(((await actions.json()) as { items: { name: string }[] }).items.map((a) => a.name)).toEqual([
 			'hello',
 			'offline',
 		]);
 
-		const instances = await app.fetch(new Request('http://localhost/admin/agents/hello/instances'));
+		const instances = await app.fetch(new Request('http://localhost/admin/actions/hello/instances'));
 		expect(instances.status).toBe(200);
 		expect((await instances.json()) as unknown).toMatchObject({
 			items: [{ actionName: 'hello', instanceId: 'inst-1' }],
 		});
 
 		const instanceRuns = await app.fetch(
-			new Request('http://localhost/admin/agents/hello/instances/inst-1/runs?status=completed'),
+			new Request('http://localhost/admin/actions/hello/instances/inst-1/runs?status=completed'),
 		);
 		expect(instanceRuns.status).toBe(200);
 		expect(((await instanceRuns.json()) as { items: { runId: string }[] }).items[0]?.runId).toBe(runId);
@@ -633,8 +633,24 @@ describe('admin() routes', () => {
 		expect(spec.status).toBe(200);
 		const specBody = (await spec.json()) as { info: { title: string; version: string }; paths: Record<string, unknown> };
 		expect(specBody.info).toMatchObject({ title: 'Flue Admin API', version: '9.9.9' });
-		expect(specBody.paths['/agents']).toBeDefined();
+		expect(specBody.paths['/actions']).toBeDefined();
 		expect(specBody.paths['/runs']).toBeDefined();
+
+		for (const path of [
+			'/admin/agents',
+			'/admin/agents/hello/instances',
+			'/admin/agents/hello/instances/inst-1/runs',
+		]) {
+			const legacy = await app.fetch(new Request(`http://localhost${path}`));
+			expect(legacy.status).toBe(404);
+			expect((await legacy.json()) as unknown).toMatchObject({
+				error: {
+					type: 'legacy_admin_agent_route',
+					message: 'This admin route has moved.',
+					details: 'Use /admin/actions instead of /admin/agents.',
+				},
+			});
+		}
 	});
 
 	it('rewrites admin run detail requests to the public run URL before Cloudflare DO forwarding', async () => {

@@ -22,11 +22,11 @@ export interface FlueClient {
 		invoke(name: string, id: string, options: { mode: 'webhook'; payload?: unknown; signal?: AbortSignal }): Promise<WebhookInvokeResult>;
 	};
 	admin: {
-		agents: { list(): Promise<ListResponse<AgentManifestEntry>> };
-		instances: { list(agentName: string, options?: ListOptions): Promise<ListResponse<InstanceSummary>> };
+		actions: { list(): Promise<ListResponse<AgentManifestEntry>> };
+		instances: { list(actionName: string, options?: ListOptions): Promise<ListResponse<InstanceSummary>> };
 		runs: {
 			list(options?: ListRunsOptions): Promise<ListResponse<RunPointer>>;
-			listForInstance(agentName: string, instanceId: string, options?: ListRunsOptions): Promise<ListResponse<RunPointer>>;
+			listForInstance(actionName: string, instanceId: string, options?: ListRunsOptions): Promise<ListResponse<RunPointer>>;
 			get(runId: string): Promise<RunRecord>;
 		};
 	};
@@ -60,21 +60,21 @@ export function createFlueClient(options: CreateFlueClientOptions): FlueClient {
 				invokeAgent(http, name, id, opts)) as FlueClient['agents']['invoke'],
 		},
 		admin: {
-			agents: {
-				list: () => http.json({ path: `${adminBasePath}/agents` }),
+			actions: {
+				list: () => http.json({ path: `${adminBasePath}/actions` }),
 			},
 			instances: {
-				list: (agentName, opts = {}) =>
+				list: (actionName, opts = {}) =>
 					http.json({
-						path: `${adminBasePath}/agents/${encodeURIComponent(agentName)}/instances`,
+						path: `${adminBasePath}/actions/${encodeURIComponent(actionName)}/instances`,
 						query: listQuery(opts),
 					}),
 			},
 			runs: {
 				list: (opts = {}) => http.json({ path: `${adminBasePath}/runs`, query: runsQuery(opts) }),
-				listForInstance: (agentName, instanceId, opts = {}) =>
+				listForInstance: (actionName, instanceId, opts = {}) =>
 					http.json({
-						path: `${adminBasePath}/agents/${encodeURIComponent(agentName)}/instances/${encodeURIComponent(instanceId)}/runs`,
+						path: `${adminBasePath}/actions/${encodeURIComponent(actionName)}/instances/${encodeURIComponent(instanceId)}/runs`,
 						query: runsQuery(opts),
 					}),
 				get: (runId) => http.json({ path: `${adminBasePath}/runs/${encodeURIComponent(runId)}` }),

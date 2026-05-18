@@ -50,8 +50,8 @@ describe('createFlueClient', () => {
 			},
 		});
 
-		await client.admin.agents.list();
-		expect(new URL(url).pathname).toBe('/internal/admin/agents');
+		await client.admin.actions.list();
+		expect(new URL(url).pathname).toBe('/internal/admin/actions');
 	});
 
 	it('reconnects run streams after clean EOF before run_end', async () => {

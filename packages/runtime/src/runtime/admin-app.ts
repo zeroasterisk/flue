@@ -11,6 +11,7 @@ import {
 } from 'hono-openapi';
 import {
 	AgentNotFoundError,
+	LegacyAdminAgentRouteError,
 	RouteNotFoundError,
 	RunRegistryUnavailableError,
 	toHttpResponse,
@@ -20,13 +21,13 @@ import { type FlueRuntime, getFlueRuntime, handleRunById } from './flue-app.ts';
 import type { ListRunsOpts, RunRegistry } from './run-registry.ts';
 import type { RunStatus } from './run-store.ts';
 import {
+	ActionInstanceParamSchema,
+	ActionNameParamSchema,
 	AdminInstanceRunsQuerySchema,
 	AdminInstancesQuerySchema,
 	AdminRunsQuerySchema,
-	AgentInstanceParamSchema,
-	AgentNameParamSchema,
 	ErrorEnvelopeSchema,
-	ListAgentsResponseSchema,
+	ListActionsResponseSchema,
 	ListInstancesResponseSchema,
 	ListRunsResponseSchema,
 	RunIdParamSchema,
@@ -37,21 +38,24 @@ export function admin(): Hono {
 	const app = new Hono();
 
 	app.get('/openapi.json', lazyOpenApiRouteHandler(app, adminOpenApiOptions));
-	app.get('/agents', describeRoute(adminAgentsSpec() as DescribeRouteOptions), listAgentsHandler);
+	app.get('/actions', describeRoute(adminActionsSpec() as DescribeRouteOptions), listActionsHandler);
 	app.get(
-		'/agents/:name/instances',
-		describeRoute(adminInstancesSpec() as DescribeRouteOptions),
-		validated('param', AgentNameParamSchema),
+		'/actions/:name/instances',
+		describeRoute(adminActionInstancesSpec() as DescribeRouteOptions),
+		validated('param', ActionNameParamSchema),
 		validated('query', AdminInstancesQuerySchema),
 		listInstancesHandler,
 	);
 	app.get(
-		'/agents/:name/instances/:id/runs',
-		describeRoute(adminInstanceRunsSpec() as DescribeRouteOptions),
-		validated('param', AgentInstanceParamSchema),
+		'/actions/:name/instances/:id/runs',
+		describeRoute(adminActionInstanceRunsSpec() as DescribeRouteOptions),
+		validated('param', ActionInstanceParamSchema),
 		validated('query', AdminInstanceRunsQuerySchema),
 		listInstanceRunsHandler,
 	);
+	app.all('/agents', legacyAdminAgentRouteHandler);
+	app.all('/agents/:name/instances', legacyAdminAgentRouteHandler);
+	app.all('/agents/:name/instances/:id/runs', legacyAdminAgentRouteHandler);
 	app.get(
 		'/runs',
 		describeRoute(adminRunsSpec() as DescribeRouteOptions),
@@ -114,23 +118,23 @@ function errorResponses() {
 
 const listResponseDescription = 'Cursor-paginated list response.';
 
-function adminAgentsSpec() {
+function adminActionsSpec() {
 	return {
 		tags: ['admin'],
-		operationId: 'adminListAgents',
-		summary: 'List built agents',
+		operationId: 'adminListActions',
+		summary: 'List built actions',
 		responses: {
-			200: jsonResponse(ListAgentsResponseSchema, listResponseDescription),
+			200: jsonResponse(ListActionsResponseSchema, listResponseDescription),
 			...errorResponses(),
 		},
 	};
 }
 
-function adminInstancesSpec() {
+function adminActionInstancesSpec() {
 	return {
 		tags: ['admin'],
-		operationId: 'adminListAgentInstances',
-		summary: 'List instances for an agent',
+		operationId: 'adminListActionInstances',
+		summary: 'List instances for an action',
 		responses: {
 			200: jsonResponse(ListInstancesResponseSchema, listResponseDescription),
 			...errorResponses(),
@@ -138,11 +142,11 @@ function adminInstancesSpec() {
 	};
 }
 
-function adminInstanceRunsSpec() {
+function adminActionInstanceRunsSpec() {
 	return {
 		tags: ['admin'],
-		operationId: 'adminListAgentInstanceRuns',
-		summary: 'List runs for an agent instance',
+		operationId: 'adminListActionInstanceRuns',
+		summary: 'List runs for an action instance',
 		responses: {
 			200: jsonResponse(ListRunsResponseSchema, listResponseDescription),
 			...errorResponses(),
@@ -174,30 +178,34 @@ function adminRunDetailSpec() {
 	};
 }
 
-const listAgentsHandler: MiddlewareHandler = async (c) => {
+const listActionsHandler: MiddlewareHandler = async (c) => {
 	const rt = requireRuntime();
 	return c.json({ items: rt.manifest?.agents ?? [] });
 };
 
+const legacyAdminAgentRouteHandler: MiddlewareHandler = () => {
+	throw new LegacyAdminAgentRouteError();
+};
+
 const listInstancesHandler: MiddlewareHandler = async (c) => {
 	const rt = requireRuntime();
-	const agentName = c.req.param('name') ?? '';
-	assertKnownAgent(rt, agentName);
+	const actionName = c.req.param('name') ?? '';
+	assertKnownAction(rt, actionName);
 	const registry = requireRegistry(rt, c.env);
 	const query = parseListQuery(c.req.raw);
-	const out = await registry.listInstances({ actionName: agentName, ...query });
+	const out = await registry.listInstances({ actionName, ...query });
 	return c.json({ items: out.instances, nextCursor: out.nextCursor });
 };
 
 const listInstanceRunsHandler: MiddlewareHandler = async (c) => {
 	const rt = requireRuntime();
-	const agentName = c.req.param('name') ?? '';
+	const actionName = c.req.param('name') ?? '';
 	const instanceId = c.req.param('id') ?? '';
-	assertKnownAgent(rt, agentName);
+	assertKnownAction(rt, actionName);
 	const registry = requireRegistry(rt, c.env);
 	const query = parseListQuery(c.req.raw);
 	const status = statusFromRequest(c.req.raw);
-	const out = await registry.listRuns({ actionName: agentName, instanceId, status, ...query });
+	const out = await registry.listRuns({ actionName, instanceId, status, ...query });
 	return c.json({ items: out.runs, nextCursor: out.nextCursor });
 };
 
@@ -211,7 +219,7 @@ const listRunsHandler: MiddlewareHandler = async (c) => {
 	};
 	const actionName = url.searchParams.get('actionName');
 	if (actionName) {
-		assertKnownAgent(rt, actionName);
+		assertKnownAction(rt, actionName);
 		opts.actionName = actionName;
 	}
 	const out = await registry.listRuns(opts);
@@ -260,7 +268,7 @@ function requireRegistry(rt: FlueRuntime, env: unknown): RunRegistry {
 	return rt.runRegistry;
 }
 
-function assertKnownAgent(rt: FlueRuntime, name: string): void {
+function assertKnownAction(rt: FlueRuntime, name: string): void {
 	const available = rt.manifest?.agents.map((agent) => agent.name) ?? [];
 	if (!available.includes(name)) throw new AgentNotFoundError({ name, available });
 }

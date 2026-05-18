@@ -315,6 +315,18 @@ export class LegacyAgentRouteError extends FlueHttpError {
 	}
 }
 
+export class LegacyAdminAgentRouteError extends FlueHttpError {
+	constructor() {
+		super({
+			type: 'legacy_admin_agent_route',
+			message: 'This admin route has moved.',
+			details: 'Use /admin/actions instead of /admin/agents.',
+			dev: '',
+			status: 404,
+		});
+	}
+}
+
 export class RouteNotFoundError extends FlueHttpError {
 	constructor({ method, path }: { method: string; path: string }) {
 		super({
