@@ -522,7 +522,12 @@ describe('Bare /runs/:runId routes via flue()', () => {
 			handlers: {
 				hello: async (ctx) => {
 					const harnessName = String((ctx.payload as { harness?: string }).harness ?? 'default');
-					const harness = await ctx.init({ name: harnessName, model: false });
+					const agent = await ctx.init({ name: harnessName, model: false });
+					const harness = agent.harness();
+					expect(agent.name).toBe('hello');
+					expect(agent.id).toBe(ctx.id);
+					expect(agent.harness()).toBe(harness);
+					expect(harness.name).toBe(harnessName);
 					await ctx.register(async () => {
 						hydrationRuns += 1;
 						await harness.fs.writeFile('/hydrated.txt', `${ctx.id}:${harnessName}`);

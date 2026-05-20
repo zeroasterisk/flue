@@ -6,6 +6,7 @@ import { dispatchGlobalEvent } from './runtime/events.ts';
 import type { RegistrationStore } from './runtime/registration-store.ts';
 import { bashFactoryToSessionEnv, createCwdSessionEnv, isBashLike } from './sandbox.ts';
 import type {
+	Agent,
 	AgentConfig,
 	AgentInit,
 	BashFactory,
@@ -135,7 +136,7 @@ export function createFlueContext(config: FlueContextConfig): FlueContextInterna
 			}
 		},
 
-		async init(options?: AgentInit): Promise<FlueHarness> {
+		async init(options?: AgentInit): Promise<Agent> {
 			if (!options || !('model' in options)) {
 				throw new Error(
 					'[flue] init() requires a model. Pass { model: "provider/model-id" } or { model: false }.',
@@ -186,7 +187,7 @@ export function createFlueContext(config: FlueContextConfig): FlueContextInterna
 					compaction: options.compaction ?? config.agentConfig.compaction,
 				};
 
-				return new Harness(
+				const harness: FlueHarness = new Harness(
 					config.id,
 					name,
 					agentConfig,
@@ -198,6 +199,11 @@ export function createFlueContext(config: FlueContextConfig): FlueContextInterna
 					options.tools,
 					toolFactory,
 				);
+				return {
+					name: config.agentName,
+					id: config.id,
+					harness: () => harness,
+				};
 			} catch (error) {
 				initializedHarnessNames.delete(name);
 				throw error;

@@ -311,6 +311,14 @@ export interface AgentDefinition {
 	compaction?: false | CompactionConfig;
 }
 
+// ─── Live Agent ────────────────────────────────────────────────────────────
+
+export interface Agent {
+	readonly name: string;
+	readonly id: string;
+	harness(): FlueHarness;
+}
+
 // ─── Flue Context (passed to agent handlers) ───────────────────────────────
 
 /**
@@ -352,8 +360,8 @@ export interface FlueContext<TPayload = any, TEnv = Record<string, any>> {
 	readonly log: FlueLogger;
 	/** Run one-time setup for this agent instance. May be called once per request. */
 	register(callback: () => unknown | Promise<unknown>): Promise<void>;
-	/** Initialize a harness with sandbox + persistence. */
-	init(options: AgentInit): Promise<FlueHarness>;
+	/** Reconnect to the live agent instance for this run. */
+	init(options: AgentInit): Promise<Agent>;
 }
 
 export interface FlueLogger {

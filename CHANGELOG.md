@@ -20,6 +20,8 @@
 
 ### Breaking Changes
 
+- **`init()` now returns a live `Agent` wrapper instead of a `FlueHarness`.** Reach the existing workflow surface through `agent.harness()`: `const harness = await init(...)` becomes `const agent = await init(...); const harness = agent.harness();`. The wrapper also exposes the agent module name and instance id while the higher-level send API lands incrementally.
+
 - **`getVirtualSandbox()` now throws with a migration message.** The previous API described R2 as if it were mounted directly as the harness filesystem, but `@cloudflare/shell` Workspaces are SQLite-indexed filesystems with optional R2 blob spillover; raw bucket keys uploaded outside Workspace were invisible. Migrate bucket-backed agents to `getShellSandbox({ workspace, loader })` plus `hydrateFromBucket(workspace, env.BUCKET)` before `init()`. If you used zero-arg `getVirtualSandbox()`, remove it and omit `sandbox` from `init()` to use Flue's default in-memory sandbox.
 
 ## 0.6.2 - 2026-05-14

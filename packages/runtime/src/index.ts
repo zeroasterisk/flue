@@ -2,6 +2,7 @@
 
 export type {
 	FlueContext,
+	Agent,
 	FlueHarness,
 	FlueFs,
 	FlueSessions,

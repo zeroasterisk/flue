@@ -10,6 +10,7 @@ export { Type } from '@earendil-works/pi-ai';
 export type { McpServerConnection, McpServerOptions, McpTransport } from './mcp.ts';
 export { connectMcpServer } from './mcp.ts';
 export type {
+	Agent,
 	AgentInit,
 	BashFactory,
 	BashLike,
