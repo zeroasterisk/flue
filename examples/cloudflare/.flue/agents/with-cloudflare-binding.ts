@@ -28,7 +28,8 @@ export default async function ({ init, payload, id }: FlueContext) {
 	const action = (payload as { action?: string } | undefined)?.action;
 	const test = (payload as { test?: string } | undefined)?.test;
 
-	const harness = await init({ model: MODEL });
+	const agent = await init({ model: MODEL });
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// ─── Cross-invocation persistence (set/recall) ──────────────────────────

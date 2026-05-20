@@ -4,7 +4,8 @@ import * as v from 'valibot';
 export const triggers = { webhook: true };
 
 export default async function ({ init }: FlueContext) {
-	const harness = await init({ model: 'anthropic/claude-sonnet-4-6' });
+	const agent = await init({ model: 'anthropic/claude-sonnet-4-6' });
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// Turn 1: Fetch one Wikipedia article. Raw wikitext truncated to ~50KB by bash tool = ~12k tokens.

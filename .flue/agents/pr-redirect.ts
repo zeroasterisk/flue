@@ -592,10 +592,11 @@ export default async function ({ init, payload, log }: FlueContext) {
 	// Only GH_TOKEN is passed to the sandbox. FREDKBOT_GITHUB_TOKEN
 	// intentionally stays in process.env so only `lib/github.ts` can read
 	// it — see the security note at the top of the file.
-	const harness = await init({
+	const agent = await init({
 		sandbox: local({ env: { GH_TOKEN: ghToken } }),
 		model: 'anthropic/claude-opus-4-6',
 	});
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// ─── LLM phase ──────────────────────────────────────────────────────

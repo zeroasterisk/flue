@@ -53,10 +53,11 @@ export default async function ({ init, env }: FlueContext<unknown, Env>) {
 		await hydrateFromBucket(workspace, env.KNOWLEDGE_BASE);
 		await workspace.writeFile(HYDRATION_SENTINEL, new Date().toISOString());
 	}
-	const harness = await init({
+	const agent = await init({
 		sandbox: getShellSandbox({ workspace, loader: env.LOADER }),
 		model: 'cloudflare/@cf/moonshotai/kimi-k2.6',
 	});
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// The skill body lives at `.agents/skills/spam-filter/SKILL.md` in

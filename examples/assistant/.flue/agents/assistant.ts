@@ -17,7 +17,8 @@ export const triggers = { webhook: true };
  */
 export default async function ({ init, id, env, payload }: FlueContext) {
 	const sandbox = getSandbox(env.Sandbox, id);
-	const harness = await init({ sandbox, model: 'anthropic/claude-sonnet-4-6' });
+	const agent = await init({ sandbox, model: 'anthropic/claude-sonnet-4-6' });
+	const harness = agent.harness();
 	const session = await harness.session();
 	const message = payload.message ?? '';
 	const { text } = await session.prompt(message);

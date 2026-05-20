@@ -39,7 +39,8 @@ import * as v from 'valibot';
 export const triggers = { webhook: true };
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({ model: 'anthropic/claude-sonnet-4-6' });
+  const agent = await init({ model: 'anthropic/claude-sonnet-4-6' });
+  const harness = agent.harness();
   const session = await harness.session();
 
   const { data } = await session.prompt(`Translate this to ${payload.language}: "${payload.text}"`, {
@@ -151,7 +152,8 @@ import type { FlueContext } from '@flue/runtime';
 export const triggers = { webhook: true };
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({ model: 'openai/gpt-5.5' });
+  const agent = await init({ model: 'openai/gpt-5.5' });
+  const harness = agent.harness();
   const session = await harness.session();
 
   // The agent has a full virtual filesystem and shell.
@@ -203,10 +205,11 @@ export default async function ({ init, payload, env }: FlueContext) {
     await workspace.writeFile('/.hydrated', new Date().toISOString());
   }
 
-  const harness = await init({
+  const agent = await init({
     sandbox: getShellSandbox({ workspace, loader: env.LOADER }),
     model: 'openrouter/moonshotai/kimi-k2.6',
   });
+  const harness = agent.harness();
   const session = await harness.session();
 
   return await session.prompt(
@@ -322,7 +325,8 @@ export const triggers = { webhook: true };
 export default async function ({ init, id, env, payload }: FlueContext) {
   // The binding name you chose in wrangler.jsonc is the key on `env`.
   const sandbox = getSandbox(env.Sandbox, id);
-  const harness = await init({ sandbox, model: 'anthropic/claude-opus-4-7' });
+  const agent = await init({ sandbox, model: 'anthropic/claude-opus-4-7' });
+  const harness = agent.harness();
   const session = await harness.session();
 
   return await session.prompt(payload.message);

@@ -226,10 +226,11 @@ Pass the store to the `assistant` agent's `init()`:
 ```typescript
 import { sessionStore } from '../session-store';
 
-const harness = await init({
+const agent = await init({
   model: 'anthropic/claude-sonnet-4-6',
   persist: sessionStore,
 });
+const harness = agent.harness();
 ```
 
 The `connectionString` from `fromDatabase` is Render's internal Postgres URL, which doesn't require SSL. If you ever swap to the external connection string, add `ssl: { rejectUnauthorized: false }` to the `Pool` config.

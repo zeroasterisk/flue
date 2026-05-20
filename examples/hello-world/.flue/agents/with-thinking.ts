@@ -12,11 +12,12 @@ export const triggers = { webhook: true };
  * One deployment, multiple reasoning tiers.
  */
 export default async function ({ init }: FlueContext) {
-	const harness = await init({
+	const agent = await init({
 		model: 'anthropic/claude-haiku-4-5',
 		// Harness default: cheap classifier-style calls.
 		thinkingLevel: 'low',
 	});
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	const Answer = v.object({ answer: v.string() });

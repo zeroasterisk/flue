@@ -37,7 +37,8 @@ import * as v from 'valibot';
 export const triggers = { webhook: true };
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({ model: 'openai/gpt-5.5' });
+  const agent = await init({ model: 'openai/gpt-5.5' });
+  const harness = agent.harness();
   const session = await harness.session();
 
   const { data } = await session.prompt(`Translate this to ${payload.language}: "${payload.text}"`, {
@@ -178,7 +179,8 @@ import * as v from 'valibot';
 export const triggers = { webhook: true };
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({ sandbox: local(), model: 'anthropic/claude-sonnet-4-6' });
+  const agent = await init({ sandbox: local(), model: 'anthropic/claude-sonnet-4-6' });
+  const harness = agent.harness();
   const session = await harness.session();
 
   const { data } = await session.prompt(
@@ -258,11 +260,12 @@ const store: SessionStore = {
 };
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({
+  const agent = await init({
     sandbox: local(),
     persist: store,
     model: 'anthropic/claude-sonnet-4-6',
   });
+  const harness = agent.harness();
   const session = await harness.session();
   // ...
 }

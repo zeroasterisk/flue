@@ -4,7 +4,8 @@ import * as v from 'valibot';
 export const triggers = { webhook: true };
 
 export default async function ({ init, log }: FlueContext) {
-	const harness = await init({ model: 'anthropic/claude-sonnet-4-6' });
+	const agent = await init({ model: 'anthropic/claude-sonnet-4-6' });
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// Test: prompt with structured result

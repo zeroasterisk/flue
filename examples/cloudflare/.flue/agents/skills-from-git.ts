@@ -49,11 +49,12 @@ export default async function ({ init, env }: FlueContext<unknown, Env>) {
 		await workspace.writeFile(HYDRATION_SENTINEL, new Date().toISOString());
 	}
 
-	const harness = await init({
+	const agent = await init({
 		sandbox: getShellSandbox({ workspace, loader: env.LOADER }),
 		model: 'cloudflare/@cf/moonshotai/kimi-k2.6',
 		cwd: CLONE_DIR,
 	});
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// Ask the agent to introspect the cloned repo via the code tool.

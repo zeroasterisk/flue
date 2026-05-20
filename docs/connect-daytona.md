@@ -60,10 +60,11 @@ export default async function ({ init, env }: FlueContext) {
   const client = new Daytona({ apiKey: env.DAYTONA_API_KEY });
   const sandbox = await client.create();
 
-  const harness = await init({
+  const agent = await init({
     sandbox: daytona(sandbox),
     model: 'anthropic/claude-sonnet-4-6',
   });
+  const harness = agent.harness();
   const session = await harness.session();
 
   return await session.shell('uname -a');
@@ -88,21 +89,23 @@ export default async function ({ init, payload, env }: FlueContext) {
   const sandbox = await client.create();
 
   // Setup session — clone the repo and install dependencies.
-  const setupHarness = await init({
+  const setupAgent = await init({
     sandbox: daytona(sandbox),
     model: 'anthropic/claude-sonnet-4-6',
   });
+  const setupHarness = setupAgent.harness();
   const setup = await setupHarness.session();
   await setup.shell(`git clone ${payload.repo} /workspace/project`);
   await setup.shell('npm install', { cwd: '/workspace/project' });
 
   // Working session — same sandbox, but rooted at the project directory.
-  const projectHarness = await init({
+  const projectAgent = await init({
     id: 'project',
     sandbox: daytona(sandbox),
     cwd: '/workspace/project',
     model: 'anthropic/claude-sonnet-4-6',
   });
+  const projectHarness = projectAgent.harness();
   const session = await projectHarness.session();
 
   return await session.prompt(payload.prompt);

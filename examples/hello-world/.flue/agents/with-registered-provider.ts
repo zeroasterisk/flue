@@ -14,7 +14,8 @@ export const triggers = { webhook: true };
  * if the registration failed to land.
  */
 export default async function ({ init }: FlueContext) {
-	const harness = await init({ model: 'ollama/llama3.1:8b' });
+	const agent = await init({ model: 'ollama/llama3.1:8b' });
+	const harness = agent.harness();
 	const session = await harness.session();
 	return {
 		ok: true,

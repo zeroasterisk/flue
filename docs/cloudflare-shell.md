@@ -26,10 +26,11 @@ export default async function ({ init, env, payload }: FlueContext) {
     await workspace.writeFile('/.hydrated', new Date().toISOString());
   }
 
-  const harness = await init({
+  const agent = await init({
     sandbox: getShellSandbox({ workspace, loader: env.LOADER }),
     model: 'anthropic/claude-sonnet-4-6',
   });
+  const harness = agent.harness();
   const session = await harness.session();
 
   return session.prompt(`Answer this using the hydrated workspace: ${payload.message}`);
@@ -70,6 +71,11 @@ async () => {
 Programmatic file access still works through `session.fs` and `harness.fs`, backed by the same Workspace as the agent's `code` tool:
 
 ```ts
+const agent = await init({
+  sandbox: getShellSandbox({ workspace, loader: env.LOADER }),
+  model: 'anthropic/claude-sonnet-4-6',
+});
+const harness = agent.harness();
 await harness.fs.writeFile('/notes.md', 'staged before the session starts');
 const session = await harness.session();
 const notes = await session.fs.readFile('/notes.md');
@@ -151,7 +157,8 @@ Old:
 import { getVirtualSandbox } from '@flue/runtime/cloudflare';
 
 const sandbox = await getVirtualSandbox(env.KNOWLEDGE_BASE);
-const harness = await init({ sandbox, model: 'anthropic/claude-sonnet-4-6' });
+const agent = await init({ sandbox, model: 'anthropic/claude-sonnet-4-6' });
+const harness = agent.harness();
 ```
 
 New:
@@ -169,10 +176,11 @@ if (!(await workspace.exists('/.hydrated'))) {
   await workspace.writeFile('/.hydrated', new Date().toISOString());
 }
 
-const harness = await init({
+const agent = await init({
   sandbox: getShellSandbox({ workspace, loader: env.LOADER }),
   model: 'anthropic/claude-sonnet-4-6',
 });
+const harness = agent.harness();
 ```
 
 If you used `getVirtualSandbox()` with no bucket, remove the call entirely and omit `sandbox` from `init()`. Flue's default in-memory sandbox is already that behavior.

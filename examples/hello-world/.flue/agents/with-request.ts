@@ -45,7 +45,8 @@ export default async function ({
 		await new Promise((resolve) => setTimeout(resolve, delayMs));
 	}
 
-	const harness = await init({ model: 'anthropic/claude-haiku-4-5' });
+	const agent = await init({ model: 'anthropic/claude-haiku-4-5' });
+	const harness = agent.harness();
 	await register(async () => {
 		if (payload?.seedWorkspace) {
 			await harness.fs.writeFile('/registered-workspace.txt', payload.seedWorkspace);

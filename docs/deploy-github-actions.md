@@ -29,7 +29,8 @@ import * as v from 'valibot';
 export const triggers = {};
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({ sandbox: local(), model: 'anthropic/claude-sonnet-4-6' });
+  const agent = await init({ sandbox: local(), model: 'anthropic/claude-sonnet-4-6' });
+  const harness = agent.harness();
   const session = await harness.session();
 
   const { data } = await session.prompt(
@@ -144,7 +145,7 @@ import * as v from 'valibot';
 export const triggers = {};
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({
+  const agent = await init({
     sandbox: local({
       // Explicitly forward the runner's secrets into the agent's shell.
       // Anything not listed here (including ANTHROPIC_API_KEY) stays on
@@ -156,6 +157,7 @@ export default async function ({ init, payload }: FlueContext) {
     }),
     model: 'anthropic/claude-opus-4-7',
   });
+  const harness = agent.harness();
   const session = await harness.session();
 
   // The agent's bash tool can run `gh issue view`, `npm install`, `git diff`
@@ -287,7 +289,8 @@ import { local } from '@flue/runtime/node';
 import * as v from 'valibot';
 
 export default async function ({ init, payload }: FlueContext) {
-  const harness = await init({ sandbox: local(), model: 'anthropic/claude-sonnet-4-6' });
+  const agent = await init({ sandbox: local(), model: 'anthropic/claude-sonnet-4-6' });
+  const harness = agent.harness();
   const session = await harness.session();
 
   const { data } = await session.skill('triage', {

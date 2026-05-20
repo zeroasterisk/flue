@@ -12,7 +12,8 @@ export const triggers = { webhook: true };
  * - aborts tear down in-flight bash tool commands
  */
 export default async function ({ init }: FlueContext) {
-	const harness = await init({ model: 'anthropic/claude-haiku-4-5' });
+	const agent = await init({ model: 'anthropic/claude-haiku-4-5' });
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// Test 1: prompt() with AbortSignal.timeout

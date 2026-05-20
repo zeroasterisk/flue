@@ -9,10 +9,11 @@ export default async function ({ init }: FlueContext) {
 	const client = new Daytona({ apiKey: process.env.DAYTONA_API_KEY });
 	const sandbox = await client.create();
 
-	const harness = await init({
+	const agent = await init({
 		sandbox: daytona(sandbox),
 		model: 'anthropic/claude-sonnet-4-6',
 	});
+	const harness = agent.harness();
 	const session = await harness.session();
 
 	// Test 1: Run a shell command in the remote sandbox

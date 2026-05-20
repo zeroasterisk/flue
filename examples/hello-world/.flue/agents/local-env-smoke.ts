@@ -17,7 +17,7 @@ export default async function ({ init }: FlueContext) {
 	process.env[sentinelKey] = 'leaked';
 
 	try {
-		const harness = await init({
+		const agent = await init({
 			sandbox: local({
 				// `CUSTOM_VAR` is the only thing past the allowlist; the
 				// sentinel above is intentionally NOT listed.
@@ -25,6 +25,7 @@ export default async function ({ init }: FlueContext) {
 			}),
 			model: false,
 		});
+		const harness = agent.harness();
 		const session = await harness.session();
 
 		const results: Record<string, boolean> = {};
