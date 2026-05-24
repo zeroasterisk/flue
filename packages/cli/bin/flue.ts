@@ -52,7 +52,7 @@ function printUsage() {
 			'  flue build [--target <node|cloudflare>] [--root <path>] [--output <path>] [--config <path>]\n' +
 			'  flue init  --target <node|cloudflare> [--root <path>] [--force]\n' +
 			'  flue add   [<name>|<url>] [--category <category>] [--print]\n' +
-			'  flue logs  <runId> [--server <url>] [--follow|-f|--no-follow] [--since <eventIndex>] [--types a,b,c] [--limit <n>] [--format pretty|json|ndjson]\n' +
+			'  flue logs  <workflowRunId> [--server <url>] [--follow|-f|--no-follow] [--since <eventIndex>] [--types a,b,c] [--limit <n>] [--format pretty|json|ndjson]\n' +
 			'\n' +
 			'Commands:\n' +
 			'  dev    Long-running watch-mode dev server. Rebuilds and reloads on file changes.\n' +
@@ -60,7 +60,7 @@ function printUsage() {
 			'  build  Build a deployable artifact to ./dist (production deploys).\n' +
 			'  init   Scaffold a starter flue.config.ts in the target directory.\n' +
 			'  add    Install a connector. Pipes installation instructions for an AI coding agent to follow.\n' +
-			'  logs   Tail or replay structured run events from a running Flue server. Read-only — does not invoke the agent.\n' +
+			'  logs   Tail or replay workflow run events from a running Flue server. Read-only — does not invoke work.\n' +
 			'\n' +
 			'Flags:\n' +
 			'  --root <path>        Project root. Default: current working directory.\n' +
@@ -91,8 +91,8 @@ function printUsage() {
 			'  flue add\n' +
 			'  flue add daytona | claude\n' +
 			'  flue add https://e2b.dev --category sandbox | claude\n' +
-			'  flue logs run_01H...                              # tail a specific run\n' +
-			'  flue logs run_01H... --no-follow                  # one-shot replay\n' +
+			'  flue logs run_01H...                              # tail a workflow run\n' +
+			'  flue logs run_01H... --no-follow                  # replay a workflow run\n' +
 			'  flue logs run_01H... --types tool_call,log,run_end --format json\n' +
 			'\n' +
 			'Note: set the model in `createAgent(() => ({ model: "provider/model-id" }))` ' +
@@ -1100,11 +1100,7 @@ async function run(args: RunArgs) {
 
 interface RunRecord {
 	runId: string;
-	owner:
-		| { kind: 'agent'; agentName: string; instanceId: string }
-		| { kind: 'workflow'; workflowName: string; runId: string };
-	instanceId?: string;
-	agentName?: string;
+	owner: { kind: 'workflow'; workflowName: string; instanceId: string };
 	status: 'active' | 'completed' | 'errored';
 	startedAt: string;
 	isError?: boolean;
@@ -1207,8 +1203,8 @@ function logsRenderPretty(event: Record<string, unknown>): void {
 	const type = event.type;
 	if (type === 'run_start') {
 		const runId = String(event.runId ?? '');
-		const agent = String(event.agentName ?? '');
-		console.error(`[flue] run:start    ${runId}  agent=${agent}`);
+		const workflow = String(event.workflowName ?? '');
+		console.error(`[flue] run:start    ${runId}  workflow=${workflow}`);
 		return;
 	}
 	if (type === 'run_end') {

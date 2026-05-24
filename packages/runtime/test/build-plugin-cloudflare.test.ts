@@ -20,8 +20,13 @@ describe('Cloudflare build plugin', () => {
 		expect(entry).toContain('processManagedAgentDispatch(input, doInstance, agentName, fiberCtx.id)');
 		expect(entry).toContain('waitForEarlierManagedDispatch(doInstance, input, fiberId)');
 		expect(entry).toContain('assertNoPendingDispatchForDirectSession(doInstance, agentName, session)');
-		expect(entry).toContain("if (ctx.name === 'flue:dispatch') return handleFlueDispatchRecovered");
+		expect(entry).toContain("if (ctx.name === 'flue:dispatch') {");
+		expect(entry).toContain('return handleFlueDispatchRecovered(ctx, this, "moderator");');
+		expect(entry).toContain('const ctx = createContextForRequest(doInstance.name, undefined, input, doInstance, request);');
+		expect(entry).toContain('createDispatchAgentHandler(agent, input)(ctx)');
 		expect(entry).toContain('resolveDispatchAgentName: (agent) => dispatchAgentNames.get(agent),');
+		expect(entry).not.toContain('runId: input.dispatchId');
+		expect(entry).not.toContain('createDurableDispatchRunStore');
 		expect(entry).not.toContain('Cloudflare external-channel dispatch processing is not supported yet');
 		expect(entry).not.toContain('createAgentDispatchProcessor');
 	});
@@ -39,26 +44,22 @@ describe('Cloudflare build plugin', () => {
 		expect(entry).not.toContain('createRegistryIdentity');
 	});
 
-	it('recovers agent turns and restarts interrupted Flue workflows as new runs', async () => {
+	it('recovers interrupted Flue workflows without recovering agent prompt runs', async () => {
 		const entry = await new CloudflarePlugin().generateEntryPoint(testBuildContext());
 
-		expect(entry).toContain('recoverAgentRun');
-		expect(entry).toContain('reserveRecoveredAgentSession');
 		expect(entry).toContain('failRecoveredRun');
-		expect(entry).toContain("ctx.name.startsWith('flue:webhook:')");
-		expect(entry).toContain('const run = await runStore.getRun(runId);');
-		expect(entry).toContain("const startEvent = events.find((event) => event.type === 'run_start');");
-		expect(entry).toContain('const payload = run?.payload !== undefined ? run.payload : startEvent?.payload;');
 		expect(entry).toContain("ctx.name !== 'flue:workflow:' + doInstance.name");
 		expect(entry).toContain('const restartRunId = generateWorkflowRunId(workflowName);');
 		expect(entry).toContain("'x-flue-restarted-from-run-id': interruptedRunId");
 		expect(entry).toContain('restartedAsRunId: restartRunId');
 		expect(entry).toContain('Flue workflow execution was interrupted and restarted as run');
 		expect(entry).toContain("return doInstance.runFiber('flue:workflow:' + runId");
-		expect(entry).toContain("return doInstance.runFiber('flue:webhook:' + runId");
+		expect(entry).not.toContain('recoverAgentRun');
+		expect(entry).not.toContain('reserveRecoveredAgentSession');
+		expect(entry).not.toContain('flue:webhook:');
+		expect(entry).not.toContain("owner: { kind: 'agent', agentName, instanceId: id }");
 		expect(entry).not.toContain('flue_fiber_recovery');
 		expect(entry).not.toContain('fiber?.stash?.');
-		expect(entry).not.toContain('recoverWebhookRun');
 		expect(entry).toContain("runId = decodeURIComponent(segments[1] || '');");
 		expect(entry).toContain('createContext: (id_, runId, payload, req, initialEventIndex)');
 		expect(entry).toContain("assertAgentsDurabilityApi(doInstance, 'startFiber');");
@@ -86,6 +87,10 @@ describe('Cloudflare build plugin', () => {
 		expect(entry).toContain('connectCloudflareAgentWebSocket(server, { name: agentName, id: doInstance.name, requestUrl: socketRequestUrl(request) });');
 		expect(entry).toContain("url.search = '';");
 		expect(entry).toContain('request: socketRequest(connection)');
+		const agentSocketBody = entry.slice(entry.indexOf('async function messageAgentSocket'), entry.indexOf('async function messageWorkflowSocket'));
+		expect(agentSocketBody).not.toContain('runStore:');
+		expect(agentSocketBody).not.toContain('runSubscribers');
+		expect(agentSocketBody).not.toContain('runRegistry:');
 		expect(entry).not.toContain('shouldSendProtocolMessages()');
 	});
 

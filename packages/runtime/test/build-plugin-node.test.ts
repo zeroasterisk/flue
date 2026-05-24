@@ -27,6 +27,10 @@ describe('Node build plugin', () => {
 		expect(entry).toContain('const channelModules = {');
 		expect(entry).toContain('const normalized = normalizeBuiltModules(agentModules, workflowModules, channelModules);');
 		expect(entry).toContain('channelApps,');
+		const dispatchQueueBody = entry.slice(entry.indexOf('const dispatchQueue ='), entry.indexOf('function createContextForRequest'));
+		expect(dispatchQueueBody).not.toContain('runStore');
+		expect(dispatchQueueBody).not.toContain('runSubscribers');
+		expect(dispatchQueueBody).not.toContain('runRegistry');
 	});
 
 	it('starts a generated server and invokes an HTTP workflow', async () => {

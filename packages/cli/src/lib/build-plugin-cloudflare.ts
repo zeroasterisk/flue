@@ -1,4 +1,4 @@
-/** Cloudflare build plugin. Produces a Worker + DO entry point with SSE/webhook/sync modes. */
+/** Cloudflare build plugin. Produces a Worker + DO entry point for workflow runs and agent interactions. */
 import * as path from 'node:path';
 import {
 	assertSandboxPackageInstalled,
@@ -115,8 +115,8 @@ export class CloudflarePlugin implements BuildPlugin {
   }
 
   async onFiberRecovered(ctx) {
-    if (ctx.name?.startsWith('flue:')) {
-      return handleFlueFiberRecovered(ctx, this, ${JSON.stringify(agent.name)});
+    if (ctx.name === 'flue:dispatch') {
+      return handleFlueDispatchRecovered(ctx, this, ${JSON.stringify(agent.name)});
     }
     if (typeof super.onFiberRecovered === 'function') {
       return super.onFiberRecovered(ctx);
@@ -203,9 +203,7 @@ import {
   handleRunRouteRequest,
   persistAgentDispatchAdmission,
   createDispatchAgentHandler,
-  recoverAgentRun,
   reserveDispatchAgentSession,
-  reserveRecoveredAgentSession,
   failRecoveredRun,
   generateWorkflowRunId,
   configureFlueRuntime,
@@ -484,11 +482,6 @@ function createRunStoreForRequest(doInstance) {
     : memoryRunStore;
 }
 
-function createDurableDispatchRunStore(doInstance) {
-  if (!doInstance?.ctx?.storage?.sql) throw new Error('[flue] Durable dispatch admission requires target Durable Object SQL storage.');
-  return createDurableRunStore(doInstance.ctx.storage.sql);
-}
-
 function createRunRegistryForRequest(reqEnv) {
   return createCloudflareRunRegistry(reqEnv?.FLUE_REGISTRY);
 }
@@ -539,99 +532,6 @@ function assertAgentsDurabilityApi(doInstance, method) {
 				'". Install or upgrade the "agents" package in your project.',
 		);
 	}
-}
-
-async function handleFlueFiberRecovered(ctx, doInstance, agentName) {
-  if (ctx.name === 'flue:dispatch') return handleFlueDispatchRecovered(ctx, doInstance, agentName);
-  if (!ctx.name || !ctx.name.startsWith('flue:webhook:')) return;
-  const runId = ctx.name.slice('flue:webhook:'.length);
-  const runStore = createRunStoreForRequest(doInstance);
-  const run = await runStore.getRun(runId);
-  const events = await runStore.getEvents(runId);
-  const startEvent = events.find((event) => event.type === 'run_start');
-  const payload = run?.payload !== undefined ? run.payload : startEvent?.payload;
-  const owner = { kind: 'agent', agentName, instanceId: doInstance.name };
-  const request = new Request('https://flue.invalid/agents/' + encodeURIComponent(agentName) + '/' + encodeURIComponent(doInstance.name), { method: 'POST' });
-  if (!run || run.owner.kind !== 'agent' || run.owner.agentName !== agentName || run.owner.instanceId !== doInstance.name) {
-    console.warn('[flue] Cloudflare fiber could not be recovered:', agentName, ctx.name);
-    return;
-  }
-  const handler = directHandlers[agentName];
-  if (!handler) {
-    await failRecoveredRun({
-      label: agentName,
-      owner,
-      id: doInstance.name,
-      runId,
-      payload,
-      request,
-      error: new Error('Flue recovery handler unavailable after deployment.'),
-      runStore,
-      runSubscribers,
-      runRegistry: createRunRegistryForRequest(doInstance.env),
-      createContext: (id_, recoveredRunId, payload, req, initialEventIndex) => createContextForRequest(id_, recoveredRunId, payload, doInstance, req, initialEventIndex),
-    });
-    return;
-  }
-  const identity = agentRuntimeIdentity(agentName);
-  let releaseSessionLock;
-  try {
-    releaseSessionLock = reserveRecoveredAgentSession(owner, payload);
-  } catch (error) {
-    await failRecoveredRun({
-      label: agentName,
-      owner,
-      id: doInstance.name,
-      runId,
-      payload,
-      request,
-      error,
-      runStore,
-      runSubscribers,
-      runRegistry: createRunRegistryForRequest(doInstance.env),
-      createContext: (id_, recoveredRunId, payload, req, initialEventIndex) => createContextForRequest(id_, recoveredRunId, payload, doInstance, req, initialEventIndex),
-    });
-    return;
-  }
-  const terminalize = async (error) => {
-    try {
-      await failRecoveredRun({
-        label: agentName,
-        owner,
-        id: doInstance.name,
-        runId,
-        payload,
-        request,
-        error,
-        runStore,
-        runSubscribers,
-        runRegistry: createRunRegistryForRequest(doInstance.env),
-        createContext: (id_, recoveredRunId, payload, req, initialEventIndex) => createContextForRequest(id_, recoveredRunId, payload, doInstance, req, initialEventIndex),
-      });
-    } finally {
-      releaseSessionLock?.();
-    }
-    console.error('[flue] Cloudflare fiber recovery error:', agentName, ctx.name, error);
-  };
-  try {
-    assertAgentsDurabilityApi(doInstance, 'runFiber');
-    void doInstance.runFiber(ctx.name, () => runWithInstanceContext(doInstance, identity, () => recoverAgentRun({
-      label: agentName,
-      owner,
-      id: doInstance.name,
-      runId,
-      handler,
-      payload,
-      request,
-      releaseSessionLock,
-      runStore,
-      runSubscribers,
-      runRegistry: createRunRegistryForRequest(doInstance.env),
-      createContext: (id_, recoveredRunId, payload, req, initialEventIndex) => createContextForRequest(id_, recoveredRunId, payload, doInstance, req, initialEventIndex),
-    }))).catch(terminalize);
-  } catch (error) {
-    await terminalize(error);
-  }
 }
 
 async function handleFlueDispatchRecovered(ctx, doInstance, agentName) {
@@ -721,32 +621,20 @@ async function waitForEarlierManagedDispatch(doInstance, input, fiberId) {
 async function processManagedAgentDispatch(input, doInstance, agentName, fiberId) {
   const agent = createdAgents[agentName];
   if (!agent) throw new Error('[flue] Dispatch target unavailable during durable processing.');
-  const runStore = createDurableDispatchRunStore(doInstance);
   await persistAgentDispatchAdmission({
     input,
-    runStore,
-    runSubscribers,
-    runRegistry: createRunRegistryForRequest(doInstance.env),
     createContext: (id_, runId, payload, req, initialEventIndex) => createContextForRequest(id_, runId, payload, doInstance, req, initialEventIndex),
   });
   const owner = { kind: 'agent', agentName, instanceId: doInstance.name };
   await waitForEarlierManagedDispatch(doInstance, input, fiberId);
   const releaseSessionLock = await reserveDispatchAgentSession(owner, input);
-  const result = await runWithInstanceContext(doInstance, agentRuntimeIdentity(agentName), () => recoverAgentRun({
-    label: agentName,
-    owner,
-    id: doInstance.name,
-    runId: input.dispatchId,
-    handler: createDispatchAgentHandler(agent, input),
-    payload: input,
-    request: new Request('https://flue.invalid' + INTERNAL_DISPATCH_PATH, { method: 'POST' }),
-    releaseSessionLock,
-    runStore,
-    runSubscribers,
-    runRegistry: createRunRegistryForRequest(doInstance.env),
-    createContext: (id_, runId, payload, req, initialEventIndex) => createContextForRequest(id_, runId, payload, doInstance, req, initialEventIndex),
-  }));
-  if (result.isError) throw result.error;
+  const request = new Request('https://flue.invalid' + INTERNAL_DISPATCH_PATH, { method: 'POST' });
+  try {
+    const ctx = createContextForRequest(doInstance.name, undefined, input, doInstance, request);
+    await runWithInstanceContext(doInstance, agentRuntimeIdentity(agentName), () => createDispatchAgentHandler(agent, input)(ctx));
+  } finally {
+    releaseSessionLock?.();
+  }
 }
 
 async function assertNoPendingDispatchForDirectSession(doInstance, agentName, session) {
@@ -819,17 +707,6 @@ async function dispatchAgent(request, doInstance, agentName, handler) {
     });
     return Response.json({ dispatchId: input.dispatchId, acceptedAt: input.acceptedAt });
   }
-  const runRoute = parseRunRoute(request);
-  if (runRoute) {
-    return handleRunRouteRequest({
-      request,
-      owner: { kind: 'agent', agentName, instanceId: id },
-      runStore: createRunStoreForRequest(doInstance),
-      runSubscribers,
-      ...runRoute,
-    });
-  }
-
   const payload = await request.clone().json().catch(() => null);
   const session = typeof payload?.session === 'string' && payload.session.trim() !== '' ? payload.session : 'default';
   await assertNoPendingDispatchForDirectSession(doInstance, agentName, session);
@@ -839,14 +716,7 @@ async function dispatchAgent(request, doInstance, agentName, handler) {
       agentName,
       id,
       handler,
-      runStore: createRunStoreForRequest(doInstance),
-      runSubscribers,
-      runRegistry: createRunRegistryForRequest(doInstance.env),
       createContext: (id_, runId, payload, req, initialEventIndex) => createContextForRequest(id_, runId, payload, doInstance, req, initialEventIndex),
-      startWebhook: (runId, run) => {
-        assertAgentsDurabilityApi(doInstance, 'runFiber');
-        return doInstance.runFiber('flue:webhook:' + runId, () => runWithInstanceContext(doInstance, identity, run));
-      },
       runHandler: (ctx, h) => {
         assertAgentsDurabilityApi(doInstance, 'keepAliveWhile');
         return doInstance.keepAliveWhile(() => h(ctx));
@@ -904,9 +774,6 @@ async function messageAgentSocket(connection, message, doInstance, agentName) {
     request: socketRequest(connection),
     handler,
     beforePrompt: (session) => assertNoPendingDispatchForDirectSession(doInstance, agentName, session),
-    runStore: createRunStoreForRequest(doInstance),
-    runSubscribers,
-    runRegistry: createRunRegistryForRequest(doInstance.env),
     createContext: (id_, runId, payload, req) => createContextForRequest(id_, runId, payload, doInstance, req),
     runHandler: (ctx, h) => {
       assertAgentsDurabilityApi(doInstance, 'keepAliveWhile');
@@ -1030,14 +897,8 @@ configureFlueRuntime({
   },
   createRunRegistryForRequest,
   routeRunRequest: async (request, reqEnv, target) => {
-    if (target.kind === 'workflow') {
-      const bindingName = workflowBindingNameFromWorkflowName(target.workflowName);
-      const binding = reqEnv?.[bindingName];
-      if (!binding) return null;
-      const stub = await getAgentByName(binding, target.instanceId);
-      return stub.fetch(request);
-    }
-    const bindingName = agentBindingNameFromAgentName(target.agentName);
+    if (target.kind !== 'workflow') return null;
+    const bindingName = workflowBindingNameFromWorkflowName(target.workflowName);
     const binding = reqEnv?.[bindingName];
     if (!binding) return null;
     const stub = await getAgentByName(binding, target.instanceId);

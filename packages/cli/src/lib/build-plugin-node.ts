@@ -1,4 +1,4 @@
-/** Node.js build plugin. Produces a Hono HTTP server with SSE/webhook/sync modes. */
+/** Node.js build plugin. Produces a server for workflow runs and agent interactions. */
 import type { BuildContext, BuildPlugin } from './types.ts';
 
 export class NodePlugin implements BuildPlugin {
@@ -209,9 +209,6 @@ const runSubscribers = createRunSubscriberRegistry();
 const dispatchQueue = new InMemoryDispatchQueue(createAgentDispatchProcessor({
   agents: createdAgents,
   createContext: createContextForRequest,
-  runStore,
-  runSubscribers,
-  runRegistry,
 }));
 
 function createContextForRequest(id, runId, payload, req) {
