@@ -16,7 +16,7 @@ export interface JsonRequestOptions {
 	signal?: AbortSignal;
 }
 
-export class FlueApiError extends Error {
+class FlueApiError extends Error {
 	readonly status: number;
 	readonly body: unknown;
 
@@ -70,7 +70,7 @@ export class HttpClient {
 	}
 }
 
-export async function parseJsonResponse<T>(response: Response): Promise<T> {
+async function parseJsonResponse<T>(response: Response): Promise<T> {
 	const text = await response.text();
 	const body = text ? safeJsonParse(text) : undefined;
 	if (!response.ok) throw new FlueApiError(response.status, body ?? text);

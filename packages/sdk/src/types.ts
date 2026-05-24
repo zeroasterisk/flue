@@ -46,7 +46,7 @@ export interface ListResponse<T> {
 	nextCursor?: string;
 }
 
-export interface PromptUsage {
+interface PromptUsage {
 	input: number;
 	output: number;
 	cacheRead: number;
@@ -61,7 +61,7 @@ export interface PromptUsage {
 	};
 }
 
-export type OperationKind = 'prompt' | 'skill' | 'task' | 'shell' | 'compact';
+type OperationKind = 'prompt' | 'skill' | 'task' | 'shell' | 'compact';
 
 export interface FluePublicError {
 	type: string;

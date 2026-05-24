@@ -44,12 +44,12 @@ export interface FlueClient {
 	};
 }
 
-export interface ListOptions {
+interface ListOptions {
 	cursor?: string;
 	limit?: number;
 }
 
-export interface ListRunsOptions extends ListOptions {
+interface ListRunsOptions extends ListOptions {
 	status?: RunStatus;
 	agentName?: string;
 	workflowName?: string;
