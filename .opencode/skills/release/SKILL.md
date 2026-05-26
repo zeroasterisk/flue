@@ -21,20 +21,23 @@ Before editing, inspect all workspace `package.json` files. Change versions only
 
 ## Workflow
 
-1. Confirm the repository is on the intended current branch, determine the selected release version, and check the working tree. If unrelated changes exist, stop and ask before including them in the release commit.
-2. Update the `version` field in each public package `package.json` to the selected release version.
-3. Run `pnpm install --lockfile-only` if necessary to update version-related lockfile metadata.
-4. Rebuild from scratch: remove generated build outputs for public packages, then run the repository build command (`pnpm run build` from the repository root).
-5. Run repository validation before publishing: `pnpm run check` from the repository root.
-6. Publish each public package from its package directory using `pnpm publish -r --no-git-checks`. Publish in dependency order when required (for this repository, publish `@flue/runtime` before packages that depend on it).
-7. Inspect the final diff and stage only release-generated changes, including package versions, lockfile updates, and build or prepublish-generated tracked files.
-8. Commit after publication with `git commit -m "chore: release v<VERSION>"`.
-9. Tag that final commit with `git tag v<VERSION>`.
-10. Push the current branch, then push the tag: `git push` followed by `git push --tags`.
+1. Before any release work, run `git status --short --branch` and confirm the working directory is clean. If it is not clean, stop and ask before proceeding.
+2. Read `CHANGELOG.md` and review the unreleased changes against the commits since the prior release. Ensure the selected release has an accurate dated changelog section; include its update in the release changes.
+3. Confirm the repository is on the intended current branch and determine the selected release version.
+4. Inspect all workspace package manifests and update the `version` field in each public package `package.json` to the selected release version.
+5. Run `pnpm install --lockfile-only` if necessary to update version-related lockfile metadata.
+6. Rebuild from scratch: remove generated build outputs for public packages, then run the repository build command (`pnpm run build` from the repository root).
+7. Run repository validation before publishing: `pnpm run check` from the repository root.
+8. Publish each public package from its package directory using `pnpm publish -r --no-git-checks`. Publish in dependency order when required (for this repository, publish `@flue/runtime` before packages that depend on it).
+9. Inspect the final diff and stage only release-generated changes, including the changelog, package versions, lockfile updates, and build or prepublish-generated tracked files.
+10. Commit after publication with `git commit -m "chore: release v<VERSION>"`.
+11. Tag that final commit with `git tag v<VERSION>`.
+12. Push the current branch, then push the tag: `git push` followed by `git push --tags`.
 
 ## Guardrails
 
 - Do not begin without an explicitly stated release increment or version.
+- Do not alter files, build, validate, or publish until the initial clean working-directory check has succeeded and `CHANGELOG.md` has been reviewed.
 - Never use a normal `pnpm publish`; always include `-r --no-git-checks` because publishing occurs from an intentionally unclean release tree before the commit.
 - Never commit unrelated pre-existing work.
 - Never create the tag until publishing and the release commit both succeed.

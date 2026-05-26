@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-05-25
+
+### Fixes & Other Changes
+
+- **Cloudflare agent route forwarding preserves the request body.** Flue now forwards a cloned request into Cloudflare agent routing, preventing request body consumption from making the original request unreadable after routing.
+
+## 0.7.0 - 2026-05-15
+
 ### New Features
 
 - **Cloudflare shell sandbox.** Added `getShellSandbox({ workspace, loader })`, `getDefaultWorkspace()`, and `hydrateFromBucket()` from `@flue/runtime/cloudflare`. The new sandbox wires `@cloudflare/shell` Workspaces into Flue through a codemode `code` tool backed by a Worker Loader binding. Agents use `state.*` inside the `code` tool instead of bash/read/write/grep/glob. Use `@cloudflare/shell` directly for primitives like `Workspace`, `WorkspaceFileSystem`, and `createGit`.
