@@ -232,8 +232,9 @@ export async function run({ init, payload, env }: FlueContext) {
   try {
     const agent = createAgent(() => ({
       model: 'anthropic/claude-sonnet-4-6',
+      tools: github.tools,
     }));
-    const harness = await init(agent, { tools: github.tools });
+    const harness = await init(agent);
     const session = await harness.session();
     return await session.prompt(payload.prompt);
   } finally {
@@ -255,7 +256,7 @@ GET  /agents/<agent-name>/<id>  (Upgrade: websocket)
 
 In an agent module, import `type AgentWebSocketHandler` and export `const websocket: AgentWebSocketHandler = async (_c, next) => next();` to open a long-lived SDK connection to that stable instance; it may add authentication before calling `next()`. One agent socket can issue sequential prompts and select a session per prompt; workflow sockets are one invocation per connection.
 
-In workflows, `init(createdAgent)` creates a harness: a configured handle for model defaults, tools, sandbox, filesystem, and sessions. Pass `init(createdAgent, { name })` when one workflow needs multiple isolated harness scopes, or pass `{ tools, skills, subagents }` to add workflow-created capabilities to that harness. Tools, skills, and subagents from a profile, `createAgent(...)`, and `init(...)` are appended; duplicate names throw. In agent modules, the runtime initializes the module's default `createAgent(...)` export when a message arrives.
+In workflows, `init(createdAgent)` creates a harness: a configured handle for model defaults, tools, sandbox, filesystem, and sessions. Pass `init(createdAgent, { name })` when one workflow needs multiple isolated harness scopes. In agent modules, the runtime initializes the module's default `createAgent(...)` export when a message arrives.
 
 By default, `harness.session()` opens the default session inside the default harness for that agent instance. Reuse the same URL `<id>` to continue the same agent instance. Use a new URL `<id>` to start fresh.
 

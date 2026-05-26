@@ -1,6 +1,6 @@
 {
 	"name": "@flue/runtime",
-	"version": "0.8.0-beta.5",
+	"version": "0.8.0-beta.6",
 	"type": "module",
 	"license": "Apache-2.0",
 	"exports": {

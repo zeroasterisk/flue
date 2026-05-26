@@ -2,9 +2,19 @@
 
 ## Unreleased
 
+### New Features
+
+- **Created agents can now declare runtime capabilities directly from their initializer.** Agent initialization supports reusable tools and other operation capabilities on the created agent configuration, making stable instance-scoped behavior available without requiring a separate profile definition.
+
 ### Breaking Changes
 
 - **Public HTTP and WebSocket exposure is now declared exclusively through middleware exports.** Agent and workflow modules export `route` to enable HTTP access and `websocket` to enable WebSocket access; the middleware may authorize or transform requests and call `await next()` to enter Flue's built-in handler. The former attached `channels = [http()]` / `channels = [websocket()]` declarations are no longer supported. Authored provider channel applications created with `defineChannel(...)` are unchanged.
+
+### Fixes & Other Changes
+
+- **Cloudflare Vite builds preserve authored environment configuration.** Generated Wrangler configuration now merges environment-specific user settings correctly instead of losing them while injecting Flue bindings and runtime configuration.
+
+- **Model-invoked subagent tasks now execute correctly.** Sessions can dispatch a `task` tool call requested by the model, restoring delegated operation execution through configured subagents.
 
 ## 0.7.1 - 2026-05-25
 
