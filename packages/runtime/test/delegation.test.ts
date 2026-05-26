@@ -138,6 +138,23 @@ describe('agent delegation', () => {
 		await expect(withInvoker.delegate('Review.', { agent: target, id: '' })).rejects.toThrow('non-empty "id"');
 	});
 
+	it('releases delegated target locks when target context creation fails', async () => {
+		const agent = createAgent(() => ({ model: false }));
+		const input = {
+			delegationId: 'delegation-lock',
+			id: 'review-instance',
+			session: 'delegation:lock',
+			message: 'Review.',
+			requestedAt: '2026-05-25T00:00:00.000Z',
+		};
+		const createContext = () => {
+			throw new Error('context failed');
+		};
+
+		await expect(invokeAgentDelegation({ agentName: 'reviewer', agent, input, createContext })).rejects.toThrow('context failed');
+		await expect(invokeAgentDelegation({ agentName: 'reviewer', agent, input, createContext })).rejects.toThrow('context failed');
+	});
+
 	it('propagates abort through the delegated call handle', async () => {
 		let delegatedSignal: AbortSignal | undefined;
 		const ctx = createFlueContext({

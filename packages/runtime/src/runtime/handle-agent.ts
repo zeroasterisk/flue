@@ -699,16 +699,16 @@ export async function invokeDirectAttached(opts: DirectAttachedOptions): Promise
 
 export async function invokeAgentDelegation(opts: InvokeAgentDelegationOptions): Promise<PromptResponse> {
 	const sessionLock = acquireDirectAgentSessionLock(opts.agentName, opts.input.id, { session: opts.input.session });
-	const ctx = opts.createContext(
-		opts.input.id,
-		undefined,
-		undefined,
-		new Request('http://flue.local/_delegation', { method: 'POST', signal: opts.signal }),
-		undefined,
-		undefined,
-		opts.input.delegationId,
-	);
 	try {
+		const ctx = opts.createContext(
+			opts.input.id,
+			undefined,
+			undefined,
+			new Request('http://flue.local/_delegation', { method: 'POST', signal: opts.signal }),
+			undefined,
+			undefined,
+			opts.input.delegationId,
+		);
 		const harness = await ctx.initializeCreatedAgent(opts.agent, undefined);
 		const session = await harness.sessions.create(opts.input.session);
 		try {

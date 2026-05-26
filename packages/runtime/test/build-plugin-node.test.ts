@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import { createServer } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { build } from '../../cli/src/lib/build.ts';
 import { NodePlugin } from '../../cli/src/lib/build-plugin-node.ts';
@@ -30,6 +31,13 @@ describe('Node build plugin', () => {
 		expect(entry).toContain('const dispatchAgentNames = new Map();');
 		expect(entry).toContain('dispatchAgentNames.set(mod.default, name);');
 		expect(entry).toContain('resolveDispatchAgentName: (agent) => dispatchAgentNames.get(agent),');
+		expect(entry).toContain('invokeAgentDelegation,');
+		expect(entry).toContain('async function invokeDeployedAgentDelegation(agent, input, signal)');
+		expect(entry).toContain('const agentName = dispatchAgentNames.get(agent);');
+		expect(entry).toContain('delegate() target created agent is not a discovered default-exported agent in this built application.');
+		expect(entry).toContain('function createContextForRequest(id, runId, payload, req, initialEventIndex, dispatchId, delegationId)');
+		expect(entry).toContain('delegationId,');
+		expect(entry).toContain('invokeAgentDelegation: invokeDeployedAgentDelegation,');
 		expect(entry).toContain('const channelModules = {');
 		expect(entry).toContain('const normalized = normalizeBuiltModules(agentModules, workflowModules, channelModules);');
 		expect(entry).toContain('channelApps,');
@@ -464,6 +472,64 @@ describe('Node build plugin', () => {
 		}
 	});
 
+	it('delegates from a local workflow to a discovered agent through the built Node artifact', async () => {
+		const root = createFixtureRoot('flue-local-ipc-delegation-');
+		linkPackage(root, '@earendil-works/pi-ai', fileURLToPath(import.meta.resolve('@earendil-works/pi-ai')));
+		fs.mkdirSync(path.join(root, 'agents'));
+		fs.mkdirSync(path.join(root, 'workflows'));
+		fs.writeFileSync(
+			path.join(root, 'agents', 'reviewer.ts'),
+			`import { createAgent } from '@flue/runtime';\n` +
+				`import { registerProvider } from '@flue/runtime/app';\n` +
+				`import { fauxAssistantMessage, registerFauxProvider } from '@earendil-works/pi-ai';\n` +
+				`const faux = registerFauxProvider({ api: 'delegation-fixture-api', provider: 'delegation-fixture' });\n` +
+				`registerProvider('delegation-fixture', { api: faux.api, baseUrl: 'https://fixture.invalid' });\n` +
+				`faux.setResponses([fauxAssistantMessage('review complete')]);\n` +
+				`export default createAgent(() => ({ model: 'delegation-fixture/reviewer' }));\n`,
+		);
+		fs.writeFileSync(
+			path.join(root, 'workflows', 'orchestrate.ts'),
+			`import { createAgent } from '@flue/runtime';\n` +
+				`import reviewer from '../agents/reviewer.ts';\n` +
+				`const orchestrator = createAgent(() => ({ model: false }));\n` +
+				`export async function run(ctx) { const harness = await ctx.init(orchestrator); const session = await harness.session(); const result = await session.delegate('Review this.', { agent: reviewer, id: 'review-instance' }); return { text: result.text, model: result.model.id }; }\n`,
+		);
+		await build({ root, target: 'node' });
+
+		const child = startGeneratedIpcChild(root, { FLUE_CLI_TARGET: 'workflow', FLUE_CLI_NAME: 'orchestrate' });
+		try {
+			await waitForChildMessage(child, (message) => message.type === 'ready');
+			child.send?.({ version: 1, type: 'invoke', requestId: 'req-delegation' });
+			const terminal = await waitForChildMessage(child, (message) => message.type === 'result' || message.type === 'error');
+			expect(terminal).toMatchObject({ type: 'result', result: { text: 'review complete', model: 'reviewer' } });
+		} finally {
+			if (child.exitCode === null) child.kill('SIGTERM');
+		}
+	}, 15000);
+
+	it('rejects delegation to an undiscovered created-agent value in a built Node artifact', async () => {
+		const root = createFixtureRoot('flue-local-ipc-undiscovered-delegation-');
+		fs.mkdirSync(path.join(root, 'workflows'));
+		fs.writeFileSync(
+			path.join(root, 'workflows', 'orchestrate.ts'),
+			`import { createAgent } from '@flue/runtime';\n` +
+				`const orchestrator = createAgent(() => ({ model: false }));\n` +
+				`const localTarget = createAgent(() => ({ model: false }));\n` +
+				`export async function run(ctx) { const harness = await ctx.init(orchestrator); const session = await harness.session(); return session.delegate('Review this.', { agent: localTarget, id: 'review-instance' }); }\n`,
+		);
+		await build({ root, target: 'node' });
+
+		const child = startGeneratedIpcChild(root, { FLUE_CLI_TARGET: 'workflow', FLUE_CLI_NAME: 'orchestrate' });
+		try {
+			await waitForChildMessage(child, (message) => message.type === 'ready');
+			child.send?.({ version: 1, type: 'invoke', requestId: 'req-undiscovered' });
+			const error = await waitForChildMessage(child, (message) => message.type === 'error');
+			expect(error).toMatchObject({ type: 'error', requestId: 'req-undiscovered', error: { type: 'internal_error' } });
+		} finally {
+			if (child.exitCode === null) child.kill('SIGTERM');
+		}
+	}, 15000);
+
 	it('bypasses public workflow middleware during local IPC execution', async () => {
 		const root = createFixtureRoot('flue-local-ipc-middleware-');
 		fs.mkdirSync(path.join(root, 'workflows'));
@@ -608,6 +674,13 @@ function createFixtureRoot(prefix: string): string {
 	fs.mkdirSync(path.join(root, 'node_modules', '@flue'), { recursive: true });
 	fs.symlinkSync(process.cwd(), path.join(root, 'node_modules', '@flue', 'runtime'), 'dir');
 	return root;
+}
+
+function linkPackage(root: string, name: string, resolvedEntry: string): void {
+	const target = path.dirname(path.dirname(resolvedEntry));
+	const link = path.join(root, 'node_modules', ...name.split('/'));
+	fs.mkdirSync(path.dirname(link), { recursive: true });
+	fs.symlinkSync(target, link, 'dir');
 }
 
 function startGeneratedIpcChild(root: string, env: Record<string, string>): ChildProcess {

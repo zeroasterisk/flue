@@ -78,6 +78,7 @@ import {
   createAgentDispatchProcessor,
   invokeWorkflowAttached,
   invokeDirectAttached,
+  invokeAgentDelegation,
   generateWorkflowRunId,
   createWebSocketErrorMessage,
   parseWorkflowWebSocketMessage,
@@ -139,11 +140,26 @@ const dispatchQueue = new InMemoryDispatchQueue(createAgentDispatchProcessor({
   createContext: createContextForRequest,
 }));
 
-function createContextForRequest(id, runId, payload, req, initialEventIndex, dispatchId) {
+async function invokeDeployedAgentDelegation(agent, input, signal) {
+  const agentName = dispatchAgentNames.get(agent);
+  if (!agentName) {
+    throw new Error('[flue] delegate() target created agent is not a discovered default-exported agent in this built application.');
+  }
+  return invokeAgentDelegation({
+    agentName,
+    agent,
+    input,
+    signal,
+    createContext: createContextForRequest,
+  });
+}
+
+function createContextForRequest(id, runId, payload, req, initialEventIndex, dispatchId, delegationId) {
   return createFlueContext({
     id,
     runId,
     dispatchId,
+    delegationId,
     payload,
     initialEventIndex,
     env: process.env,
@@ -153,6 +169,7 @@ function createContextForRequest(id, runId, payload, req, initialEventIndex, dis
     },
     createDefaultEnv,
     defaultStore,
+    invokeAgentDelegation: invokeDeployedAgentDelegation,
   });
 }
 
