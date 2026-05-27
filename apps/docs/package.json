@@ -5,8 +5,9 @@
 	"private": true,
 	"scripts": {
 		"dev": "astro dev",
-		"build": "astro build",
+		"build": "rm -rf ./dist && astro build && mv ./dist/docs/_redirects ./dist/_redirects",
 		"preview": "astro preview",
+		"deploy": "pnpm run build && wrangler deploy",
 		"astro": "astro",
 		"check:types": "astro check"
 	},
@@ -21,6 +22,7 @@
 	"devDependencies": {
 		"@astrojs/check": "^0.9.9",
 		"typescript": "^6.0.3",
-		"vite": "^7.3.3"
+		"vite": "^7.3.3",
+		"wrangler": "^4.59.3"
 	}
 }

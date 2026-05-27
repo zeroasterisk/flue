@@ -61,7 +61,7 @@ export const docsSections: DocsSection[] = [
 	},
 	{
 		key: 'api',
-		title: 'API',
+		title: 'Reference',
 		landingSlug: 'api/agent-api',
 		groups: [
 			{
@@ -171,7 +171,7 @@ export const docsSections: DocsSection[] = [
 ];
 
 export function docsHref(slug: string) {
-	return `/${slug}/`;
+	return `${import.meta.env.BASE_URL}${slug}/`;
 }
 
 export function getDocsSection(slug: string) {

@@ -67,6 +67,9 @@ importers:
       vite:
         specifier: ^7.3.3
         version: 7.3.3(@types/node@24.12.4)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0)
+      wrangler:
+        specifier: ^4.59.3
+        version: 4.94.0(@cloudflare/workers-types@4.20260523.1)
 
   apps/www:
     dependencies:

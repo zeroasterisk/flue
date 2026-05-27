@@ -29,4 +29,4 @@ Relative paths resolve against the directory containing the configuration file. 
 
 ## Next steps
 
-Continue to [Targets and output](/config/targets-and-output/) for build-output conventions or open the [Runtime API](/reference/runtime-api/) reference.
+Continue to [Targets and output](/docs/config/targets-and-output/) for build-output conventions or open the [Runtime API](/docs/reference/runtime-api/) reference.

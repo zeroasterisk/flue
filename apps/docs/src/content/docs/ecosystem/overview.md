@@ -15,4 +15,4 @@ Flue supports Node and Cloudflare application targets, with additional deploymen
 
 ## Explore
 
-Start with [Connectors](/ecosystem/connectors/) or review available [Targets](/ecosystem/targets/).
+Start with [Connectors](/docs/ecosystem/connectors/) or review available [Targets](/docs/ecosystem/targets/).

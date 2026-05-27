@@ -1,0 +1,13 @@
+{
+	"name": "flue-docs",
+	"compatibility_date": "2026-04-01",
+	"routes": [
+		{ "pattern": "flueframework.com/docs", "zone_name": "flueframework.com" },
+		{ "pattern": "flueframework.com/docs/*", "zone_name": "flueframework.com" }
+	],
+	"assets": {
+		"directory": "./dist",
+		"html_handling": "auto-trailing-slash",
+		"not_found_handling": "404-page"
+	}
+}

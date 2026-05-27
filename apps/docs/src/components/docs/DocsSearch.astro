@@ -73,13 +73,16 @@ const isConfigured = Boolean(searchConfiguration.nodes[0].host && searchConfigur
 			});
 		}
 
-		const fallbackUrl = '/getting-started/quickstart/';
+		const baseUrl = import.meta.env.BASE_URL;
+		const fallbackUrl = `${baseUrl}getting-started/quickstart/`;
 		const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 		const sanitizeHighlight = (value: string) => escapeHtml(value).replaceAll('&lt;mark&gt;', '<mark>').replaceAll('&lt;/mark&gt;', '</mark>');
 		const safeUrl = (value?: string) => {
 			try {
 				const url = new URL(value ?? fallbackUrl, window.location.origin);
-				return url.origin === window.location.origin && (url.protocol === 'http:' || url.protocol === 'https:') ? `${url.pathname}${url.search}${url.hash}` : fallbackUrl;
+				if (url.origin !== window.location.origin || (url.protocol !== 'http:' && url.protocol !== 'https:')) return fallbackUrl;
+				const pathname = url.pathname === baseUrl.slice(0, -1) || url.pathname.startsWith(baseUrl) ? url.pathname : `${baseUrl}${url.pathname.replace(/^\/+/, '')}`;
+				return `${pathname}${url.search}${url.hash}`;
 			} catch {
 				return fallbackUrl;
 			}
