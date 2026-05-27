@@ -8,6 +8,6 @@ interface Props {
 const { depth, slug, text } = Astro.props;
 ---
 
-<li class:list={['[&+&]:mt-1', { 'pl-3': depth === 3 }]}>
-	<a class="text-sm leading-tight text-gray-500 hover:text-gray-950" href={`#${slug}`}>{text}</a>
+<li class:list={['[&+&]:mt-2.5 leading-none', { 'pl-3.5': depth === 3 }]}>
+	<a class="block text-sm text-gray-500 hover:text-gray-950" href={`#${slug}`}>{text}</a>
 </li>

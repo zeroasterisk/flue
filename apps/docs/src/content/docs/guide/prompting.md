@@ -5,7 +5,7 @@ description: Perform prompt operations and obtain text, structured data, media-a
 
 Use `session.prompt(...)` when application code needs a model response within an existing session. A prompt is one **operation** in that session: it appends user and assistant activity to the session conversation, can invoke tools or internal result-handling turns, and returns metadata for the complete operation.
 
-This guide assumes you already have a created agent and are obtaining its initialized [harness](/docs/guide/harness/). For model selection and provider setup, see [LLMs & Models](/docs/guide/models/). For finite orchestration around prompts, see [Workflows](/docs/guide/workflows/).
+This guide assumes you already have a created agent and are obtaining its initialized [harness](/docs/guide/harness/). For model selection and provider setup, see [Models & Providers](/docs/guide/models/). For finite orchestration around prompts, see [Workflows](/docs/guide/workflows/).
 
 ## Send a prompt
 
@@ -198,7 +198,7 @@ export async function run({ init, payload }: FlueContext<{ pngBase64: string }>)
 }
 ```
 
-The selected model must support image input. An operation-level model override can change whether a given prompt is capable of processing its supplied images; choose a vision-capable model deliberately and verify support with your provider. See [LLMs & Models](/docs/guide/models/) for selecting and overriding models.
+The selected model must support image input. An operation-level model override can change whether a given prompt is capable of processing its supplied images; choose a vision-capable model deliberately and verify support with your provider. See [Models & Providers](/docs/guide/models/) for selecting and overriding models.
 
 Images work with both text and structured responses. In a structured-result operation, images are included on the initial turn only. If validation requires result-correction or completion-reminder turns, those follow-up turns contain text instructions without resending image bytes; the model continues from the session conversation containing the initial image-bearing message.
 
@@ -242,7 +242,7 @@ Reasoning-level precedence is:
 operation thinkingLevel > configured agent or profile default > framework default ('medium')
 ```
 
-`thinkingLevel` is a request to the selected model/provider integration, not a guarantee that every provider exposes the same reasoning controls or output. For supported levels, provider setup, and capability details, see [LLMs & Models](/docs/guide/models/).
+`thinkingLevel` is a request to the selected model/provider integration, not a guarantee that every provider exposes the same reasoning controls or output. For supported levels, provider setup, and capability details, see [Models & Providers](/docs/guide/models/).
 
 ### Supply tools for one prompt
 

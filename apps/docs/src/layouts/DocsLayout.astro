@@ -55,14 +55,14 @@ const formattedReviewedDate = lastReviewedAt?.toLocaleDateString('en-US', {
 		<a class="fixed left-4 -top-16 z-[100] rounded-lg bg-blue-500 px-3 py-2 text-white focus:top-4" href="#main-content">Skip to content</a>
 		<DocsHeader currentSlug={currentSlug} />
 		<MobileDocsNavigation groups={currentSection.groups} currentSlug={currentSlug} sectionTitle={currentSection.title} />
-		<div class="mx-auto grid min-h-[calc(100vh-var(--docs-header-height))] w-[min(100%,var(--docs-frame-width))] grid-cols-[254px_minmax(0,820px)_14.75rem] max-2xl:grid-cols-[232px_minmax(0,1fr)] max-docs-desktop:block">
+		<div class="mx-auto grid min-h-[calc(100vh-var(--docs-header-height))] w-[min(100%,var(--docs-frame-width))] grid-cols-[254px_minmax(0,820px)_16.5rem] max-2xl:grid-cols-[232px_minmax(0,1fr)] max-docs-desktop:block">
 			<aside class="border-r border-docs-border pt-[var(--docs-aside-top)] pr-8 pb-8 pl-5 max-docs-desktop:hidden">
 				<DocsSidebar groups={currentSection.groups} currentSlug={currentSlug} />
 			</aside>
 			<main id="main-content" class="min-w-0 pt-12 px-[clamp(2.6rem,4vw,4.45rem)] pb-14 max-docs-desktop:pt-8 max-docs-desktop:px-4 max-docs-desktop:pb-10">
 				<article class="mx-auto max-w-175">
 					<header class="mb-8 border-b border-docs-border pb-3 max-docs-desktop:mb-7">
-						<h1 class="m-0 text-[3.25rem] font-semibold leading-[1.08] tracking-[-0.05em] text-gray-950 max-docs-desktop:text-[2.375rem]">{title}</h1>
+						<h1 data-pagefind-body class="m-0 text-[3.25rem] font-semibold leading-[1.08] tracking-[-0.05em] text-gray-950 max-docs-desktop:text-[2.375rem]">{title}</h1>
 						<div class="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-gray-500 max-docs-desktop:mt-3 max-docs-desktop:gap-x-4">
 							{
 								lastReviewedAt ? (
@@ -84,7 +84,7 @@ const formattedReviewedDate = lastReviewedAt?.toLocaleDateString('en-US', {
 							</a>
 						</div>
 					</header>
-					<div class="docs-content">
+					<div class="docs-content" data-pagefind-body>
 						<slot />
 					</div>
 				</article>

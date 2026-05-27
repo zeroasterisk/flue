@@ -10,20 +10,13 @@ interface Props {
 const { section, active, mobile = false } = Astro.props;
 ---
 
-{section.key === 'ecosystem' ? (
-	<span class:list={[mobile ? 'text-sm font-medium' : 'relative flex h-full items-center gap-2', 'text-docs-muted']}>
-		{section.title}
-		<span class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium leading-none tracking-wide text-gray-500 uppercase">Soon</span>
-	</span>
-) : (
-	<a
-		class:list={[
-			mobile ? 'text-sm font-medium' : 'relative flex h-full items-center gap-2 hover:text-blue-600',
-			active ? 'text-blue-600' : 'text-docs-muted',
-			{ 'after:absolute after:right-0 after:-bottom-px after:left-0 after:h-0.5 after:bg-blue-500 after:content-[\'\']': active && !mobile },
-		]}
-		href={docsHref(section.landingSlug)}
-	>
-		{section.title}
-	</a>
-)}
+<a
+	class:list={[
+		mobile ? 'text-sm font-medium' : 'relative flex h-full items-center gap-2 hover:text-blue-600',
+		active ? 'text-blue-600' : 'text-docs-muted',
+		{ 'after:absolute after:right-0 after:-bottom-px after:left-0 after:h-0.5 after:bg-blue-500 after:content-[\'\']': active && !mobile },
+	]}
+	href={docsHref(section.landingSlug)}
+>
+	{section.title}
+</a>

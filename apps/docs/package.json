@@ -5,7 +5,7 @@
 	"private": true,
 	"scripts": {
 		"dev": "astro dev",
-		"build": "rm -rf ./dist && astro build && mv ./dist/docs/_redirects ./dist/_redirects",
+		"build": "rm -rf ./dist && astro build && mv ./dist/docs/_redirects ./dist/_redirects && pagefind --site ./dist/docs",
 		"preview": "astro preview",
 		"deploy": "pnpm run build && wrangler deploy",
 		"astro": "astro",
@@ -16,11 +16,11 @@
 		"@astrojs/starlight": "^0.39.2",
 		"@tailwindcss/vite": "^4.2.0",
 		"astro": "^6.3.7",
-		"tailwindcss": "^4.2.0",
-		"typesense": "^3.0.6"
+		"tailwindcss": "^4.2.0"
 	},
 	"devDependencies": {
 		"@astrojs/check": "^0.9.9",
+		"pagefind": "^1.5.2",
 		"typescript": "^6.0.3",
 		"vite": "^7.3.3",
 		"wrangler": "^4.59.3"

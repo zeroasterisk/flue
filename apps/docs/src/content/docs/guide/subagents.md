@@ -285,7 +285,7 @@ Task model precedence is:
 operation model override > selected subagent profile model > parent agent or profile default
 ```
 
-An anonymous task has no selected-profile tier. A named profile with `model: false` intentionally supplies no usable model default; provide a task-level model in that case unless some later configuration changes the choice. For broader model setup, see [LLMs & Models](/docs/guide/models/).
+An anonymous task has no selected-profile tier. A named profile with `model: false` intentionally supplies no usable model default; provide a task-level model in that case unless some later configuration changes the choice. For broader model setup, see [Models & Providers](/docs/guide/models/).
 
 Task reasoning precedence follows the same practical shape: task-local `thinkingLevel` wins; otherwise a selected profile's configured level is used when present, then the parent's configured level, then Flue defaults to `'medium'`.
 
@@ -417,6 +417,6 @@ The model-facing built-in tool system can manage task calls it elects to issue d
 
 - [Harness](/docs/guide/harness/) explains initialized agent environments and sessions.
 - [Tools](/docs/guide/tools/) covers model-invoked executable capabilities, including delegation as a built-in tool.
-- [LLMs & Models](/docs/guide/models/) covers defaults, overrides, and reasoning configuration.
+- [Models & Providers](/docs/guide/models/) covers defaults, overrides, and reasoning configuration.
 - [Workflows](/docs/guide/workflows/) defines finite orchestrations and why runs remain workflow-only.
 - [Observability](/docs/guide/observability/) covers task, operation, turn, and workflow event correlation.

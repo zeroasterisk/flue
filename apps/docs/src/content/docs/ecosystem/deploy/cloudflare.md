@@ -335,9 +335,9 @@ Most agents don't need a remote sandbox. Start with a virtual sandbox and only m
 
 ## Session persistence
 
-When deploying to Cloudflare, Flue uses Durable Objects to automatically persist session state — message history, context, and sandbox state all survive across requests. This means you can build conversational agents where users pick up exactly where they left off.
+When a generated Cloudflare application handles agent or workflow work through its Durable Object-backed runtime path, Flue stores session conversation state in Durable Object SQLite by default. This retains message history and compaction checkpoints for later operations in that stored session.
 
-This is built in when you deploy with `--target cloudflare`. No extra configuration needed.
+Filesystem durability remains a separate decision. The default lightweight sandbox uses an in-memory filesystem and must not be treated as durable merely because conversation state is stored in a Durable Object. Use a durable workspace or container-backed integration when files or installed artifacts must survive later activity. Workflow run history is likewise stored through the workflow durable-runtime path and is distinct from agent session storage.
 
 WebSocket-exposed created agents use the same owning Durable Object scope. Flue's generated Cloudflare transport accepts hibernation-compatible sockets in that Durable Object so long-lived interactive connections retain the correct instance identity.
 

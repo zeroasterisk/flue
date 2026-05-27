@@ -1,28 +1,15 @@
 ---
 import SearchIcon from './SearchIcon.astro';
-
-const searchConfiguration = {
-	nodes: [
-		{
-			host: import.meta.env.PUBLIC_TYPESENSE_HOST,
-			port: Number(import.meta.env.PUBLIC_TYPESENSE_PORT ?? 443),
-			protocol: import.meta.env.PUBLIC_TYPESENSE_PROTOCOL ?? 'https',
-		},
-	],
-	apiKey: import.meta.env.PUBLIC_TYPESENSE_SEARCH_ONLY_API_KEY,
-	collection: import.meta.env.PUBLIC_TYPESENSE_COLLECTION ?? 'docs',
-};
-const isConfigured = Boolean(searchConfiguration.nodes[0].host && searchConfiguration.apiKey);
 ---
 
-<button class="inline-flex w-50 cursor-pointer items-center gap-2 rounded-lg border border-transparent bg-docs-code py-1.5 transition-colors duration-150 pr-2 pl-3 text-sm leading-none text-gray-600 hover:border-gray-400 hover:text-gray-950 max-docs-desktop:bg-transparent max-docs-desktop:p-2" type="button" data-search-open aria-label="Search documentation" aria-haspopup="dialog" aria-controls="docs-search-dialog">
+<button class="inline-flex w-50 cursor-pointer items-center gap-2 rounded-lg border border-transparent bg-docs-code py-1.5 transition-colors duration-150 pr-2 pl-3 text-sm leading-none text-gray-600 hover:border-gray-400 hover:text-gray-950 max-docs-desktop:h-9 max-docs-desktop:w-full max-docs-desktop:min-w-0 max-docs-desktop:border-docs-border max-docs-desktop:px-3" type="button" data-search-open aria-label="Search documentation" aria-haspopup="dialog" aria-controls="docs-search-dialog">
 	<SearchIcon />
-	<span class="max-docs-desktop:hidden">Search</span>
+	<span class="text-gray-500">Search</span>
 	<kbd class="ml-auto rounded-md py-1 px-1.5 font-sans text-xs text-gray-400 max-docs-desktop:hidden">⌘ K</kbd>
 </button>
 
 <dialog id="docs-search-dialog" class="fixed top-18 m-auto w-[min(620px,calc(100%-2rem))] rounded-xl border-0 bg-white p-0 shadow-[0_20px_65px_rgb(15_23_42_/_24%)] backdrop:bg-[rgb(15_23_42_/_32%)] max-docs-desktop:top-2.5 max-docs-desktop:w-[calc(100%-1.25rem)]" aria-label="Search documentation">
-	<div class="overflow-hidden rounded-[inherit]" data-search-panel data-typesense-config={JSON.stringify(searchConfiguration)} data-search-configured={String(isConfigured)}>
+	<div class="overflow-hidden rounded-[inherit]" data-search-panel>
 		<form class="flex items-center gap-3 border-b border-docs-border p-3" method="dialog">
 			<label class="flex flex-1 items-center gap-3 text-docs-subtle">
 				<SearchIcon />
@@ -32,52 +19,24 @@ const isConfigured = Boolean(searchConfiguration.nodes[0].host && searchConfigur
 			<button class="rounded-md border border-docs-border bg-docs-code py-1 px-2 text-xs text-docs-muted" value="cancel" aria-label="Close search">Esc</button>
 		</form>
 		<div class="max-h-[min(55vh,430px)] overflow-y-auto p-2" data-search-results aria-live="polite">
-			<p class="search-empty">
-				{isConfigured ? 'Start typing to search the documentation.' : 'Configure PUBLIC_TYPESENSE_HOST and PUBLIC_TYPESENSE_SEARCH_ONLY_API_KEY to enable search.'}
-			</p>
+			<p class="search-empty">Start typing to search the documentation.</p>
 		</div>
-		<footer class="flex justify-end gap-1.5 border-t border-docs-border py-2 px-3 text-xs text-docs-subtle">
-			<span>Search powered by</span>
-			<strong class="font-semibold text-docs-muted">Typesense</strong>
-		</footer>
 	</div>
 </dialog>
 
-<script>
-	import { SearchClient } from 'typesense';
-
-	interface SearchDocument {
-		title?: string;
-		url?: string;
-		content?: string;
-		headings?: string[];
-	}
-
-	const dialog = document.querySelector<HTMLDialogElement>('#docs-search-dialog');
-	const panel = dialog?.querySelector<HTMLElement>('[data-search-panel]');
-	const input = dialog?.querySelector<HTMLInputElement>('[data-search-input]');
-	const results = dialog?.querySelector<HTMLElement>('[data-search-results]');
-	const trigger = document.querySelector<HTMLButtonElement>('[data-search-open]');
+<script is:inline define:vars={{ baseUrl: import.meta.env.BASE_URL }}>
+	const dialog = document.querySelector('#docs-search-dialog');
+	const panel = dialog?.querySelector('[data-search-panel]');
+	const input = dialog?.querySelector('[data-search-input]');
+	const results = dialog?.querySelector('[data-search-results]');
+	const trigger = document.querySelector('[data-search-open]');
 	let requestId = 0;
-	let searchClient: SearchClient | undefined;
+	let pagefindPromise;
 
 	if (dialog && panel && input && results && trigger) {
-		const configured = panel.dataset.searchConfigured === 'true';
-		const configuration = JSON.parse(panel.dataset.typesenseConfig ?? '{}');
-
-		if (configured) {
-			searchClient = new SearchClient({
-				nodes: configuration.nodes,
-				apiKey: configuration.apiKey,
-				connectionTimeoutSeconds: 2,
-			});
-		}
-
-		const baseUrl = import.meta.env.BASE_URL;
 		const fallbackUrl = `${baseUrl}getting-started/quickstart/`;
-		const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
-		const sanitizeHighlight = (value: string) => escapeHtml(value).replaceAll('&lt;mark&gt;', '<mark>').replaceAll('&lt;/mark&gt;', '</mark>');
-		const safeUrl = (value?: string) => {
+		const escapeHtml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+		const safeUrl = (value) => {
 			try {
 				const url = new URL(value ?? fallbackUrl, window.location.origin);
 				if (url.origin !== window.location.origin || (url.protocol !== 'http:' && url.protocol !== 'https:')) return fallbackUrl;
@@ -87,13 +46,22 @@ const isConfigured = Boolean(searchConfiguration.nodes[0].host && searchConfigur
 				return fallbackUrl;
 			}
 		};
-		const renderState = (content: string) => {
+		const loadPagefind = () => {
+			pagefindPromise ??= import(`${baseUrl}pagefind/pagefind.js`).then(async (pagefind) => {
+				await pagefind.options({ baseUrl });
+				await pagefind.init();
+				return pagefind;
+			});
+			return pagefindPromise;
+		};
+		const renderState = (content) => {
 			results.innerHTML = `<p class="search-empty">${escapeHtml(content)}</p>`;
 		};
 		const closeSearch = () => dialog.close();
 		const openSearch = () => {
 			dialog.showModal();
 			input.focus();
+			void loadPagefind().catch(() => undefined);
 		};
 
 		trigger.addEventListener('click', openSearch);
@@ -111,37 +79,26 @@ const isConfigured = Boolean(searchConfiguration.nodes[0].host && searchConfigur
 			const query = input.value.trim();
 			const thisRequest = ++requestId;
 			if (!query) {
-				renderState(configured ? 'Start typing to search the documentation.' : 'Configure PUBLIC_TYPESENSE_HOST and PUBLIC_TYPESENSE_SEARCH_ONLY_API_KEY to enable search.');
+				renderState('Start typing to search the documentation.');
 				return;
 			}
-			if (!searchClient) return;
 			renderState('Searching…');
 			try {
-				const response = await searchClient.collections<SearchDocument>(configuration.collection).documents().search({
-					q: query,
-					query_by: 'title,headings,content',
-					query_by_weights: '8,4,1',
-					per_page: 8,
-					highlight_fields: 'title,content',
-					highlight_start_tag: '<mark>',
-					highlight_end_tag: '</mark>',
-				}, {});
+				const pagefind = await loadPagefind();
+				const response = await pagefind.search(query);
+				const hits = await Promise.all(response.results.slice(0, 8).map((result) => result.data()));
 				if (thisRequest !== requestId) return;
-				const hits = response.hits ?? [];
 				if (hits.length === 0) {
 					renderState(`No results for “${query}”.`);
 					return;
 				}
 				results.innerHTML = hits.map((hit) => {
-					const document = hit.document;
-					const highlight = hit.highlight as Record<string, { snippet?: string }> | undefined;
-					const title = highlight?.title?.snippet ? sanitizeHighlight(highlight.title.snippet) : escapeHtml(document.title ?? 'Documentation page');
-					const snippet = highlight?.content?.snippet ? sanitizeHighlight(highlight.content.snippet) : escapeHtml(document.content ?? '');
-					const url = escapeHtml(safeUrl(document.url));
-					return `<a class="search-result" href="${url}"><strong>${title}</strong><p>${snippet}</p></a>`;
+					const title = escapeHtml(hit.meta.title ?? 'Documentation page');
+					const url = escapeHtml(safeUrl(hit.url));
+					return `<a class="search-result" href="${url}"><strong>${title}</strong><p>${hit.excerpt}</p></a>`;
 				}).join('');
 			} catch {
-				if (thisRequest === requestId) renderState('Search is temporarily unavailable.');
+				if (thisRequest === requestId) renderState('Search is available after building the documentation site.');
 			}
 		});
 	}

@@ -1,7 +1,6 @@
 ---
 import DocsSectionLink from './DocsSectionLink.astro';
 import DocsSidebar from './DocsSidebar.astro';
-import MobileMenuToggle from './MobileMenuToggle.astro';
 import { docsSections, type DocsNavGroup } from '../../lib/docs-navigation';
 
 interface Props {
@@ -13,12 +12,36 @@ interface Props {
 const { groups, currentSlug, sectionTitle } = Astro.props;
 ---
 
-<details class="group hidden max-docs-desktop:block max-docs-desktop:border-b max-docs-desktop:border-docs-border">
-	<MobileMenuToggle sectionTitle={sectionTitle} />
-	<div class="border-t border-docs-border py-3 px-4">
-		<nav class="mb-3 flex gap-4 border-b border-docs-border pt-0.5 pb-3" aria-label="Documentation sections">
-			{docsSections.map((section) => <DocsSectionLink section={section} active={section.title === sectionTitle} mobile />)}
-		</nav>
-		<DocsSidebar groups={groups} currentSlug={currentSlug} mobile />
-	</div>
-</details>
+<div id="mobile-docs-menu" class="fixed inset-x-0 top-[var(--docs-header-height)] bottom-0 z-10 hidden overflow-y-auto bg-white px-4 py-4 docs-desktop:hidden" data-mobile-menu aria-hidden="true">
+	<nav class="mb-4 flex gap-4 border-b border-docs-border pb-3" aria-label="Documentation sections">
+		{docsSections.map((section) => <DocsSectionLink section={section} active={section.title === sectionTitle} mobile />)}
+	</nav>
+	<DocsSidebar groups={groups} currentSlug={currentSlug} mobile />
+</div>
+
+<script>
+	const mobileMenu = document.querySelector<HTMLElement>('[data-mobile-menu]');
+	const mobileMenuToggle = document.querySelector<HTMLButtonElement>('[data-mobile-menu-toggle]');
+
+	if (mobileMenu && mobileMenuToggle) {
+		const setOpen = (open: boolean) => {
+			mobileMenu.classList.toggle('hidden', !open);
+			mobileMenu.setAttribute('aria-hidden', String(!open));
+			mobileMenuToggle.setAttribute('aria-expanded', String(open));
+			mobileMenuToggle.setAttribute('aria-label', open ? 'Close documentation menu' : 'Open documentation menu');
+			document.body.classList.toggle('overflow-hidden', open);
+		};
+
+		mobileMenuToggle.addEventListener('click', () => {
+			setOpen(mobileMenuToggle.getAttribute('aria-expanded') !== 'true');
+		});
+
+		mobileMenu.addEventListener('click', (event) => {
+			if ((event.target as HTMLElement).closest('a')) setOpen(false);
+		});
+
+		window.addEventListener('resize', () => {
+			if (window.matchMedia('(min-width: 47.5625rem)').matches) setOpen(false);
+		});
+	}
+</script>

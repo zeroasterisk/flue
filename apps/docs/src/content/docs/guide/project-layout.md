@@ -320,3 +320,5 @@ my-project/
 ```
 
 Use lower-kebab-case discovered filenames, keep endpoint modules flat, import implementation helpers from nearby source modules, and choose either `.flue/` or root-level discovery before adding routes. That keeps the authored application portable while leaving runtime context, route composition, and target-specific output explicit.
+
+Continue to [Build & Deploy](/docs/guide/deployment/) to select a target, verify public routes, and decide which persisted state must survive production restarts or relocations.

@@ -7,7 +7,7 @@ Build and deploy Flue agents as a Node.js server. This guide walks you through c
 
 By the end, you will have a Flue agent running as a Node.js server, and you will know how to add subagents, sandbox context, external CLIs, remote sandboxes, and durable session storage when your agent needs them.
 
-This guide focuses on deploying the generated Node server. For the message-driven agent API model, including direct HTTP/WebSocket `/agents/:name/:id` delivery and asynchronous `dispatch(...)` from application-owned integration routes, see [Message-Driven Agents](https://github.com/withastro/flue/blob/main/docs/message-driven-agents.md).
+This guide focuses on deploying the generated Node server. First review [Build & Deploy](/docs/guide/deployment/) for target selection and persistence boundaries, then see [Routing](/docs/guide/routing/) for direct HTTP/WebSocket agent delivery, workflow endpoints, and asynchronous `dispatch(...)` from application-owned routes.
 
 ## Project layout
 
@@ -92,10 +92,12 @@ npx flue dev --target node --env .env
 Test it:
 
 ```bash
-curl http://localhost:3583/workflows/translate \
+curl 'http://localhost:3583/workflows/translate?wait=result' \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello world", "language": "French"}'
 ```
+
+The `?wait=result` mode keeps this request attached until the workflow completes and returns its result. Without it, an admitted HTTP workflow responds immediately with `202` and a `runId` for later inspection.
 
 Every workflow that exports `route` gets an HTTP endpoint automatically. The middleware may authenticate the request and call `next()` to admit it. The route follows the pattern `/workflows/<name>` — for example, `.flue/workflows/translate.ts` becomes `/workflows/translate`.
 
@@ -247,7 +249,7 @@ The examples above use either the default virtual sandbox or the local sandbox. 
 
 Flue connects to remote sandboxes through small adapter files called connectors, installed with `flue add`. Run `flue add` with no arguments to see what's currently supported, or `flue add <url> --category sandbox` to have your coding agent build a connector for an unsupported provider against the [sandbox connector spec](https://github.com/withastro/flue/blob/main/docs/sandbox-connector-spec.md).
 
-We've written a full walkthrough for one provider — [Connect a Daytona Sandbox](https://github.com/withastro/flue/blob/main/docs/connect-daytona.md) — that covers installing the connector, wiring it into an agent, and configuring the sandbox. Other connectors follow the same shape.
+The Ecosystem catalog lists available provider integrations, including [Daytona](/docs/ecosystem/sandboxes/daytona/), [E2B](/docs/ecosystem/sandboxes/e2b/), [Modal](/docs/ecosystem/sandboxes/modal/), and [Vercel Sandbox](/docs/ecosystem/sandboxes/vercel/). Other connectors follow the same application-owned lifecycle shape.
 
 ### When to use a remote sandbox
 
@@ -313,16 +315,15 @@ node dist/server.mjs
 PORT=8080 node dist/server.mjs
 ```
 
-The server exposes:
+The default root-mounted Flue application can expose:
 
-- `GET /health` — Health check
-- `GET /agents` — Agent manifest
-- `POST /agents/:name/:id` — Send an attached prompt to an HTTP-exposed agent instance
-- `POST /workflows/:name` — Invoke an HTTP-exposed workflow
-- `WS /agents/:name/:id` — Connect to a WebSocket-exposed agent instance
-- `WS /workflows/:name` — Invoke a WebSocket-exposed workflow once
+- `POST /agents/:name/:id` — send an attached prompt to an agent module that exports `route`;
+- `POST /workflows/:name` — invoke a workflow module that exports `route`;
+- `WS /agents/:name/:id` — connect to an agent module that exports `websocket`;
+- `WS /workflows/:name` — invoke a workflow module that exports `websocket` once;
+- `GET /runs/:runId` and related event/stream paths — inspect workflow runs.
 
-Agent prompt routes advance sessions without creating runs. Workflow invocations are the executions represented by workflow run IDs and inspectable through run tooling.
+Flue does not add a health endpoint or administrative agent listing by default. Define a host-required health route in `app.ts`, and mount `admin()` separately behind operator authorization if deployment-wide inspection is required. Agent prompt routes advance sessions without creating runs; workflow invocations are the executions represented by workflow run IDs and inspectable through run tooling.
 
 ### Deploying with Docker
 

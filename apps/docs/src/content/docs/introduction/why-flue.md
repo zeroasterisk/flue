@@ -122,4 +122,4 @@ This target-aware model lets you keep agent logic recognizable while still makin
 
 Flue is a fit when you want a TypeScript application architecture for agents: runtime environments instead of bare prompts, code-owned orchestration, a clear division between continuing sessions and finite jobs, and deliberate deployment and capability choices. If you only need an isolated model request with no continuing context, tool environment, routing model, or observable workflow execution, a full harness framework may be more than your application needs.
 
-Start with [Getting Started](/docs/getting-started/quickstart/), then choose a deployment path in [Deploy Agents on Node.js](/docs/deploy/node/) or [Deploy Agents on Cloudflare](/docs/deploy/cloudflare/).
+Start with [Getting Started](/docs/getting-started/quickstart/), then choose a deployment path in [Build & Deploy](/docs/guide/deployment/).

@@ -262,7 +262,7 @@ The session store does not store the sandbox's working files. The sandbox or con
 | Workflow run history and run event records | Workflow-run storage and observation surfaces, not the session store alone. |
 | External changes made through tools or shell commands | The external system or filesystem changed by that capability. |
 
-For example, a durable Cloudflare-backed session does not automatically make an unrelated ephemeral sandbox filesystem durable. Conversely, a durable external workspace does not preserve conversation state when a Node server uses only its default in-memory session store.
+For example, a durable Cloudflare-backed session does not automatically make an unrelated ephemeral sandbox filesystem durable. Conversely, a durable external workspace does not preserve conversation state when a Node server uses only its default in-memory session store. Apply these boundaries to production target selection in [Build & Deploy](/docs/guide/deployment/).
 
 ## Make instructions and workspace context available at initialization
 
@@ -415,7 +415,7 @@ The model-aware defaults are:
 | `keepRecentTokens` | `8_000` recent tokens retained without summarization. | More recent tokens preserve immediate detail but reduce the space recovered by compaction. |
 | Summarization model | The session's active model. | Reuses existing quality/cost behavior unless explicitly overridden. |
 
-If a provider registration omits context-window metadata or reports no usable context window, threshold-based detection cannot anticipate the limit. Overflow recovery still provides a fallback if the provider reports an overflow. Configure accurate model metadata when using custom providers; see [LLMs & Models](/docs/guide/models/).
+If a provider registration omits context-window metadata or reports no usable context window, threshold-based detection cannot anticipate the limit. Overflow recovery still provides a fallback if the provider reports an overflow. Configure accurate model metadata when using custom providers; see [Models & Providers](/docs/guide/models/).
 
 ### Tune automatic compaction on the agent or profile
 
@@ -498,3 +498,4 @@ See [Observability](/docs/guide/observability/) for receiving events, handling s
 - Use [Subagents](/docs/guide/subagents/) for delegated work that needs a child conversation scope.
 - Select a workspace and execution boundary in [Sandboxes](/docs/guide/sandboxes/).
 - Instrument session operations and compaction through [Observability](/docs/guide/observability/).
+- Use [Build & Deploy](/docs/guide/deployment/) to choose target-specific production durability.

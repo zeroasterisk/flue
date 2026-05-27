@@ -325,7 +325,7 @@ The merge boundary is designed so that you maintain platform configuration while
 | Flue durable resources | Flue adds required Durable Object bindings and SQLite migration entries for discovered agents, workflows, and its registry. Named Wrangler environments are retained and receive required generated resources. |
 | Custom Durable Objects, containers, and migration maintenance | Configure application-owned resources in your Wrangler file. Do not make durable edits in `.flue-vite.wrangler.jsonc`, because it is generated build input. |
 
-The Cloudflare build merge is only enough context to configure local development correctly. Continue to [Deploy Agents on Cloudflare](/docs/deploy/cloudflare/) for deployment, bindings, and sandbox setup. For Node-generated server deployment, see [Deploy Agents on Node.js](/docs/deploy/node/).
+The Cloudflare build merge is only enough context to configure local development correctly. Continue to [Build & Deploy](/docs/guide/deployment/) to choose production durability and routes, then use [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/) or [Deploy on Node.js](/docs/ecosystem/deploy/node/) for target-specific setup.
 
 ## Keep runtime application setup in authored modules
 
@@ -334,10 +334,10 @@ A `flue.config.*` file never selects a model, registers provider credentials, ad
 | You need to configure… | Put it in… | Continue reading… |
 | --- | --- | --- |
 | Build target, source root, generated output | `flue.config.ts` or one-time CLI flags | This guide and the [CLI reference](/docs/cli/overview/) |
-| Provider registration, model IDs, or operation model choices | Authored agent/application runtime code, including `app.ts` where provider setup is needed | [LLMs & Models](/docs/guide/models/) |
+| Provider registration, model IDs, or operation model choices | Authored agent/application runtime code, including `app.ts` where provider setup is needed | [Models & Providers](/docs/guide/models/) |
 | Middleware, authentication, mounted prefixes, or custom endpoints | Authored `app.ts` and route exports | [Routing](/docs/guide/routing/) |
 | Agents, workflows, and source layout | `agents/`, `workflows/`, and optional `app.ts` under the chosen source layout | [Project Layout](/docs/guide/project-layout/) |
-| Cloudflare bindings and Wrangler deployment resources | Project-root Wrangler configuration | [Deploy Agents on Cloudflare](/docs/deploy/cloudflare/) |
+| Cloudflare bindings and Wrangler deployment resources | Project-root Wrangler configuration | [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/) |
 
 For example, setting `target: 'cloudflare'` chooses a Cloudflare build; it does not by itself configure a Workers AI binding or select `cloudflare/<model>`. Similarly, loading `OPENAI_API_KEY` for a Node local process makes it available to runtime code that uses it; it does not select an OpenAI model for an agent. This separation keeps a portable build shape distinct from application behavior and deployment credentials.
 

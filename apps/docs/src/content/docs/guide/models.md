@@ -1,5 +1,5 @@
 ---
-title: LLMs & Models
+title: Models & Providers
 description: Select models, configure providers, and tune reasoning behavior in Flue agents.
 ---
 
@@ -231,7 +231,7 @@ For ordinary catalog-backed HTTP providers, put credentials in the environment a
 
 Do not put credential values in agent modules, profiles, prompts, or committed configuration files.
 
-For Node.js local development and one-shot workflow runs, supply environment files through the Node commands documented in [Configuration](/docs/guide/configuration/) and [Deploy Agents on Node.js](/docs/deploy/node/). For example, a Node-target application can use `flue dev --target node --env .env` after storing its provider variable in an ignored `.env` file.
+For Node.js local development and one-shot workflow runs, supply environment files through the Node commands documented in [Configuration](/docs/guide/configuration/) and [Deploy on Node.js](/docs/ecosystem/deploy/node/). For example, a Node-target application can use `flue dev --target node --env .env` after storing its provider variable in an ignored `.env` file.
 
 For local Cloudflare development, use Wrangler/Vite local variable conventions: place local variables in `.dev.vars` or `.env` beside your Wrangler configuration, and run:
 
@@ -239,7 +239,7 @@ For local Cloudflare development, use Wrangler/Vite local variable conventions: 
 pnpm exec flue dev --target cloudflare
 ```
 
-Do not pass `--env` to Cloudflare development: the Cloudflare target uses the official Vite integration's variable loading rather than Flue's Node env-file option. See [Deploy Agents on Cloudflare](/docs/deploy/cloudflare/) for Worker configuration and deployment setup.
+Do not pass `--env` to Cloudflare development: the Cloudflare target uses the official Vite integration's variable loading rather than Flue's Node env-file option. See [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/) for Worker configuration and deployment setup.
 
 Binding-backed Workers AI is different from these HTTP-provider credential flows: a `cloudflare/...` model uses the Worker's `AI` binding and does not use a model-provider API key. See [Use Workers AI on Cloudflare](#use-workers-ai-on-cloudflare).
 
@@ -420,4 +420,4 @@ Flue accepts `thinkingLevel` on agents and operations using `cloudflare/...` bec
 
 Use the binding-backed form when your Worker should call Workers AI through its platform binding. Use a URL-backed Cloudflare catalog provider only when your application intentionally needs that HTTP credential-and-endpoint flow.
 
-Continue to [Deploy Agents on Cloudflare](/docs/deploy/cloudflare/) for target configuration and deployment, [Configuration](/docs/guide/configuration/) for environment and application setup boundaries, and [Harness](/docs/guide/harness/) for the sessions in which model operations execute.
+Continue to [Build & Deploy](/docs/guide/deployment/) for target and durability decisions, [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/) for platform configuration, [Configuration](/docs/guide/configuration/) for application setup boundaries, and [Harness](/docs/guide/harness/) for the sessions in which model operations execute.

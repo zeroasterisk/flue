@@ -150,7 +150,7 @@ export default createAgent(() => ({
 
 **Security boundary:** `local()` gives model-directed filesystem and shell capability on the application host. Use it only where the running machine, available files, installed executables, and task inputs are already trusted for that access, such as a disposable CI runner. Do not use `local()` as a multi-tenant isolation mechanism or to expose a sensitive production host to untrusted prompts.
 
-See [Deploy to Node.js](/docs/deploy/node/) for target setup and [Routing](/docs/guide/routing/) before exposing an agent that has host-backed capabilities over a network route.
+See [Deploy on Node.js](/docs/ecosystem/deploy/node/) for target setup and [Routing](/docs/guide/routing/) before exposing an agent that has host-backed capabilities over a network route.
 
 ### Forward environment variables explicitly
 
@@ -298,7 +298,7 @@ On the Cloudflare target, there are three distinct strategies. The default light
 | Project-owned Cloudflare Shell Workspace connector | Workspace-backed filesystem with a connector-provided JavaScript `code` tool; no ordinary `bash` execution surface. | Files should live in a durable Workspace and model work can be expressed through Workspace operations rather than Linux commands. |
 | Cloudflare Sandbox Containers via `@cloudflare/sandbox` | Container-backed Linux execution with ordinary shell/filesystem behavior. | The agent needs Linux tooling, package installation, git, language runtimes, or a container environment. |
 
-Use [Deploy to Cloudflare](/docs/deploy/cloudflare/) for Cloudflare target, bindings, and deployment setup rather than treating this guide as a deployment recipe.
+Use [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/) for Cloudflare target, bindings, and deployment setup rather than treating this guide as a deployment recipe.
 
 ## Use a project-owned Cloudflare Shell Workspace connector
 
@@ -354,7 +354,7 @@ The repository's Cloudflare Shell connector establishes these semantics:
 
 The generated connector's `code` execution environment is designed around Workspace access and declares outbound network unavailable within the `code` tool. This restriction belongs to that connector's tool; it does not change the network behavior of Flue's default lightweight sandbox.
 
-The connector uses a Worker Loader binding and Cloudflare-specific dependencies. Keep binding setup and deployment details with your Cloudflare configuration; [Deploy to Cloudflare](/docs/deploy/cloudflare/) covers the broader target setup. Use [Skills](/docs/guide/skills/) when hydrating runtime workspace skills before initialization.
+The connector uses a Worker Loader binding and Cloudflare-specific dependencies. Keep binding setup and deployment details with your Cloudflare configuration; [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/) covers the broader target setup. Use [Skills](/docs/guide/skills/) when hydrating runtime workspace skills before initialization.
 
 ## Use Cloudflare Sandbox Containers for Linux execution
 
@@ -384,7 +384,7 @@ A Cloudflare Sandbox Container requires application-owned target setup at a high
 3. provide the container image/Dockerfile and any required runtime tooling; and
 4. choose stable sandbox identity, storage, egress, secrets, and retention policy for your application.
 
-Flue's Cloudflare build integration auto-wires user-declared sandbox bindings whose configured class name ends with `Sandbox` to the `@cloudflare/sandbox` `Sandbox` class in its generated Worker entry. Refer to [Deploy to Cloudflare](/docs/deploy/cloudflare/#connecting-a-remote-sandbox) for concrete configuration and deployment instructions.
+Flue's Cloudflare build integration auto-wires user-declared sandbox bindings whose configured class name ends with `Sandbox` to the `@cloudflare/sandbox` `Sandbox` class in its generated Worker entry. Refer to [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/#connecting-a-remote-sandbox) for concrete configuration and deployment instructions.
 
 A container can provide native commands unavailable in the default environment or Cloudflare Shell connector, but it also expands the capability surface. Treat package managers, network egress, credentials, mounted data, and externally visible operations as security-sensitive; provide only what the agent needs.
 
@@ -416,7 +416,7 @@ Begin with the narrowest environment that supports the task, then expand capabil
 - Use [Harness](/docs/guide/harness/) to initialize configured agents, stage workspace inputs, and manage session state.
 - Use [Tools](/docs/guide/tools/) to restrict executable capabilities or understand connector-replaced model tools.
 - Use [Project Layout](/docs/guide/project-layout/) to distinguish authored modules from runtime-discovered workspace context.
-- Use [LLMs & Models](/docs/guide/models/) to select models independently of the sandbox boundary.
-- Use [Deploy to Node.js](/docs/deploy/node/) or [Deploy to Cloudflare](/docs/deploy/cloudflare/) for target configuration.
+- Use [Models & Providers](/docs/guide/models/) to select models independently of the sandbox boundary.
+- Use [Build & Deploy](/docs/guide/deployment/) to choose a target, then continue to [Deploy on Node.js](/docs/ecosystem/deploy/node/) or [Deploy on Cloudflare](/docs/ecosystem/deploy/cloudflare/).
 - Use [Routing](/docs/guide/routing/) before exposing agents with filesystem or execution capability to application users.
 - Use [`flue connect`](/docs/cli/connect/) for interactive local Node agent-instance sessions during development.

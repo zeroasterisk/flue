@@ -3,13 +3,13 @@ title: Deploy Agents on Render
 description: Deploy Flue agents to Render as a Node.js web service.
 ---
 
-Deploy Flue agents to Render as a Node.js web service. This guide starts from the [Flue template](https://render.com/templates/flue), builds on [Deploy Agents on Node.js](/docs/deploy/node/), and focuses on the Render-specific setup: Blueprints, service configuration, environment variables, and managed persistence.
+Deploy Flue agents to Render as a Node.js web service. This guide starts from the [Flue template](https://render.com/templates/flue), builds on [Deploy Agents on Node.js](/docs/ecosystem/deploy/node/), and focuses on the Render-specific setup: Blueprints, service configuration, environment variables, and managed persistence.
 
 By the end, you will have a live Render web service running Flue agents, and you will know how to add Render-managed persistence on top.
 
 ## Prerequisites
 
-- Familiarity with the [Deploy Agents on Node.js](/docs/deploy/node/) guide.
+- Familiarity with the [Deploy Agents on Node.js](/docs/ecosystem/deploy/node/) guide.
 - An API key for your model provider. The template prompts for `ANTHROPIC_API_KEY` by default.
 
 ## 1. Deploy the template
@@ -21,7 +21,7 @@ Open the [Flue template](https://render.com/templates/flue) and click **Deploy t
 3. Returning to Render and creating a free account if you are not signed in.
 4. Opening the Blueprint deploy page for the new repo.
 
-On the deploy page, paste your AI provider API key when prompted, then click **Deploy**. The Blueprint provisions a Node.js web service that runs `npm ci && npx flue build --target node`, starts it with `node dist/server.mjs`, and uses `/health` for health checks.
+On the deploy page, paste your AI provider API key when prompted, then click **Deploy**. The Blueprint provisions a Node.js web service that runs `npm ci && npx flue build --target node` and starts it with `node dist/server.mjs`. If its Blueprint config uses `/health` for health checks, its authored `app.ts` must define that route; Flue does not generate a health endpoint automatically.
 
 The template uses `plan: free` so first-time deploys cost nothing. Free instances spin down after 15 minutes of inactivity, and the next request pays a multi-second cold start while the Node process restarts. For agents that see sporadic traffic in production, bump the service to `starter` or higher in `render.yaml` (or from the Render Dashboard) to keep it warm.
 
@@ -40,12 +40,12 @@ A successful response confirms Render is forwarding traffic to the process start
 Now call the `translate` workflow:
 
 ```bash
-curl https://<service>.onrender.com/workflows/translate \
+curl 'https://<service>.onrender.com/workflows/translate?wait=result' \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello world", "language": "French"}'
 ```
 
-The response should match the workflow's structured output, like:
+`?wait=result` requests a completed workflow response rather than the default `202` admission response containing a `runId`. The returned `result` should match the workflow's structured output, like:
 
 ```json
 {
@@ -100,7 +100,7 @@ This is the Render side of what the Node guide already covers:
 
 - `buildCommand` compiles Flue's Node target.
 - `startCommand` runs the generated server, which binds to `PORT` and serves workflows at `/workflows/<name>` and agents at `/agents/<name>/<id>`.
-- `healthCheckPath` lets Render verify each deploy before it shifts traffic.
+- `healthCheckPath` lets Render verify each deploy before it shifts traffic, provided your authored application exposes `/health` in `app.ts`.
 - `sync: false` keeps the secret out of the Blueprint. Render prompts for the value on first deploy and stores it on the service.
 
 If you ever move this setup into a different repo, drop the same `render.yaml` at its root, then create a new Blueprint from the Render Dashboard (**New > Blueprint**) and pick that repo.
@@ -126,7 +126,7 @@ envVars:
 Once the next deploy goes live, call the translation workflow again:
 
 ```bash
-curl https://<service>.onrender.com/workflows/translate \
+curl 'https://<service>.onrender.com/workflows/translate?wait=result' \
   -H "Content-Type: application/json" \
   -d '{"text": "Good morning", "language": "Spanish"}'
 ```
@@ -135,7 +135,7 @@ A successful response means the new env values reached the running service and F
 
 ## 5. Add session persistence
 
-In-memory sessions disappear on every deploy or restart, and they don't help once you scale beyond one instance. If your agents need conversations that survive that, back them with a Render data store by implementing a Flue `SessionStore`. The Node guide's [Session persistence](/docs/deploy/node/#session-persistence) section covers the `SessionStore` interface (`save`, `load`, `delete`) and how to return it from `createAgent(...)` via `persist`.
+In-memory sessions disappear on every deploy or restart, and they don't help once you scale beyond one instance. If your agents need conversations that survive that, back them with a Render data store by implementing a Flue `SessionStore`. The Node guide's [Session persistence](/docs/ecosystem/deploy/node/#session-persistence) section covers the `SessionStore` interface (`save`, `load`, `delete`) and how to return it from `createAgent(...)` via `persist`.
 
 > **Starting fresh and want persistence built in?** Deploy the [Flue + Postgres template](https://render.com/templates/flue-with-postgresql) instead of the base template. It ships everything in this section preconfigured: a Render Postgres database wired into the web service via `DATABASE_URL`, a Postgres-backed `SessionStore` at `.flue/session-store.ts`, and the assistant agent already returning `persist` from `createAgent(...)`. The walkthrough below is for adding the same setup to a service you've already deployed from the base template.
 
