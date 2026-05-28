@@ -7,7 +7,7 @@
 		"dev": "astro dev",
 		"build": "rm -rf ./dist && astro build && mv ./dist/docs/_redirects ./dist/_redirects && pagefind --site ./dist/docs",
 		"preview": "astro preview",
-		"deploy": "pnpm run build && wrangler deploy",
+		"deploy": "pnpm run build && npx wrangler deploy",
 		"astro": "astro",
 		"check:types": "astro check"
 	},
