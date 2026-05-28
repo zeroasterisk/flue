@@ -195,9 +195,10 @@
 
 .docs-content pre.astro-code {
 	overflow-x: auto;
-	border: 1px solid var(--docs-border);
+	border: 1px solid #37383e;
 	border-radius: 0.55rem;
-	background: var(--docs-code);
+	background: #161616;
+	box-shadow: 0 1px 1px rgb(0 0 0 / 0.08);
 	font-family: var(--font-mono);
 	font-size: 0.82rem;
 	line-height: 1.7;
