@@ -153,9 +153,6 @@ export type ProviderConfiguration = ProviderSettings;
 
 const providerSettingsById = new Map<string, ProviderSettings>();
 
-// TODO: Decide whether repeated configureProvider() calls should compose partial
-// settings or intentionally replace the previous object.
-
 /**
  * Configure transport-level settings on an existing provider while preserving
  * its resolved Model metadata (cost, context window, token limits, etc.).

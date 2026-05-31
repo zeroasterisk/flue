@@ -30,6 +30,23 @@ describe('model provider identity', () => {
 		});
 	});
 
+	it('replaces prior provider settings instead of merging repeated calls', () => {
+		registerProvider('replace-settings-test', {
+			api: 'openai-completions',
+			baseUrl: 'https://registered.invalid',
+		});
+		configureProvider('replace-settings-test', {
+			baseUrl: 'https://configured.invalid',
+			headers: { authorization: 'old' },
+		});
+		configureProvider('replace-settings-test', { headers: { authorization: 'new' } });
+
+		expect(resolveModel('replace-settings-test/model-id')).toMatchObject({
+			baseUrl: 'https://registered.invalid',
+			headers: { authorization: 'new' },
+		});
+	});
+
 	it('uses the binding provider ID instead of a transport-specific identity', () => {
 		registerProvider('cloudflare-binding-test', {
 			api: 'cloudflare-ai-binding',
