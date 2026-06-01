@@ -92,7 +92,7 @@ function printUsage() {
 			'  flue build   [--target <node|cloudflare>] [--root <path>] [--output <path>] [--config <path>] [--env <path>]\n' +
 			'  flue init  --target <node|cloudflare> [--root <path>] [--force]\n' +
 			'  flue add   [<name>|<url>] [--category <category>] [--print]\n' +
-			'  flue logs  <workflowRunId> [--server <url>] [--follow|-f|--no-follow] [--since <eventIndex>] [--types a,b,c] [--limit <n>] [--format pretty|json|ndjson]\n' +
+			"  flue logs  <workflowRunId> [--server <url>] [--header 'Name: value'] [--follow|-f|--no-follow] [--since <eventIndex>] [--types a,b,c] [--limit <n>] [--format pretty|json|ndjson]\n" +
 			'\n' +
 			'Commands:\n' +
 			'  dev    Long-running watch-mode dev server. Rebuilds and reloads on file changes.\n' +
@@ -220,6 +220,7 @@ interface LogsArgs {
 	runId: string;
 	/** Base URL of the running Flue server. */
 	server: string;
+	headers: Record<string, string>;
 	/**
 	 * Whether to keep streaming live events (`true`) or exit after the
 	 * initial replay (`false`). `undefined` means "auto" — follow if the
@@ -411,9 +412,39 @@ function parseAddArgs(rest: string[]): AddArgs {
 	return { command: 'add', name, category, print };
 }
 
+function parseLogsHeader(value: string | undefined, headers: Headers): void {
+	if (!value) {
+		console.error('Missing value for --header');
+		process.exit(1);
+	}
+	const separator = value.indexOf(':');
+	if (separator === -1) {
+		console.error('Invalid value for --header (expected "Name: value")');
+		process.exit(1);
+	}
+	const name = value.slice(0, separator).trim();
+	const headerValue = value.slice(separator + 1).trim();
+	const normalizedName = name.toLowerCase();
+	if (normalizedName === 'accept' || normalizedName === 'last-event-id') {
+		console.error(`Cannot set reserved \`flue logs\` header: ${name}`);
+		process.exit(1);
+	}
+	try {
+		if (headers.has(name)) {
+			console.error(`Duplicate \`flue logs\` header: ${name}`);
+			process.exit(1);
+		}
+		headers.set(name, headerValue);
+	} catch {
+		console.error('Invalid value for --header (expected "Name: value")');
+		process.exit(1);
+	}
+}
+
 function parseLogsArgs(rest: string[]): LogsArgs {
 	const positional: string[] = [];
 	let server = `http://127.0.0.1:${DEFAULT_DEV_PORT}`;
+	const headers = new Headers();
 	let follow: boolean | undefined;
 	let since: number | undefined;
 	let types: ReadonlySet<string> | undefined;
@@ -430,6 +461,8 @@ function parseLogsArgs(rest: string[]): LogsArgs {
 				process.exit(1);
 			}
 			server = value;
+		} else if (arg === '--header') {
+			parseLogsHeader(rest[++i], headers);
 		} else if (arg === '--follow' || arg === '-f') {
 			follow = true;
 		} else if (arg === '--no-follow') {
@@ -499,6 +532,7 @@ function parseLogsArgs(rest: string[]): LogsArgs {
 		command: 'logs',
 		runId,
 		server,
+		headers: Object.fromEntries(headers),
 		follow,
 		since,
 		types,
@@ -1162,42 +1196,37 @@ interface RunRecord {
 	durationMs?: number;
 }
 
-/**
- * Fetch JSON from a Flue endpoint with the canonical error envelope. On
- * non-2xx, prints the envelope (or raw body fallback) to stderr and exits
- * the process with code 1 — `flue logs` is a one-shot CLI, so propagating
- * the error directly is simpler than threading it back to the caller.
- */
-async function fetchJsonOrExit<T>(url: string): Promise<T> {
+async function fetchLogsOrExit(url: string | URL, init?: RequestInit): Promise<Response> {
 	let res: Response;
 	try {
-		res = await fetch(url);
+		res = await fetch(url, { ...init, redirect: 'error' });
 	} catch (err) {
 		console.error(
 			`[flue] Failed to reach Flue server at ${url}: ${err instanceof Error ? err.message : String(err)}`,
 		);
 		process.exit(1);
 	}
+	if (res.ok) return res;
 	const rawBody = await res.text();
-	if (!res.ok) {
-		try {
-			const parsed = JSON.parse(rawBody);
-			if (parsed && typeof parsed === 'object' && parsed.error) {
-				const e = parsed.error;
-				console.error(`HTTP ${res.status} [${e.type ?? 'unknown'}]: ${e.message ?? ''}`);
-				if (e.details) {
-					for (const line of String(e.details).split('\n')) {
-						if (line) console.error(`  ${line}`);
-					}
+	try {
+		const parsed = JSON.parse(rawBody);
+		if (parsed && typeof parsed === 'object' && parsed.error) {
+			const e = parsed.error;
+			console.error(`HTTP ${res.status} [${e.type ?? 'unknown'}]: ${e.message ?? ''}`);
+			if (e.details) {
+				for (const line of String(e.details).split('\n')) {
+					if (line) console.error(`  ${line}`);
 				}
-				process.exit(1);
 			}
-		} catch {
-			// fall through to raw-body fallback
+			process.exit(1);
 		}
-		console.error(`HTTP ${res.status}: ${rawBody}`);
-		process.exit(1);
-	}
+	} catch {}
+	console.error(`HTTP ${res.status}: ${rawBody}`);
+	process.exit(1);
+}
+
+async function fetchJsonOrExit<T>(url: string, headers: Record<string, string>): Promise<T> {
+	const rawBody = await (await fetchLogsOrExit(url, { headers })).text();
 	try {
 		return JSON.parse(rawBody) as T;
 	} catch {
@@ -1297,7 +1326,7 @@ async function logsCommand(args: LogsArgs): Promise<void> {
 	if (args.follow !== undefined) {
 		shouldFollow = args.follow;
 	} else {
-		const run = await fetchJsonOrExit<RunRecord>(runPath);
+		const run = await fetchJsonOrExit<RunRecord>(runPath, args.headers);
 		shouldFollow = run.status === 'active';
 	}
 
@@ -1307,7 +1336,10 @@ async function logsCommand(args: LogsArgs): Promise<void> {
 		if (args.since !== undefined) url.searchParams.set('after', String(args.since));
 		if (args.types) url.searchParams.set('types', [...args.types].join(','));
 		if (args.limit !== undefined) url.searchParams.set('limit', String(args.limit));
-		const body = await fetchJsonOrExit<{ events: Array<Record<string, unknown>> }>(url.toString());
+		const body = await fetchJsonOrExit<{ events: Array<Record<string, unknown>> }>(
+			url.toString(),
+			args.headers,
+		);
 		let exitCode = 0;
 		for (const event of body.events) {
 			if (args.format === 'json' || args.format === 'ndjson') {
@@ -1322,34 +1354,9 @@ async function logsCommand(args: LogsArgs): Promise<void> {
 	}
 
 	const streamUrl = new URL(`${runPath}/stream`);
-	const headers: Record<string, string> = { accept: 'text/event-stream' };
+	const headers: Record<string, string> = { ...args.headers, accept: 'text/event-stream' };
 	if (args.since !== undefined) headers['last-event-id'] = String(args.since);
-
-	let res: Response;
-	try {
-		res = await fetch(streamUrl, { headers });
-	} catch (err) {
-		console.error(
-			`[flue] Failed to reach Flue server: ${err instanceof Error ? err.message : String(err)}`,
-		);
-		process.exit(1);
-	}
-
-	if (!res.ok) {
-		const rawBody = await res.text();
-		try {
-			const parsed = JSON.parse(rawBody);
-			if (parsed?.error) {
-				const e = parsed.error;
-				console.error(`HTTP ${res.status} [${e.type ?? 'unknown'}]: ${e.message ?? ''}`);
-				process.exit(1);
-			}
-		} catch {
-			// fall through
-		}
-		console.error(`HTTP ${res.status}: ${rawBody}`);
-		process.exit(1);
-	}
+	const res = await fetchLogsOrExit(streamUrl, { headers });
 
 	const ac = new AbortController();
 	const onSignal = () => ac.abort();
