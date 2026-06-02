@@ -33,15 +33,26 @@ function checkNodeVersion() {
 	if (major > MIN_NODE_MAJOR) return;
 	if (major === MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR) return;
 
-	console.error(
-		'\nNode.js v' +
-			v +
-			' is not supported by Flue.\n' +
-			'Flue requires Node.js ' +
-			ENGINES_LABEL +
-			' (or any newer major) for native TypeScript config support.\n' +
-			'Please upgrade: https://nodejs.org/\n',
-	);
+	if (process.versions.bun) {
+		console.error(
+			'\nBun v' +
+				process.versions.bun +
+				' is not supported by Flue.\n' +
+				'Please upgrade Bun to a version compatible with Node.js ' +
+				ENGINES_LABEL +
+				' (or any newer major).\n',
+		);
+	} else {
+		console.error(
+			'\nNode.js v' +
+				v +
+				' is not supported by Flue.\n' +
+				'Flue requires Node.js ' +
+				ENGINES_LABEL +
+				' (or any newer major) for native TypeScript config support.\n' +
+				'Please upgrade: https://nodejs.org/\n',
+		);
+	}
 	process.exit(1);
 }
 

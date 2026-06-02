@@ -6,6 +6,10 @@
 
 - **Agents: Clear or migrate persisted beta session state before upgrading.** Session records now persist one opaque `aff_<ULID>` provider-affinity key instead of deriving affinity from agent instance, harness, and session names. This keeps prompt-cache and routing-affinity identifiers bounded and distinct for nested tasks. Existing version-4 beta session records are rejected; storage keys are unchanged.
 
+### Fixes & Other Changes
+
+- **CLI: Report unsupported Bun runtimes accurately.** When Bun's reported Node.js compatibility level is below Flue's required floor, the CLI now asks users to upgrade Bun instead of Node.js.
+
 ## 0.9.1 - 2026-06-02
 
 ### Fixes & Other Changes
