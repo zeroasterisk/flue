@@ -23,22 +23,6 @@ function isMarkdownRequest(request: Request, url: URL) {
 	);
 }
 
-const legacySdkMarkdownPaths = new Set([
-	'/docs/sdk/create-flue-client/index.md',
-	'/docs/sdk/client-agents-invoke/index.md',
-	'/docs/sdk/client-agents-connect/index.md',
-	'/docs/sdk/client-workflows-connect/index.md',
-	'/docs/sdk/client-runs-get/index.md',
-	'/docs/sdk/client-runs-events/index.md',
-	'/docs/sdk/client-runs-stream/index.md',
-	'/docs/sdk/client-admin-agents-list/index.md',
-	'/docs/sdk/client-admin-runs-list/index.md',
-	'/docs/sdk/client-admin-runs-get/index.md',
-	'/docs/sdk/websocket-types/index.md',
-	'/docs/sdk/event-types/index.md',
-	'/docs/sdk/error-types/index.md',
-]);
-
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const url = new URL(request.url);
@@ -49,11 +33,6 @@ export default {
 
 		if (url.pathname === '/docs/api/harness-api/index.md') {
 			url.pathname = '/docs/api/agent-api/index.md';
-			return Response.redirect(url, 302);
-		}
-
-		if (legacySdkMarkdownPaths.has(url.pathname)) {
-			url.pathname = '/docs/sdk/overview/index.md';
 			return Response.redirect(url, 302);
 		}
 

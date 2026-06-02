@@ -126,6 +126,34 @@ const formattedReviewedDate = lastReviewedAt?.toLocaleDateString('en-US', {
 			</aside>
 		</div>
 		<script is:inline>
+			const setActiveSidebarLink = () => {
+				const currentUrl = new URL(window.location.href);
+
+				for (const link of document.querySelectorAll('[data-docs-sidebar-link]')) {
+					const linkUrl = new URL(link.href);
+					const pageActive = linkUrl.pathname === currentUrl.pathname && linkUrl.hash === '';
+					const locationActive = linkUrl.pathname === currentUrl.pathname && linkUrl.hash !== '' && linkUrl.hash === currentUrl.hash;
+					const visuallyActive = pageActive || locationActive;
+					link.classList.toggle('font-medium', visuallyActive);
+					link.classList.toggle('text-blue-600', pageActive);
+					link.classList.toggle('text-black', locationActive);
+					link.classList.toggle('text-gray-600', !visuallyActive);
+					link.classList.toggle('hover:text-gray-950', !visuallyActive);
+					link.parentElement?.classList.toggle('docs-sidebar-location-active', locationActive);
+
+					if (locationActive) {
+						link.setAttribute('aria-current', 'location');
+					} else if (pageActive && currentUrl.hash === '') {
+						link.setAttribute('aria-current', 'page');
+					} else {
+						link.removeAttribute('aria-current');
+					}
+				}
+			};
+
+			setActiveSidebarLink();
+			window.addEventListener('hashchange', setActiveSidebarLink);
+
 			for (const heading of document.querySelectorAll('.docs-content :is(h2, h3, h4, h5, h6)[id]')) {
 				if (!heading.id) continue;
 

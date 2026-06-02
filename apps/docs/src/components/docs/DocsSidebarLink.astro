@@ -8,15 +8,17 @@ interface Props {
 
 const { item, currentSlug } = Astro.props;
 const external = 'href' in item;
-const active = !external && item.slug === currentSlug;
+const active = !external && item.slug === currentSlug && item.anchor === undefined;
+const children = !external ? item.items : undefined;
 ---
 
 <a
 	class:list={['group flex items-center gap-1.5 py-1.5 text-sm font-normal leading-snug', active ? 'font-medium text-blue-600' : 'text-gray-600 hover:text-gray-950']}
-	href={external ? item.href : docsHref(item.slug)}
+	href={external ? item.href : docsHref(item.slug, item.anchor)}
 	target={external ? '_blank' : undefined}
 	rel={external ? 'noopener noreferrer' : undefined}
 	aria-current={active ? 'page' : undefined}
+	data-docs-sidebar-link={!external ? 'true' : undefined}
 >
 	{item.title}
 	{external && (
@@ -25,3 +27,10 @@ const active = !external && item.slug === currentSlug;
 		</svg>
 	)}
 </a>
+{children && (
+	<ul class="m-0 list-none border-l border-docs-border pl-3">
+		{children.map((child) => (
+			<li class:list={['slug' in child && child.anchor !== undefined && 'docs-sidebar-location-item']}><Astro.self item={child} currentSlug={currentSlug} /></li>
+		))}
+	</ul>
+)}

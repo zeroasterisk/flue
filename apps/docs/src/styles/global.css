@@ -105,6 +105,21 @@
 		drop-shadow(0 2px 3px rgb(var(--shadow-rgb) / 0.15));
 }
 
+.docs-sidebar-location-item {
+	border-left: 1px solid transparent;
+	margin-left: -0.8125rem;
+	padding-left: 0.75rem;
+	transition: border-color 150ms ease;
+}
+
+.docs-sidebar-location-active {
+	border-left-color: #6b7280;
+}
+
+[data-docs-sidebar-link] {
+	transition: color 150ms ease;
+}
+
 .docs-content > :first-child {
 	margin-top: 0;
 }

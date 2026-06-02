@@ -2,6 +2,8 @@ export type DocsNavItem =
 	| {
 			title: string;
 			slug: string;
+			anchor?: string;
+			items?: DocsNavItem[];
 	  }
 	| {
 			title: string;
@@ -107,7 +109,57 @@ export const docsSections: DocsSection[] = [
 		groups: [
 			{
 				title: 'SDK',
-				items: [{ title: 'SDK API', slug: 'sdk/overview' }],
+				items: [
+					{ title: 'Overview', slug: 'sdk/overview' },
+					{
+						title: 'createFlueClient(...)',
+						slug: 'sdk/client',
+						items: [
+							{
+								title: 'CreateFlueClientOptions',
+								slug: 'sdk/client',
+								anchor: 'createflueclientoptions',
+							},
+							{ title: 'RequestHeaders', slug: 'sdk/client', anchor: 'requestheaders' },
+						],
+					},
+					{
+						title: 'client.agents',
+						slug: 'sdk/agents',
+						items: [
+							{ title: 'invoke(...)', slug: 'sdk/agents', anchor: 'clientagentsinvoke' },
+							{ title: 'connect(...)', slug: 'sdk/agents', anchor: 'clientagentsconnect' },
+						],
+					},
+					{
+						title: 'client.workflows',
+						slug: 'sdk/workflows',
+						items: [
+							{ title: 'connect(...)', slug: 'sdk/workflows', anchor: 'clientworkflowsconnect' },
+						],
+					},
+					{
+						title: 'client.runs',
+						slug: 'sdk/runs',
+						items: [
+							{ title: 'get(...)', slug: 'sdk/runs', anchor: 'clientrunsget' },
+							{ title: 'events(...)', slug: 'sdk/runs', anchor: 'clientrunsevents' },
+							{ title: 'stream(...)', slug: 'sdk/runs', anchor: 'clientrunsstream' },
+						],
+					},
+					{
+						title: 'client.admin',
+						slug: 'sdk/admin',
+						items: [
+							{ title: 'agents.list()', slug: 'sdk/admin', anchor: 'clientadminagentslist' },
+							{ title: 'runs.list(...)', slug: 'sdk/admin', anchor: 'clientadminrunslist' },
+							{ title: 'runs.get(...)', slug: 'sdk/admin', anchor: 'clientadminrunsget' },
+						],
+					},
+					{ title: 'Events and records', slug: 'sdk/events' },
+					{ title: 'Errors', slug: 'sdk/errors' },
+					{ title: 'WebSocket protocol', slug: 'sdk/websockets' },
+				],
 			},
 		],
 	},
@@ -151,16 +203,22 @@ export const docsSections: DocsSection[] = [
 	},
 ];
 
-export function docsHref(slug: string) {
-	return `${import.meta.env.BASE_URL}${slug}/`;
+export function docsHref(slug: string, anchor?: string) {
+	return `${import.meta.env.BASE_URL}${slug}/${anchor ? `#${anchor}` : ''}`;
+}
+
+function includesSlug(items: DocsNavItem[], slug: string): boolean {
+	return items.some(
+		(item) =>
+			'slug' in item &&
+			(item.slug === slug || (item.items !== undefined && includesSlug(item.items, slug))),
+	);
 }
 
 export function getDocsSection(slug: string) {
 	return (
 		docsSections.find((section) =>
-			section.groups.some((group) =>
-				group.items.some((item) => 'slug' in item && item.slug === slug),
-			),
+			section.groups.some((group) => includesSlug(group.items, slug)),
 		) ?? docsSections[0]
 	);
 }
