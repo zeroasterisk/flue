@@ -26,7 +26,9 @@ describe('CloudflarePlugin', () => {
 
 		expect(entry).toContain('class FlueAssistantAgent');
 		expect(entry).toContain('bindingName: "FLUE_ASSISTANT_AGENT"');
-		expect(entry).toContain('fetchCloudflareDurableObject(binding, target.instanceId, request)');
+		expect(entry).toContain("import { Agent, getAgentByName } from 'agents'");
+		expect(entry).toContain('return fetchAgent(binding, target.instanceId, request)');
+		expect(entry).toContain('(await getAgentByName(binding, instanceId)).fetch(request)');
 		expect(entry).not.toContain("routeAgentRequest } from 'agents'");
 	});
 });

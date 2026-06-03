@@ -7,8 +7,6 @@ import type {
 	RunPointer,
 	RunRegistry,
 } from '../runtime/run-registry.ts';
-import { fetchCloudflareDurableObject } from './durable-object.ts';
-
 interface FlueRegistryNamespace {
 	idFromName(name: string): object;
 	get(id: object): { fetch(input: Request): Promise<Response> };
@@ -69,9 +67,9 @@ class CloudflareRunRegistry implements RunRegistry {
 	}
 
 	private fetch(request: Request): Promise<Response> {
-		return fetchCloudflareDurableObject(this.namespace, FLUE_REGISTRY_INSTANCE_NAME, request, {
-			retry: true,
-		});
+		return this.namespace
+			.get(this.namespace.idFromName(FLUE_REGISTRY_INSTANCE_NAME))
+			.fetch(request);
 	}
 
 	private async callExpectingNoContent(

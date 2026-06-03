@@ -162,21 +162,6 @@ describe('createCloudflareRunRegistry()', () => {
 		expect(fake.requests[0]?.method).toBe('GET');
 	});
 
-	it('retries a registry request when the Durable Object reports a retryable infrastructure error', async () => {
-		let attempts = 0;
-		const fake = createNamespace(() => {
-			attempts++;
-			if (attempts === 1) throw Object.assign(new Error('retryable'), { retryable: true });
-			return new Response('missing', { status: 404 });
-		});
-		const registry = createCloudflareRunRegistry(fake.namespace);
-
-		expect(await registry?.lookupRun('workflow:daily-report:missing')).toBeNull();
-		expect(fake.instanceNames).toEqual(['default', 'default']);
-		expect(fake.requestedIds).toEqual([fake.id, fake.id]);
-		expect(fake.requests).toHaveLength(2);
-	});
-
 	it('throws a diagnostic error when the registry responds unsuccessfully', async () => {
 		const fake = createNamespace(() => new Response('storage unavailable', { status: 503 }));
 		const registry = createCloudflareRunRegistry(fake.namespace);

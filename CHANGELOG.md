@@ -18,7 +18,7 @@
 - **CLI: Report unsupported Bun runtimes accurately.** When Bun's reported Node.js compatibility level is below Flue's required floor, the CLI now asks users to upgrade Bun instead of Node.js.
 - **Cloudflare: Preserve workflow-run history parity.** Cloudflare workflow storage now ignores events for unknown runs, resets same-ID event history when a run is initialized, preserves absent optional fields separately from explicit `null`, and retains explicit terminal `null` results during recovery.
 - **Harden persisted workflow-event identity.** Workflow history now treats `(runId, eventIndex)` as one immutable append-only event identity and SSE resume cursor across Node and Cloudflare. Malformed or duplicate persisted events fail instead of producing ambiguous history, and pre-event stream failures no longer fabricate cursor `0`.
-- **Cloudflare: Own Durable Object routing and replay-safe retries.** Flue now resolves generated agent, workflow, and registry bindings explicitly instead of deriving public routes from the Agents SDK environment scanner. Retryable, non-overloaded Durable Object infrastructure failures retry only where replay is safe: dispatch admission, run-record and run-events reads, and registry traffic. Prompts, workflow admissions, streams, and WebSocket upgrades remain single-attempt.
+- **Cloudflare: Own Durable Object routing.** Flue now resolves generated agent and workflow bindings explicitly instead of deriving public routes from the Agents SDK environment scanner, then forwards requests through the Agents SDK custom-routing helper. Public routes remain independent from generated Durable Object identities.
 
 ## 0.9.1 - 2026-06-02
 
