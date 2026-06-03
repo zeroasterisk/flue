@@ -46,7 +46,7 @@ describe('CloudflarePlugin', () => {
 		expect(entry).not.toContain('CREATE TABLE IF NOT EXISTS flue_sessions');
 	});
 
-	it('pre-arms SQL-backed dispatch admission and reconciles runnable rows through managed Fibers', async () => {
+	it('pre-arms SQL-backed dispatch admission and drains claimed rows without managed Fibers', async () => {
 		const entry = await new CloudflarePlugin().generateEntryPoint(
 			testBuildContext({
 				agents: [{ name: 'assistant', filePath: '/fixture/agents/assistant.ts' }],
@@ -56,20 +56,35 @@ describe('CloudflarePlugin', () => {
 		expect(entry).toContain(
 			`async onStart(props) {
     if (typeof super.onStart === 'function') await super.onStart(props);
+    await armFlueAgentSubmissionRetry(this);
     await reconcileFlueAgentSubmissions(this, "assistant", { preserveSuccessor: true });
   }
 
   async __flueWakeAgentSubmissions(wake) {
     await reconcileFlueAgentSubmissions(this, "assistant", { preserveSuccessor: true, executingWake: wake });
+  }
+
+  async __flueRetryAgentSubmissions(_payload, schedule) {
+    if (!(await reconcileFlueAgentSubmissions(this, "assistant"))) {
+      await this.cancelSchedule(schedule.id);
+    }
   }`,
 		);
 		expect(entry).toContain("const FLUE_AGENT_SUBMISSION_WAKE_CALLBACK = '__flueWakeAgentSubmissions';");
+		expect(entry).toContain("const FLUE_AGENT_SUBMISSION_RETRY_CALLBACK = '__flueRetryAgentSubmissions';");
+		expect(entry).toContain("return doInstance.scheduleEvery(FLUE_AGENT_SUBMISSION_RETRY_SECONDS, FLUE_AGENT_SUBMISSION_RETRY_CALLBACK);");
 		expect(entry).toContain("await armFlueAgentSubmissionAdmissionWakes(doInstance);\n    let submission;");
 		expect(entry).toContain('submission = getAgentExecutionStore(doInstance).submissions.admitDispatch(input);');
-		expect(entry).toContain('const runnable = submissions.listRunnableDispatches();');
-		expect(entry).toContain('metadata: { input: submission.input, submissionSequence: submission.sequence },');
-		expect(entry).toContain('submissions.hasQueuedDispatchForSession(doInstance.name, session)');
-		expect(entry).toContain('async function waitForEarlierLegacyManagedDispatch');
+		expect(entry).toContain('for (const submission of submissions.listRunningDispatches()) {');
+		expect(entry).toContain('const claimed = submissions.claimDispatch(submission.submissionId, crypto.randomUUID());');
+		expect(entry).toContain("void doInstance.runFiber('flue:dispatch-attempt', async (fiberCtx) => {");
+		expect(entry).toContain("fiberCtx.stash({ submissionId: submission.submissionId, attemptId: submission.attemptId });");
+		expect(entry).toContain('submissions.hasUnsettledDispatchForSession(doInstance.name, session)');
+		expect(entry).toContain('if (directMarkers.blockAll || directMarkers.sessions.has(session)) {');
+		expect(entry).toContain('getAgentExecutionStore(doInstance).submissions.adoptLegacyDispatches(dispatches.map((dispatch) => dispatch.input));');
+		expect(entry).toContain("return handleFlueDispatchAttemptRecovered(ctx, this);");
+		expect(entry).not.toContain("startFiber('flue:dispatch'");
+		expect(entry).not.toContain('inspectFiberByKey');
 		expect(entry).not.toContain('ctx.storage.setAlarm');
 	});
 

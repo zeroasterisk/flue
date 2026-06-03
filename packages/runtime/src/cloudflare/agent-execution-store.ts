@@ -14,9 +14,10 @@ interface SqlStorage {
 
 interface DurableObjectStorage {
 	readonly sql?: SqlStorage;
+	transactionSync?<T>(closure: () => T): T;
 }
 
-type SqlAgentSubmissionStatus = 'queued' | 'completed' | 'error';
+type SqlAgentSubmissionStatus = 'queued' | 'running' | 'completed' | 'error';
 
 export interface SqlAgentDispatchSubmission {
 	readonly sequence: number;
@@ -26,6 +27,8 @@ export interface SqlAgentDispatchSubmission {
 	readonly input: DispatchInput;
 	readonly status: SqlAgentSubmissionStatus;
 	readonly acceptedAt: number;
+	readonly attemptId?: string;
+	readonly startedAt?: number;
 	readonly completedAt?: number;
 	readonly error?: string;
 }
@@ -33,13 +36,20 @@ export interface SqlAgentDispatchSubmission {
 export interface SqlAgentSubmissionStore {
 	getDispatch(submissionId: string): SqlAgentDispatchSubmission | null;
 	admitDispatch(input: DispatchInput): SqlAgentDispatchSubmission;
-	hasQueuedDispatches(): boolean;
+	adoptLegacyDispatches(inputs: readonly DispatchInput[]): SqlAgentDispatchSubmission[];
+	hasUnsettledDispatches(): boolean;
 	listQueuedDispatches(): SqlAgentDispatchSubmission[];
 	listRunnableDispatches(): SqlAgentDispatchSubmission[];
-	hasQueuedDispatchForSession(instanceId: string, session: string): boolean;
-	hasEarlierQueuedDispatch(submission: SqlAgentDispatchSubmission): boolean;
-	completeDispatch(submissionId: string): void;
-	failDispatch(submissionId: string, error: unknown): void;
+	listRunningDispatches(): SqlAgentDispatchSubmission[];
+	hasUnsettledDispatchForSession(instanceId: string, session: string): boolean;
+	claimDispatch(submissionId: string, attemptId: string): SqlAgentDispatchSubmission | null;
+	recoverDispatchAttempt(
+		submissionId: string,
+		expectedAttemptId: string,
+		nextAttemptId: string,
+	): SqlAgentDispatchSubmission | null;
+	completeDispatch(submissionId: string, attemptId: string): void;
+	failDispatch(submissionId: string, attemptId: string, error: unknown): void;
 }
 
 export interface SqlAgentExecutionStore {
@@ -59,7 +69,8 @@ export function createSqlAgentExecutionStore(
 	className: string,
 ): SqlAgentExecutionStore {
 	const sql = storage?.sql;
-	if (!sql || typeof sql.exec !== 'function') {
+	const transactionSync = storage?.transactionSync;
+	if (!sql || typeof sql.exec !== 'function' || typeof transactionSync !== 'function') {
 		throw new Error(
 			`[flue] Cloudflare durable agent class "${className}" requires Durable Object SQLite. ` +
 				`Add "${className}" to a Wrangler migration's "new_sqlite_classes" list before its first deploy; ` +
@@ -70,7 +81,11 @@ export function createSqlAgentExecutionStore(
 	try {
 		const sessions = createSqlSessionStore(sql);
 		ensureSubmissionTable(sql);
-		return { sessions, submissions: new SqlAgentSubmissionStoreImpl(sql) };
+		const runTransaction = <T>(closure: () => T): T => transactionSync.call(storage, closure) as T;
+		return {
+			sessions,
+			submissions: new SqlAgentSubmissionStoreImpl(sql, runTransaction),
+		};
 	} catch (cause) {
 		const detail = cause instanceof Error ? cause.message : String(cause);
 		throw new Error(
@@ -107,7 +122,10 @@ class SqlSessionStore implements SessionStore {
 }
 
 class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
-	constructor(private sql: SqlStorage) {}
+	constructor(
+		private sql: SqlStorage,
+		private transactionSync: NonNullable<DurableObjectStorage['transactionSync']>,
+	) {}
 
 	getDispatch(submissionId: string): SqlAgentDispatchSubmission | null {
 		const row = this.readDispatchRow(submissionId);
@@ -138,13 +156,66 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		return parseDispatchSubmission(row);
 	}
 
-	hasQueuedDispatches(): boolean {
+	adoptLegacyDispatches(inputs: readonly DispatchInput[]): SqlAgentDispatchSubmission[] {
+		const unique = new Map<string, DispatchInput>();
+		for (const input of inputs) {
+			const payload = JSON.stringify(input);
+			const row = this.readDispatchRow(input.dispatchId);
+			if (row && row.payload !== payload) {
+				throw new SqlAgentSubmissionConflictError('[flue] Conflicting legacy dispatch adoption.');
+			}
+			const prior = unique.get(input.dispatchId);
+			if (prior && JSON.stringify(prior) !== payload) {
+				throw new SqlAgentSubmissionConflictError('[flue] Conflicting legacy dispatch adoption.');
+			}
+			if (!prior) unique.set(input.dispatchId, input);
+		}
+		const missing = [...unique.values()].filter((input) => !this.readDispatchRow(input.dispatchId));
+		const adopt = () => {
+			const first = this.sql
+				.exec('SELECT MIN(sequence) AS sequence FROM flue_agent_submissions')
+				.toArray()[0]?.sequence;
+			let sequence = typeof first === 'number' ? first - missing.length : -missing.length;
+			for (let offset = 0; offset < missing.length; offset += 16) {
+				const batch = missing.slice(offset, offset + 16);
+				const values: unknown[] = [];
+				for (const input of batch) {
+					const acceptedAt = Date.parse(input.acceptedAt);
+					if (!Number.isFinite(acceptedAt)) {
+						throw new Error('[flue] Legacy dispatch adoption received an invalid acceptedAt timestamp.');
+					}
+					values.push(
+						sequence++,
+						input.dispatchId,
+						input.session,
+						createSessionStorageKey(input.id, 'default', input.session),
+						JSON.stringify(input),
+						acceptedAt,
+					);
+				}
+				this.sql.exec(
+					`INSERT INTO flue_agent_submissions
+					 (sequence, submission_id, session, session_key, kind, payload, status, accepted_at)
+					 VALUES ${batch.map(() => "(?, ?, ?, ?, 'dispatch', ?, 'queued', ?)").join(', ')}`,
+					...values,
+				);
+			}
+		};
+		if (missing.length > 0) this.transactionSync(adopt);
+		return inputs.map((input) => {
+			const submission = this.getDispatch(input.dispatchId);
+			if (!submission) throw new Error('[flue] Legacy dispatch adoption did not create a submission row.');
+			return submission;
+		});
+	}
+
+	hasUnsettledDispatches(): boolean {
 		return (
 			this.sql
 				.exec(
 					`SELECT 1
 					 FROM flue_agent_submissions
-					 WHERE kind = 'dispatch' AND status = 'queued'
+					 WHERE kind = 'dispatch' AND status IN ('queued', 'running')
 					 LIMIT 1`,
 				)
 				.toArray().length > 0
@@ -156,7 +227,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 			this.sql
 				.exec(
 					`SELECT sequence, submission_id, session, session_key, kind, payload, status,
-					        accepted_at, completed_at, error
+					        accepted_at, attempt_id, started_at, completed_at, error
 					 FROM flue_agent_submissions
 					 WHERE kind = 'dispatch' AND status = 'queued'
 					 ORDER BY sequence ASC`,
@@ -170,7 +241,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 			.exec(
 				`SELECT current.sequence, current.submission_id, current.session, current.session_key,
 				        current.kind, current.payload, current.status, current.accepted_at,
-				        current.completed_at, current.error
+				        current.attempt_id, current.started_at, current.completed_at, current.error
 				 FROM flue_agent_submissions AS current
 				 WHERE current.kind = 'dispatch' AND current.status = 'queued'
 				   AND NOT EXISTS (
@@ -178,7 +249,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 				     FROM flue_agent_submissions AS earlier
 				     WHERE earlier.kind = 'dispatch'
 				       AND earlier.session_key = current.session_key
-				       AND earlier.status = 'queued'
+				       AND earlier.status IN ('queued', 'running')
 				       AND earlier.sequence < current.sequence
 				   )
 				 ORDER BY current.sequence ASC`,
@@ -187,13 +258,27 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		return this.parseQueuedRows(rows);
 	}
 
-	hasQueuedDispatchForSession(instanceId: string, session: string): boolean {
+	listRunningDispatches(): SqlAgentDispatchSubmission[] {
+		return this.parseRunningRows(
+			this.sql
+				.exec(
+					`SELECT sequence, submission_id, session, session_key, kind, payload, status,
+					        accepted_at, attempt_id, started_at, completed_at, error
+					 FROM flue_agent_submissions
+					 WHERE kind = 'dispatch' AND status = 'running'
+					 ORDER BY sequence ASC`,
+				)
+				.toArray(),
+		);
+	}
+
+	hasUnsettledDispatchForSession(instanceId: string, session: string): boolean {
 		return (
 			this.sql
 				.exec(
 					`SELECT 1
 					 FROM flue_agent_submissions
-					 WHERE kind = 'dispatch' AND session_key = ? AND status = 'queued'
+					 WHERE kind = 'dispatch' AND session_key = ? AND status IN ('queued', 'running')
 					 LIMIT 1`,
 					createSessionStorageKey(instanceId, 'default', session),
 				)
@@ -201,63 +286,109 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		);
 	}
 
-	hasEarlierQueuedDispatch(submission: SqlAgentDispatchSubmission): boolean {
-		return (
-			this.sql
-				.exec(
-					`SELECT 1
-					 FROM flue_agent_submissions
-					 WHERE kind = 'dispatch' AND session_key = ? AND status = 'queued' AND sequence < ?
-					 LIMIT 1`,
-					submission.sessionKey,
-					submission.sequence,
-				)
-				.toArray().length > 0
+	claimDispatch(submissionId: string, attemptId: string): SqlAgentDispatchSubmission | null {
+		this.sql.exec(
+			`UPDATE flue_agent_submissions AS current
+			 SET status = 'running', attempt_id = ?, started_at = ?
+			 WHERE current.submission_id = ? AND current.kind = 'dispatch' AND current.status = 'queued'
+			   AND NOT EXISTS (
+			     SELECT 1
+			     FROM flue_agent_submissions AS earlier
+			     WHERE earlier.kind = 'dispatch'
+			       AND earlier.session_key = current.session_key
+			       AND earlier.status IN ('queued', 'running')
+			       AND earlier.sequence < current.sequence
+			   )`,
+			attemptId,
+			Date.now(),
+			submissionId,
 		);
+		const submission = this.getDispatch(submissionId);
+		return submission?.status === 'running' && submission.attemptId === attemptId
+			? submission
+			: null;
 	}
 
-	completeDispatch(submissionId: string): void {
+	recoverDispatchAttempt(
+		submissionId: string,
+		expectedAttemptId: string,
+		nextAttemptId: string,
+	): SqlAgentDispatchSubmission | null {
+		this.sql.exec(
+			`UPDATE flue_agent_submissions
+			 SET attempt_id = ?, started_at = ?
+			 WHERE submission_id = ? AND kind = 'dispatch' AND status = 'running' AND attempt_id = ?`,
+			nextAttemptId,
+			Date.now(),
+			submissionId,
+			expectedAttemptId,
+		);
+		const submission = this.getDispatch(submissionId);
+		return submission?.status === 'running' && submission.attemptId === nextAttemptId
+			? submission
+			: null;
+	}
+
+	completeDispatch(submissionId: string, attemptId: string): void {
 		this.sql.exec(
 			`UPDATE flue_agent_submissions
 			 SET status = 'completed', completed_at = ?, error = NULL
-			 WHERE submission_id = ? AND kind = 'dispatch' AND status = 'queued'`,
+			 WHERE submission_id = ? AND kind = 'dispatch' AND status = 'running' AND attempt_id = ?`,
 			Date.now(),
 			submissionId,
+			attemptId,
 		);
 	}
 
-	failDispatch(submissionId: string, error: unknown): void {
+	failDispatch(submissionId: string, attemptId: string, error: unknown): void {
 		this.sql.exec(
 			`UPDATE flue_agent_submissions
 			 SET status = 'error', completed_at = ?, error = ?
-			 WHERE submission_id = ? AND kind = 'dispatch' AND status = 'queued'`,
+			 WHERE submission_id = ? AND kind = 'dispatch' AND status = 'running' AND attempt_id = ?`,
 			Date.now(),
 			error instanceof Error ? error.message : String(error),
 			submissionId,
+			attemptId,
 		);
 	}
 
 	private parseQueuedRows(rows: SqlRow[]): SqlAgentDispatchSubmission[] {
+		return this.parseOperationalRows(rows, 'queued');
+	}
+
+	private parseRunningRows(rows: SqlRow[]): SqlAgentDispatchSubmission[] {
+		return this.parseOperationalRows(rows, 'running');
+	}
+
+	private parseOperationalRows(
+		rows: SqlRow[],
+		status: Extract<SqlAgentSubmissionStatus, 'queued' | 'running'>,
+	): SqlAgentDispatchSubmission[] {
 		const submissions: SqlAgentDispatchSubmission[] = [];
 		for (const row of rows) {
 			try {
 				submissions.push(parseDispatchSubmission(row));
 			} catch (error) {
 				if (typeof row.sequence !== 'number') throw error;
-				this.failDispatchSequence(row.sequence, error);
+				this.failDispatchSequence(row.sequence, status, error);
 			}
 		}
 		return submissions;
 	}
 
-	private failDispatchSequence(sequence: number, error: unknown): void {
+	private failDispatchSequence(
+		sequence: number,
+		status: Extract<SqlAgentSubmissionStatus, 'queued' | 'running'>,
+		error: unknown,
+	): void {
 		this.sql.exec(
 			`UPDATE flue_agent_submissions
 			 SET status = 'error', completed_at = ?, error = ?
-			 WHERE sequence = ? AND kind = 'dispatch' AND status = 'queued'`,
+			 WHERE sequence = ? AND kind = 'dispatch' AND status = ?`,
 			Date.now(),
 			error instanceof Error ? error.message : String(error),
 			sequence,
+			status,
 		);
 	}
 
@@ -265,7 +396,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		return this.sql
 			.exec(
 				`SELECT sequence, submission_id, session, session_key, kind, payload, status,
-				        accepted_at, completed_at, error
+				        accepted_at, attempt_id, started_at, completed_at, error
 				 FROM flue_agent_submissions
 				 WHERE submission_id = ? AND kind = 'dispatch'
 				 LIMIT 1`,
@@ -283,8 +414,15 @@ function parseDispatchSubmission(row: SqlRow): SqlAgentDispatchSubmission {
 		typeof row.session_key !== 'string' ||
 		row.kind !== 'dispatch' ||
 		typeof row.payload !== 'string' ||
-		(row.status !== 'queued' && row.status !== 'completed' && row.status !== 'error') ||
-		typeof row.accepted_at !== 'number'
+		(row.status !== 'queued' &&
+			row.status !== 'running' &&
+			row.status !== 'completed' &&
+			row.status !== 'error') ||
+		typeof row.accepted_at !== 'number' ||
+		(row.attempt_id !== null && row.attempt_id !== undefined && typeof row.attempt_id !== 'string') ||
+		(row.started_at !== null && row.started_at !== undefined && typeof row.started_at !== 'number') ||
+		(row.status === 'running' &&
+			(typeof row.attempt_id !== 'string' || typeof row.started_at !== 'number'))
 	) {
 		throw new Error('[flue] Persisted dispatch submission row is malformed.');
 	}
@@ -313,6 +451,8 @@ function parseDispatchSubmission(row: SqlRow): SqlAgentDispatchSubmission {
 		input,
 		status: row.status,
 		acceptedAt: row.accepted_at,
+		...(typeof row.attempt_id === 'string' ? { attemptId: row.attempt_id } : {}),
+		...(typeof row.started_at === 'number' ? { startedAt: row.started_at } : {}),
 		...(typeof row.completed_at === 'number' ? { completedAt: row.completed_at } : {}),
 		...(typeof row.error === 'string' ? { error: row.error } : {}),
 	};
