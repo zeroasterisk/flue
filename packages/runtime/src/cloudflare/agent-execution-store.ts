@@ -54,8 +54,7 @@ export interface SqlAgentSubmissionStore {
 	hasUnsettledSubmissions(): boolean;
 	listRunnableSubmissions(): SqlAgentSubmission[];
 	listRunningSubmissions(): SqlAgentSubmission[];
-	beginSessionDeletion(sessionKey: string): void;
-	finishSessionDeletion(sessionKey: string): void;
+	deleteSession(sessionKey: string, deleteSessionTree: () => Promise<void>): Promise<void>;
 	cleanupTerminalSubmissions(completedBefore: number, limit?: number): number;
 	claimSubmission(submissionId: string, attemptId: string): SqlAgentSubmission | null;
 	markSubmissionInputApplied(submissionId: string, attemptId: string): SqlAgentSubmission | null;
@@ -146,6 +145,8 @@ class SqlSessionStore implements SessionStore {
 }
 
 class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
+	private pendingSessionDeletions = new Map<string, Promise<void>>();
+
 	constructor(
 		private sql: SqlStorage,
 		private transactionSync: NonNullable<DurableObjectStorage['transactionSync']>,
@@ -224,7 +225,19 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		);
 	}
 
-	beginSessionDeletion(sessionKey: string): void {
+	deleteSession(sessionKey: string, deleteSessionTree: () => Promise<void>): Promise<void> {
+		const pending = this.pendingSessionDeletions.get(sessionKey);
+		if (pending) return pending;
+		const deletion = this.runSessionDeletion(sessionKey, deleteSessionTree);
+		this.pendingSessionDeletions.set(sessionKey, deletion);
+		void deletion.then(
+			() => this.clearPendingSessionDeletion(sessionKey, deletion),
+			() => this.clearPendingSessionDeletion(sessionKey, deletion),
+		);
+		return deletion;
+	}
+
+	private async runSessionDeletion(sessionKey: string, deleteSessionTree: () => Promise<void>): Promise<void> {
 		this.transactionSync(() => {
 			const active = this.sql
 				.exec(
@@ -246,9 +259,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 				Date.now(),
 			);
 		});
-	}
-
-	finishSessionDeletion(sessionKey: string): void {
+		await deleteSessionTree();
 		this.transactionSync(() => {
 			this.sql.exec(
 				`INSERT OR IGNORE INTO flue_agent_dispatch_receipts (dispatch_id, accepted_at, settled_at)
@@ -264,6 +275,12 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 			);
 			this.sql.exec('DELETE FROM flue_agent_session_deletions WHERE session_key = ?', sessionKey);
 		});
+	}
+
+	private clearPendingSessionDeletion(sessionKey: string, deletion: Promise<void>): void {
+		if (this.pendingSessionDeletions.get(sessionKey) === deletion) {
+			this.pendingSessionDeletions.delete(sessionKey);
+		}
 	}
 
 	cleanupTerminalSubmissions(completedBefore: number, limit = 100): number {

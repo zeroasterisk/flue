@@ -188,9 +188,8 @@ export class Harness implements FlueHarness {
 				return;
 			}
 			const storageKey = createSessionStorageKey(this.instanceId, this.name, sessionName);
-			this.sessionDeletionCoordinator?.begin(storageKey);
-			await deleteSessionTree(this.store, storageKey);
-			this.sessionDeletionCoordinator?.finish(storageKey);
+			const deleteTree = () => deleteSessionTree(this.store, storageKey);
+			await (this.sessionDeletionCoordinator?.(storageKey, deleteTree) ?? deleteTree());
 		});
 	}
 

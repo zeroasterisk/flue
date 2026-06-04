@@ -48,10 +48,10 @@ export interface FlueContextConfig {
 	sessionDeletionCoordinator?: SessionDeletionCoordinator;
 }
 
-export interface SessionDeletionCoordinator {
-	begin(storageKey: string): void;
-	finish(storageKey: string): void;
-}
+export type SessionDeletionCoordinator = (
+	storageKey: string,
+	deleteSessionTree: () => Promise<void>,
+) => Promise<void>;
 
 /** Extends FlueContext with server-only methods. Agent handlers only see FlueContext. */
 export interface FlueContextInternal extends FlueContext {

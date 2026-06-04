@@ -375,10 +375,8 @@ function createAgentContextForRequest(executionStore, id, payload, doInstance, r
     createDefaultEnv,
     defaultStore: executionStore.sessions,
     resolveSandbox,
-    sessionDeletionCoordinator: {
-      begin: (sessionKey) => executionStore.submissions.beginSessionDeletion(sessionKey),
-      finish: (sessionKey) => executionStore.submissions.finishSessionDeletion(sessionKey),
-    },
+    sessionDeletionCoordinator: (sessionKey, deleteSessionTree) =>
+      executionStore.submissions.deleteSession(sessionKey, deleteSessionTree),
   });
 }
 

@@ -358,35 +358,85 @@ describe('createSqlAgentExecutionStore()', () => {
 		});
 	});
 
-	it('rejects session deletion while durable submissions are queued or running', () => {
+	it('rejects session deletion while durable submissions are queued or running', async () => {
 		const { sql, transactionSync } = makeFakeSql();
 		const store = createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent');
 		store.submissions.admitDispatch(dispatchInput());
 
-		expect(() =>
-			store.submissions.beginSessionDeletion('agent-session:["agent-1","default","default"]'),
-		).toThrow('Session cannot be deleted while durable agent submissions are queued or running.');
+		await expect(
+			store.submissions.deleteSession('agent-session:["agent-1","default","default"]', async () => {}),
+		).rejects.toThrow('Session cannot be deleted while durable agent submissions are queued or running.');
 
 		store.submissions.claimSubmission('dispatch-1', 'attempt-1');
-		expect(() =>
-			store.submissions.beginSessionDeletion('agent-session:["agent-1","default","default"]'),
-		).toThrow('Session cannot be deleted while durable agent submissions are queued or running.');
+		await expect(
+			store.submissions.deleteSession('agent-session:["agent-1","default","default"]', async () => {}),
+		).rejects.toThrow('Session cannot be deleted while durable agent submissions are queued or running.');
 	});
 
-	it('blocks new submissions until session deletion completes', () => {
+	it('blocks new submissions until session deletion completes', async () => {
+		const { sql, transactionSync } = makeFakeSql();
+		const store = createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent');
+		const sessionKey = 'agent-session:["agent-1","default","default"]';
+		let releaseDeletion: () => void = () => {};
+		const deletionReleased = new Promise<void>((resolve) => {
+			releaseDeletion = resolve;
+		});
+
+		const deletion = store.submissions.deleteSession(sessionKey, () => deletionReleased);
+		expect(() => store.submissions.admitDispatch(dispatchInput())).toThrow(
+			'Durable agent submission admission is unavailable while this session is being deleted.',
+		);
+		releaseDeletion();
+		await deletion;
+		expect(store.submissions.admitDispatch(dispatchInput())).toMatchObject({ status: 'queued' });
+	});
+
+	it('shares session deletion work while snapshot deletion is in progress', async () => {
+		const { sql, transactionSync } = makeFakeSql();
+		const store = createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent');
+		const sessionKey = 'agent-session:["agent-1","default","default"]';
+		let releaseDeletion: () => void = () => {};
+		const deletionReleased = new Promise<void>((resolve) => {
+			releaseDeletion = resolve;
+		});
+		let deletionCalls = 0;
+
+		const first = store.submissions.deleteSession(sessionKey, async () => {
+			deletionCalls += 1;
+			await deletionReleased;
+		});
+		const second = store.submissions.deleteSession(sessionKey, async () => {
+			deletionCalls += 1;
+		});
+
+		expect(second).toBe(first);
+		expect(deletionCalls).toBe(1);
+		expect(() => store.submissions.admitDispatch(dispatchInput())).toThrow(
+			'Durable agent submission admission is unavailable while this session is being deleted.',
+		);
+		releaseDeletion();
+		await Promise.all([first, second]);
+		expect(store.submissions.admitDispatch(dispatchInput())).toMatchObject({ status: 'queued' });
+	});
+
+	it('keeps new submissions blocked when session snapshot deletion fails', async () => {
 		const { sql, transactionSync } = makeFakeSql();
 		const store = createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent');
 		const sessionKey = 'agent-session:["agent-1","default","default"]';
 
-		store.submissions.beginSessionDeletion(sessionKey);
+		await expect(
+			store.submissions.deleteSession(sessionKey, async () => {
+				throw new Error('snapshot deletion failed');
+			}),
+		).rejects.toThrow('snapshot deletion failed');
 		expect(() => store.submissions.admitDispatch(dispatchInput())).toThrow(
 			'Durable agent submission admission is unavailable while this session is being deleted.',
 		);
-		store.submissions.finishSessionDeletion(sessionKey);
+		await expect(store.submissions.deleteSession(sessionKey, async () => {})).resolves.toBeUndefined();
 		expect(store.submissions.admitDispatch(dispatchInput())).toMatchObject({ status: 'queued' });
 	});
 
-	it('clears terminal rows when a settled session is deleted', () => {
+	it('clears terminal rows when a settled session is deleted', async () => {
 		const { db, sql, transactionSync } = makeFakeSql();
 		const store = createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent');
 		const sessionKey = 'agent-session:["agent-1","default","default"]';
@@ -394,8 +444,7 @@ describe('createSqlAgentExecutionStore()', () => {
 		store.submissions.claimSubmission('dispatch-1', 'attempt-1');
 		store.submissions.completeSubmission('dispatch-1', 'attempt-1');
 
-		store.submissions.beginSessionDeletion(sessionKey);
-		store.submissions.finishSessionDeletion(sessionKey);
+		await store.submissions.deleteSession(sessionKey, async () => {});
 
 		expect(store.submissions.getSubmission('dispatch-1')).toBeNull();
 		expect(
@@ -408,15 +457,14 @@ describe('createSqlAgentExecutionStore()', () => {
 		});
 	});
 
-	it('rejects replay admission transactionally when deletion retained the dispatch receipt', () => {
+	it('rejects replay admission transactionally when deletion retained the dispatch receipt', async () => {
 		const { sql, transactionSync } = makeFakeSql();
 		const store = createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent');
 		const sessionKey = 'agent-session:["agent-1","default","default"]';
 		store.submissions.admitDispatch(dispatchInput());
 		store.submissions.claimSubmission('dispatch-1', 'attempt-1');
 		store.submissions.completeSubmission('dispatch-1', 'attempt-1');
-		store.submissions.beginSessionDeletion(sessionKey);
-		store.submissions.finishSessionDeletion(sessionKey);
+		await store.submissions.deleteSession(sessionKey, async () => {});
 
 		try {
 			store.submissions.admitDispatch(dispatchInput());

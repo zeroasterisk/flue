@@ -35,6 +35,11 @@ describe('CloudflarePlugin', () => {
   }`,
 		);
 		expect(entry).not.toContain('createSqlAgentExecutionStore');
+		expect(entry).toContain(
+			'executionStore.submissions.deleteSession(sessionKey, deleteSessionTree)',
+		);
+		expect(entry).not.toContain('beginSessionDeletion');
+		expect(entry).not.toContain('finishSessionDeletion');
 		expect(entry).toContain('const memoryWorkflowSessionStore = new InMemorySessionStore();');
 		expect(entry).toContain(
 			'const defaultStore = sql ? createSqlSessionStore(sql) : memoryWorkflowSessionStore;',

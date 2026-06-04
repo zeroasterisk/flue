@@ -1128,10 +1128,11 @@ export class Session implements FlueSession {
 		}
 		this.deleted = true;
 		this.deletionPromise = Promise.resolve()
-			.then(() => this.sessionDeletionCoordinator?.begin(this.storageKey))
-			.then(() => deleteSessionTree(this.store, this.storageKey))
 			.then(() => {
-				this.sessionDeletionCoordinator?.finish(this.storageKey);
+				const deleteTree = () => deleteSessionTree(this.store, this.storageKey);
+				return this.sessionDeletionCoordinator?.(this.storageKey, deleteTree) ?? deleteTree();
+			})
+			.then(() => {
 				this.onDelete?.();
 			})
 			.catch((error) => {
