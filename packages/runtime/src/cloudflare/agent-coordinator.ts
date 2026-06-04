@@ -228,8 +228,7 @@ class CloudflareAgentCoordinator {
 				handler,
 				createContext: (_id, _runId, payload, req, initialEventIndex, dispatchId) =>
 					this.createContext(payload, req, initialEventIndex, dispatchId),
-				admitAttachedSubmission: (payload, _req, onEvent) =>
-					this.admitAttachedSubmission(payload, onEvent),
+				admitAttachedSubmission: (payload, onEvent) => this.admitAttachedSubmission(payload, onEvent),
 			}),
 		);
 	}
@@ -256,8 +255,7 @@ class CloudflareAgentCoordinator {
 				request: socketRequest(connection),
 				handler,
 				createContext: (_id, _runId, payload, req) => this.createContext(payload, req),
-				admitAttachedSubmission: (payload, _req, onEvent) =>
-					this.admitAttachedSubmission(payload, onEvent),
+				admitAttachedSubmission: (payload, onEvent) => this.admitAttachedSubmission(payload, onEvent),
 			}),
 		);
 	}

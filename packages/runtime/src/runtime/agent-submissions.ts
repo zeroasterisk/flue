@@ -65,7 +65,6 @@ interface AgentSubmissionObserverRegistry {
 
 export type AttachedAgentSubmissionAdmission = (
 	payload: DirectAgentPayload,
-	request: Request,
 	onEvent?: (event: AttachedAgentEvent) => Promise<void> | void,
 ) => Promise<unknown>;
 
@@ -134,10 +133,13 @@ export function agentSubmissionDispatchInput(input: DispatchAgentSubmissionInput
 export function createAgentSubmissionObserverRegistry(): AgentSubmissionObserverRegistry {
 	const observers = new Map<
 		string,
-		Set<AgentSubmissionObserver & { resolve(value: unknown): void; reject(error: unknown): void }>
+		AgentSubmissionObserver & { resolve(value: unknown): void; reject(error: unknown): void }
 	>();
 	return {
 		attach(submissionId, observer) {
+			if (observers.has(submissionId)) {
+				throw new Error('[flue] Internal agent submission observer is already attached.');
+			}
 			let resolve!: (value: unknown) => void;
 			let reject!: (error: unknown) => void;
 			const completion = new Promise<unknown>((resolve_, reject_) => {
@@ -145,30 +147,25 @@ export function createAgentSubmissionObserverRegistry(): AgentSubmissionObserver
 				reject = reject_;
 			});
 			const attached = { ...observer, resolve, reject };
-			const bucket = observers.get(submissionId) ?? new Set();
-			bucket.add(attached);
-			observers.set(submissionId, bucket);
+			observers.set(submissionId, attached);
 			return {
 				completion,
 				detach() {
-					bucket.delete(attached);
-					if (bucket.size === 0) observers.delete(submissionId);
+					if (observers.get(submissionId) === attached) observers.delete(submissionId);
 				},
 			};
 		},
 		async publish(submissionId, event) {
-			for (const observer of observers.get(submissionId) ?? []) {
-				try {
-					await observer.onEvent?.(event);
-				} catch {}
-			}
+			try {
+				await observers.get(submissionId)?.onEvent?.(event);
+			} catch {}
 		},
 		complete(submissionId, result) {
-			for (const observer of observers.get(submissionId) ?? []) observer.resolve(result);
+			observers.get(submissionId)?.resolve(result);
 			observers.delete(submissionId);
 		},
 		fail(submissionId, error) {
-			for (const observer of observers.get(submissionId) ?? []) observer.reject(error);
+			observers.get(submissionId)?.reject(error);
 			observers.delete(submissionId);
 		},
 	};

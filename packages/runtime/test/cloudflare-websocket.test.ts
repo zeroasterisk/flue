@@ -122,7 +122,7 @@ describe('Cloudflare agent WebSockets', () => {
 					return null;
 				},
 				createContext,
-				admitAttachedSubmission: async (payload, _request, onEvent) => {
+				admitAttachedSubmission: async (payload, onEvent) => {
 					calls.push(`admit:${payload.message}`);
 					await onEvent?.({ type: 'idle', instanceId: 'agent-instance-1' });
 					return 'done';
@@ -156,7 +156,7 @@ describe('Cloudflare agent WebSockets', () => {
 				request: new Request('https://example.com/flue/agents/assistant/agent-instance-1'),
 				handler: async () => null,
 				createContext,
-				admitAttachedSubmission: async (_payload, _request, onEvent) => {
+				admitAttachedSubmission: async (_payload, onEvent) => {
 					calls.push('admitted');
 					await onEvent?.({ type: 'idle', instanceId: 'agent-instance-1' });
 					calls.push('completed');

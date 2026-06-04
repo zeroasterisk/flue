@@ -685,7 +685,7 @@ async function runDirectSyncMode(opts: DirectAttachedOptions): Promise<Response>
 
 export async function invokeDirectAttached(opts: DirectAttachedOptions): Promise<unknown> {
 	if (opts.admitAttachedSubmission) {
-		return opts.admitAttachedSubmission(opts.payload, opts.request, opts.onEvent);
+		return opts.admitAttachedSubmission(opts.payload, opts.onEvent);
 	}
 	const sessionLock = acquireDirectAgentSessionLock(opts.agentName, opts.id, opts.payload);
 	try {
