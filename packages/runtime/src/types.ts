@@ -503,8 +503,6 @@ export interface AgentRuntimeConfig {
 	cwd?: string;
 	/** Sandbox factory used to construct the initialized environment. */
 	sandbox?: false | SandboxFactory | BashFactory;
-	/** Conversation-state store used by initialized sessions. */
-	persist?: SessionStore;
 }
 
 /** Options for {@link FlueContext.init}. */

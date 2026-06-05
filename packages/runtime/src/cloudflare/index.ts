@@ -39,7 +39,6 @@ export {
 export type { CloudflareGatewayOptions } from './gateway.ts';
 export { FlueRegistry } from './registry-do.ts';
 export { createCloudflareRunRegistry } from './run-registry.ts';
-export { store } from './session-store.ts';
 export type {
 	CloudflareWebSocketAttachment,
 	CloudflareWebSocketConnection,

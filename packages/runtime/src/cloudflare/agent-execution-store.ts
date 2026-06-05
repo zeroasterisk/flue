@@ -1,3 +1,17 @@
+import type {
+	AgentDispatchAdmission,
+	AgentDispatchReceipt,
+	AgentExecutionStore,
+	AgentSubmission,
+	AgentSubmissionStore,
+	AgentTurnJournal,
+	AgentTurnJournalPhase,
+	CreateTurnJournalInput,
+	SqlStorage,
+	SubmissionAttemptRef,
+} from '../agent-execution-store.ts';
+
+type SqlRow = Record<string, unknown>;
 import {
 	type AgentSubmissionInput,
 	createDispatchAgentSubmissionInput,
@@ -8,127 +22,9 @@ import type { DispatchInput } from '../runtime/dispatch-queue.ts';
 import { createSessionStorageKey } from '../session-identity.ts';
 import type { SessionData, SessionStore } from '../types.ts';
 
-interface SqlResult {
-	toArray(): SqlRow[];
-}
-
-type SqlRow = Record<string, unknown>;
-
-interface SqlStorage {
-	exec(query: string, ...bindings: unknown[]): SqlResult;
-}
-
 interface DurableObjectStorage {
 	readonly sql?: SqlStorage;
 	transactionSync?<T>(closure: () => T): T;
-}
-
-type SqlAgentSubmissionStatus = 'queued' | 'running' | 'recording_interruption' | 'settled';
-
-interface SqlAgentDispatchReceipt {
-	readonly submissionId: string;
-	readonly acceptedAt: number;
-}
-
-type SqlAgentDispatchAdmission =
-	| { readonly kind: 'submission'; readonly submission: SqlAgentSubmission }
-	| { readonly kind: 'retained_receipt'; readonly receipt: SqlAgentDispatchReceipt }
-	| { readonly kind: 'conflict' };
-
-export interface SubmissionAttemptRef {
-	readonly submissionId: string;
-	readonly attemptId: string;
-}
-
-export interface SqlAgentSubmission {
-	readonly sequence: number;
-	readonly submissionId: string;
-	readonly sessionKey: string;
-	readonly kind: 'dispatch' | 'direct';
-	readonly input: AgentSubmissionInput;
-	readonly status: SqlAgentSubmissionStatus;
-	readonly acceptedAt: number;
-	readonly attemptId?: string;
-	readonly inputAppliedAt?: number;
-	readonly recoveryRequestedAt?: number;
-	readonly startedAt?: number;
-	readonly error?: string;
-}
-
-type SqlAgentTurnJournalPhase =
-	| 'before_provider'
-	| 'provider_started'
-	| 'tool_request_recorded'
-	| 'committed';
-
-interface SqlAgentTurnJournal {
-	readonly submissionId: string;
-	readonly sessionKey: string;
-	readonly kind: 'dispatch' | 'direct';
-	readonly attemptId: string;
-	readonly operationId: string;
-	readonly turnId: string;
-	readonly recoveryRootId: string;
-	readonly phase: SqlAgentTurnJournalPhase;
-	readonly revision: number;
-	readonly createdAt: number;
-	readonly updatedAt: number;
-	readonly lastProgressAt: number;
-	readonly checkpointLeafId?: string;
-	readonly streamHighWater?: string;
-	readonly toolRequest?: unknown;
-	readonly toolState?: unknown;
-	readonly committed: boolean;
-	readonly committedLeafId?: string;
-}
-
-interface CreateTurnJournalInput {
-	readonly submissionId: string;
-	readonly sessionKey: string;
-	readonly kind: 'dispatch' | 'direct';
-	readonly attemptId: string;
-	readonly operationId: string;
-	readonly turnId: string;
-	readonly recoveryRootId: string;
-	readonly phase: SqlAgentTurnJournalPhase;
-	readonly checkpointLeafId?: string;
-	readonly streamHighWater?: string;
-	readonly toolRequest?: unknown;
-	readonly toolState?: unknown;
-}
-
-export interface SqlAgentSubmissionStore {
-	getSubmission(submissionId: string): SqlAgentSubmission | null;
-	getTurnJournal(submissionId: string): SqlAgentTurnJournal | null;
-	beginTurnJournal(input: CreateTurnJournalInput): boolean;
-	updateTurnJournalPhase(
-		attempt: SubmissionAttemptRef,
-		phase: SqlAgentTurnJournalPhase,
-		options?: { checkpointLeafId?: string; streamHighWater?: string; toolRequest?: unknown; toolState?: unknown },
-	): boolean;
-	commitTurnJournal(attempt: SubmissionAttemptRef, committedLeafId: string): boolean;
-	replaceTurnJournalAttempt(attempt: SubmissionAttemptRef, nextAttemptId: string): SqlAgentSubmission | null;
-	cleanupCommittedTurnJournals(committedBefore: number, limit?: number): number;
-	admitDispatch(input: DispatchInput): SqlAgentDispatchAdmission;
-	admitDirect(input: DirectAgentSubmissionInput): SqlAgentSubmission;
-	hasUnsettledSubmissions(): boolean;
-	listRunnableSubmissions(): SqlAgentSubmission[];
-	listRunningSubmissions(): SqlAgentSubmission[];
-	deleteSession(sessionKey: string, deleteSessionTree: () => Promise<void>): Promise<void>;
-	cleanupTerminalSubmissions(completedBefore: number, limit?: number): number;
-	claimSubmission(attempt: SubmissionAttemptRef): SqlAgentSubmission | null;
-	markSubmissionInputApplied(attempt: SubmissionAttemptRef): boolean;
-	requestSubmissionRecovery(attempt: SubmissionAttemptRef): boolean;
-	requeueSubmissionBeforeInputApplied(attempt: SubmissionAttemptRef): boolean;
-	beginSubmissionInterruptionRecording(attempt: SubmissionAttemptRef): boolean;
-	completeSubmission(attempt: SubmissionAttemptRef): boolean;
-	failSubmission(attempt: SubmissionAttemptRef, error: unknown): boolean;
-	finishSubmissionInterruptionRecording(attempt: SubmissionAttemptRef, error: unknown): boolean;
-}
-
-export interface SqlAgentExecutionStore {
-	readonly sessions: SessionStore;
-	readonly submissions: SqlAgentSubmissionStore;
 }
 
 export function createSqlSessionStore(sql: SqlStorage): SessionStore {
@@ -136,10 +32,27 @@ export function createSqlSessionStore(sql: SqlStorage): SessionStore {
 	return new SqlSessionStore(sql);
 }
 
+/**
+ * Initialize an {@link AgentExecutionStore} from raw SQL primitives.
+ * Used by both Cloudflare (DO SQLite) and Node (`node:sqlite`).
+ */
+export function createSqlAgentExecutionStoreFromSql(
+	sql: SqlStorage,
+	runTransaction: <T>(closure: () => T) => T,
+): AgentExecutionStore {
+	const sessions = createSqlSessionStore(sql);
+	ensureSubmissionTable(sql);
+	ensureTurnJournalTable(sql);
+	return {
+		sessions,
+		submissions: new AgentSubmissionStoreImpl(sql, runTransaction),
+	};
+}
+
 export function createSqlAgentExecutionStore(
 	storage: DurableObjectStorage | undefined,
 	className: string,
-): SqlAgentExecutionStore {
+): AgentExecutionStore {
 	const sql = storage?.sql;
 	const transactionSync = storage?.transactionSync;
 	if (!sql || typeof sql.exec !== 'function' || typeof transactionSync !== 'function') {
@@ -151,14 +64,8 @@ export function createSqlAgentExecutionStore(
 		);
 	}
 	try {
-		const sessions = createSqlSessionStore(sql);
-		ensureSubmissionTable(sql);
-		ensureTurnJournalTable(sql);
 		const runTransaction = <T>(closure: () => T): T => transactionSync.call(storage, closure) as T;
-		return {
-			sessions,
-			submissions: new SqlAgentSubmissionStoreImpl(sql, runTransaction),
-		};
+		return createSqlAgentExecutionStoreFromSql(sql, runTransaction);
 	} catch (cause) {
 		const detail = cause instanceof Error ? cause.message : String(cause);
 		throw new Error(
@@ -194,7 +101,7 @@ class SqlSessionStore implements SessionStore {
 	}
 }
 
-class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
+class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 	private pendingSessionDeletions = new Map<string, Promise<void>>();
 
 	constructor(
@@ -202,12 +109,12 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		private transactionSync: NonNullable<DurableObjectStorage['transactionSync']>,
 	) {}
 
-	getSubmission(submissionId: string): SqlAgentSubmission | null {
+	getSubmission(submissionId: string): AgentSubmission | null {
 		const row = this.readSubmissionRow(submissionId);
 		return row ? parseSubmission(row) : null;
 	}
 
-	getTurnJournal(submissionId: string): SqlAgentTurnJournal | null {
+	getTurnJournal(submissionId: string): AgentTurnJournal | null {
 		const row = this.sql
 			.exec(
 				`SELECT submission_id, session_key, kind, attempt_id, operation_id, turn_id, recovery_root_id,
@@ -270,7 +177,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 
 	updateTurnJournalPhase(
 		attempt: SubmissionAttemptRef,
-		phase: SqlAgentTurnJournalPhase,
+		phase: AgentTurnJournalPhase,
 		options: { checkpointLeafId?: string; streamHighWater?: string; toolRequest?: unknown; toolState?: unknown } = {},
 	): boolean {
 		const now = Date.now();
@@ -319,7 +226,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		);
 	}
 
-	replaceTurnJournalAttempt(attempt: SubmissionAttemptRef, nextAttemptId: string): SqlAgentSubmission | null {
+	replaceTurnJournalAttempt(attempt: SubmissionAttemptRef, nextAttemptId: string): AgentSubmission | null {
 		const row = this.sql
 			.exec(
 				`UPDATE flue_agent_submissions
@@ -374,7 +281,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		return rows.length;
 	}
 
-	private getDispatchReceipt(submissionId: string): SqlAgentDispatchReceipt | null {
+	private getDispatchReceipt(submissionId: string): AgentDispatchReceipt | null {
 		const row = this.sql
 			.exec(
 				'SELECT dispatch_id, accepted_at FROM flue_agent_dispatch_receipts WHERE dispatch_id = ? LIMIT 1',
@@ -388,11 +295,11 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		return { submissionId: row.dispatch_id, acceptedAt: row.accepted_at };
 	}
 
-	admitDispatch(input: DispatchInput): SqlAgentDispatchAdmission {
+	admitDispatch(input: DispatchInput): AgentDispatchAdmission {
 		return this.admitSubmission(createDispatchAgentSubmissionInput(input));
 	}
 
-	admitDirect(input: DirectAgentSubmissionInput): SqlAgentSubmission {
+	admitDirect(input: DirectAgentSubmissionInput): AgentSubmission {
 		const admission = this.admitSubmission(input);
 		if (admission.kind !== 'submission') {
 			throw new Error('[flue] Internal direct admission returned an unexpected result.');
@@ -413,7 +320,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		);
 	}
 
-	listRunnableSubmissions(): SqlAgentSubmission[] {
+	listRunnableSubmissions(): AgentSubmission[] {
 		const rows = this.sql
 			.exec(
 				`SELECT ${submissionColumnsFor('current')}
@@ -432,7 +339,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		return this.parseOperationalRows(rows, 'queued');
 	}
 
-	listRunningSubmissions(): SqlAgentSubmission[] {
+	listRunningSubmissions(): AgentSubmission[] {
 		return this.parseOperationalRows(
 			this.sql
 				.exec(
@@ -545,7 +452,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		return rows.length;
 	}
 
-	claimSubmission(attempt: SubmissionAttemptRef): SqlAgentSubmission | null {
+	claimSubmission(attempt: SubmissionAttemptRef): AgentSubmission | null {
 		const row = this.sql
 			.exec(
 				`UPDATE flue_agent_submissions AS current
@@ -656,7 +563,7 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 		);
 	}
 
-	private admitSubmission(input: AgentSubmissionInput): SqlAgentDispatchAdmission {
+	private admitSubmission(input: AgentSubmissionInput): AgentDispatchAdmission {
 		const { kind, submissionId } = input;
 		const payload = JSON.stringify(input);
 		const acceptedAt = parseAcceptedAt(input.acceptedAt, `${kind} admission`);
@@ -696,8 +603,8 @@ class SqlAgentSubmissionStoreImpl implements SqlAgentSubmissionStore {
 	private parseOperationalRows(
 		rows: SqlRow[],
 		status: 'queued' | 'active',
-	): SqlAgentSubmission[] {
-		const submissions: SqlAgentSubmission[] = [];
+	): AgentSubmission[] {
+		const submissions: AgentSubmission[] = [];
 		for (const row of rows) {
 			try {
 				submissions.push(parseSubmission(row));
@@ -743,7 +650,7 @@ function submissionColumnsFor(table: string): string {
 		.join(', ');
 }
 
-function parseTurnJournal(row: SqlRow): SqlAgentTurnJournal {
+function parseTurnJournal(row: SqlRow): AgentTurnJournal {
 	if (
 		typeof row.submission_id !== 'string' ||
 		typeof row.session_key !== 'string' ||
@@ -789,7 +696,7 @@ function parseTurnJournal(row: SqlRow): SqlAgentTurnJournal {
 	};
 }
 
-function parseSubmission(row: SqlRow): SqlAgentSubmission {
+function parseSubmission(row: SqlRow): AgentSubmission {
 	if (
 		typeof row.sequence !== 'number' ||
 		typeof row.submission_id !== 'string' ||

@@ -549,7 +549,6 @@ describe('dispatched session processing', () => {
 		};
 		const agent = createAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
-			persist: store,
 		}));
 		const input: DispatchInput = {
 			dispatchId: 'dispatch:input-marker-order',
@@ -573,7 +572,7 @@ describe('dispatched session processing', () => {
 				resolveModel: () => provider.getModel(),
 			},
 			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
-			defaultStore: new InMemorySessionStore(),
+			defaultStore: store,
 		});
 
 		await createAgentSubmissionHandler(agent, createDispatchAgentSubmissionInput(input), {
@@ -605,7 +604,6 @@ describe('dispatched session processing', () => {
 		};
 		const agent = createAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
-			persist: store,
 		}));
 		const input: DirectAgentSubmissionInput = {
 			kind: 'direct',
@@ -629,7 +627,7 @@ describe('dispatched session processing', () => {
 				resolveModel: () => provider.getModel(),
 			},
 			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
-			defaultStore: new InMemorySessionStore(),
+			defaultStore: store,
 		});
 
 		await createAgentSubmissionHandler(agent, input, {
@@ -663,7 +661,6 @@ describe('dispatched session processing', () => {
 		};
 		const agent = createAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
-			persist: store,
 		}));
 		const createContext = () =>
 			createFlueContext({
@@ -673,7 +670,7 @@ describe('dispatched session processing', () => {
 				req: new Request('http://flue.local/agents/moderator/guild:terminal-advisory', { method: 'POST' }),
 				agentConfig: testAgentConfig(),
 				createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
-				defaultStore: new InMemorySessionStore(),
+				defaultStore: store,
 			});
 		const terminal = {
 			submissionId: input.submissionId,
@@ -747,7 +744,6 @@ describe('dispatched session processing', () => {
 		});
 		const agent = createAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
-			persist: store,
 		}));
 		const ctx = createFlueContext({
 			id: input.id,
@@ -756,7 +752,7 @@ describe('dispatched session processing', () => {
 			req: new Request('http://flue.local/agents/moderator/guild:direct-inspect-completed', { method: 'POST' }),
 			agentConfig: testAgentConfig(),
 			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
-			defaultStore: new InMemorySessionStore(),
+			defaultStore: store,
 		});
 
 		await expect(createAgentSubmissionInspectionHandler(agent, input)(ctx)).resolves.toBe('completed');
@@ -804,7 +800,6 @@ describe('dispatched session processing', () => {
 		});
 		const agent = createAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
-			persist: store,
 		}));
 		const ctx = createFlueContext({
 			id: input.id,
@@ -814,7 +809,7 @@ describe('dispatched session processing', () => {
 			req: new Request('http://flue.local/_dispatch', { method: 'POST' }),
 			agentConfig: testAgentConfig(),
 			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
-			defaultStore: new InMemorySessionStore(),
+			defaultStore: store,
 		});
 
 		await expect(createAgentSubmissionInspectionHandler(agent, createDispatchAgentSubmissionInput(input))(ctx)).resolves.toBe('completed');
@@ -854,7 +849,6 @@ describe('dispatched session processing', () => {
 		});
 		const agent = createAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
-			persist: store,
 		}));
 		const ctx = createFlueContext({
 			id: input.id,
@@ -864,7 +858,7 @@ describe('dispatched session processing', () => {
 			req: new Request('http://flue.local/_dispatch', { method: 'POST' }),
 			agentConfig: testAgentConfig(),
 			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
-			defaultStore: new InMemorySessionStore(),
+			defaultStore: store,
 		});
 
 		await expect(createAgentSubmissionInspectionHandler(agent, createDispatchAgentSubmissionInput(input))(ctx)).resolves.toBe('uncertain');

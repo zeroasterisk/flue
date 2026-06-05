@@ -304,7 +304,6 @@ describe('custom tools', () => {
 			createAgent(() => ({
 				model: `${provider.getModel().provider}/${provider.getModel().id}`,
 				tools: [lookup],
-				persist: store,
 			})),
 		);
 		const session = await harness.session();
@@ -343,7 +342,6 @@ describe('custom tools', () => {
 			createAgent(() => ({
 				model: `${provider.getModel().provider}/${provider.getModel().id}`,
 				tools: [lookup],
-				persist: store,
 			})),
 		);
 		const session = await harness.session();

@@ -1,7 +1,7 @@
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
+import type { AgentSubmissionStore } from './agent-execution-store.ts';
 import { createCallHandle } from './abort.ts';
 import { formatBashResult } from './agent.ts';
-import type { SessionDeletionCoordinator } from './client.ts';
 import { discoverSessionContext } from './context.ts';
 import { generateSessionAffinityKey } from './runtime/ids.ts';
 import { createCwdSessionEnv, createFlueFs } from './sandbox.ts';
@@ -55,7 +55,7 @@ export class Harness implements FlueHarness {
 		private eventCallback?: FlueEventCallback,
 		private agentTools: ToolDefinition[] = [],
 		private toolFactory?: SessionToolFactory,
-		private sessionDeletionCoordinator?: SessionDeletionCoordinator,
+		private submissionStore?: AgentSubmissionStore,
 	) {
 		this.fs = createFlueFs(env);
 	}
@@ -172,7 +172,7 @@ export class Harness implements FlueHarness {
 			taskDepth: 0,
 			createTaskSession: (taskOptions) => this.createTaskSession(taskOptions),
 			onDelete: () => this.openSessions.delete(sessionName),
-			sessionDeletionCoordinator: this.sessionDeletionCoordinator,
+			submissionStore: this.submissionStore,
 		});
 		this.openSessions.set(sessionName, session);
 		return session;
@@ -189,7 +189,7 @@ export class Harness implements FlueHarness {
 			}
 			const storageKey = createSessionStorageKey(this.instanceId, this.name, sessionName);
 			const deleteTree = () => deleteSessionTree(this.store, storageKey);
-			await (this.sessionDeletionCoordinator?.(storageKey, deleteTree) ?? deleteTree());
+			await (this.submissionStore?.deleteSession(storageKey, deleteTree) ?? deleteTree());
 		});
 	}
 

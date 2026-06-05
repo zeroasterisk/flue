@@ -82,7 +82,7 @@ describe('session.prompt()', () => {
 		]);
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer`, persist: store })),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -102,7 +102,7 @@ describe('session.prompt()', () => {
 		provider.setResponses([fauxAssistantMessage('Should not be requested.')]);
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer`, persist: store })),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -125,7 +125,7 @@ describe('session.prompt()', () => {
 		provider.setResponses([fauxAssistantMessage('Should not be requested.')]);
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer`, persist: store })),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -158,7 +158,7 @@ describe('session.prompt()', () => {
 			if (event.type === 'idle') events.push('idle');
 		});
 		const harness = await ctx.init(
-			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer`, persist: store })),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -222,7 +222,7 @@ describe('session.prompt()', () => {
 				events.push(event);
 			});
 			const harness = await ctx.init(
-				createAgent(() => ({ model: `${provider.getModel().provider}/reviewer`, persist: store })),
+				createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 			);
 			const session = await harness.session();
 
@@ -309,7 +309,7 @@ describe('session.prompt()', () => {
 		const store = new RecordingSessionStore();
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer`, persist: store })),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 		await expect(session.prompt('First attempt.')).rejects.toThrow('invalid_api_key');
@@ -382,7 +382,7 @@ describe('session.prompt()', () => {
 		});
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer`, persist: store })),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -615,10 +615,7 @@ describe('session.task()', () => {
 		const store = new RecordingSessionStore();
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({
-				model: `${provider.getModel().provider}/reviewer`,
-				persist: store,
-			})),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -657,10 +654,7 @@ describe('session.task()', () => {
 		};
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({
-				model: `${provider.getModel().provider}/reviewer`,
-				persist: store,
-			})),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -686,10 +680,7 @@ describe('session.task()', () => {
 		const store = new RecordingSessionStore();
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({
-				model: `${provider.getModel().provider}/reviewer`,
-				persist: store,
-			})),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -711,10 +702,7 @@ describe('session.task()', () => {
 		const store = new RecordingSessionStore();
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({
-				model: `${provider.getModel().provider}/reviewer`,
-				persist: store,
-			})),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
 
@@ -732,12 +720,10 @@ describe('session.task()', () => {
 		const store = new RecordingSessionStore();
 		const ctx = createContext(provider, { store });
 		const harness = await ctx.init(
-			createAgent(() => ({
-				model: `${provider.getModel().provider}/reviewer`,
-				persist: store,
-			})),
+			createAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
 		);
 		const session = await harness.session();
+
 		await session.task('Review the persisted child state.');
 		const parentKey = 'agent-session:["session-operations-instance","default","default"]';
 		const unrelatedKey = 'agent-session:["session-operations-instance","default","unrelated"]';

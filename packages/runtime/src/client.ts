@@ -1,3 +1,4 @@
+import type { AgentSubmissionStore } from './agent-execution-store.ts';
 import {
 	assertResolvedAgentProfile,
 	extendAgentProfile,
@@ -45,13 +46,8 @@ export interface FlueContextConfig {
 	 */
 	req?: Request;
 	initialEventIndex?: number;
-	sessionDeletionCoordinator?: SessionDeletionCoordinator;
+	submissionStore?: AgentSubmissionStore;
 }
-
-export type SessionDeletionCoordinator = (
-	storageKey: string,
-	deleteSessionTree: () => Promise<void>,
-) => Promise<void>;
 
 /** Extends FlueContext with server-only methods. Agent handlers only see FlueContext. */
 export interface FlueContextInternal extends FlueContext {
@@ -194,7 +190,7 @@ export function createFlueContext(config: FlueContextConfig): FlueContextInterna
 				const env = resolvedOptions.cwd
 					? createCwdSessionEnv(baseEnv, baseEnv.resolvePath(resolvedOptions.cwd))
 					: baseEnv;
-				const store: SessionStore = resolvedOptions.persist ?? config.defaultStore;
+				const store: SessionStore = config.defaultStore;
 				const localContext = await discoverSessionContext(
 					env,
 					definition.instructions,
@@ -232,7 +228,7 @@ export function createFlueContext(config: FlueContextConfig): FlueContextInterna
 					},
 					definition.tools,
 					toolFactory,
-					config.sessionDeletionCoordinator,
+					config.submissionStore,
 				);
 			} catch (error) {
 				initializedHarnessNames.delete(name);

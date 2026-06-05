@@ -59,7 +59,7 @@ import {
   Bash,
   InMemoryFs,
   createFlueContext,
-  InMemorySessionStore,
+  createNodeAgentExecutionStore,
   InMemoryRunStore,
   InMemoryRunRegistry,
   createRunSubscriberRegistry,
@@ -118,14 +118,15 @@ async function createDefaultEnv() {
   }));
 }
 
-// Default persistence store for Node — in-memory, process lifetime.
-const defaultStore = new InMemorySessionStore();
+// Default persistence for Node — in-memory SQLite, process lifetime.
+const executionStore = createNodeAgentExecutionStore();
 const runStore = new InMemoryRunStore();
 const runRegistry = new InMemoryRunRegistry();
 const runSubscribers = createRunSubscriberRegistry();
 const dispatchQueue = new InMemoryDispatchQueue(createAgentDispatchProcessor({
   agents: createdAgents,
   createContext: createContextForRequest,
+  submissions: executionStore.submissions,
 }));
 
 function createContextForRequest(id, runId, payload, req, initialEventIndex, dispatchId) {
@@ -141,7 +142,8 @@ function createContextForRequest(id, runId, payload, req, initialEventIndex, dis
       systemPrompt, skills, packagedSkills, model: undefined, resolveModel,
     },
     createDefaultEnv,
-    defaultStore,
+    defaultStore: executionStore.sessions,
+    submissionStore: executionStore.submissions,
   });
 }
 

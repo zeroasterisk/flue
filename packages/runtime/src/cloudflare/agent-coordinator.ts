@@ -1,3 +1,9 @@
+import type {
+	AgentExecutionStore,
+	AgentSubmission,
+	AgentSubmissionStore,
+	SubmissionAttemptRef,
+} from '../agent-execution-store.ts';
 import type { FlueContextInternal } from '../client.ts';
 import {
 	agentSubmissionContextPayload,
@@ -11,13 +17,7 @@ import {
 } from '../runtime/agent-submissions.ts';
 import { type AgentHandler, assertAgentDispatchAdmissionInput, handleAgentRequest } from '../runtime/handle-agent.ts';
 import type { AttachedAgentEvent, DirectAgentPayload } from '../types.ts';
-import {
-	createSqlAgentExecutionStore,
-	type SqlAgentExecutionStore,
-	type SqlAgentSubmission,
-	type SqlAgentSubmissionStore,
-	type SubmissionAttemptRef,
-} from './agent-execution-store.ts';
+import { createSqlAgentExecutionStore } from './agent-execution-store.ts';
 import {
 	type CloudflareWebSocketConnection,
 	connectCloudflareAgentWebSocket,
@@ -71,7 +71,7 @@ interface CloudflareAgentRecoveredFiberContext {
 
 interface CloudflareAgentPreparedCoordinator {
 	readonly agentName: string;
-	readonly executionStore: SqlAgentExecutionStore;
+	readonly executionStore: AgentExecutionStore;
 }
 
 interface CloudflareAgentRuntimeOptions {
@@ -79,7 +79,7 @@ interface CloudflareAgentRuntimeOptions {
 	readonly directHandlers: Record<string, AgentHandler>;
 	readonly websocketAgentHandlers: Record<string, AgentHandler>;
 	readonly createContext: (options: {
-		readonly executionStore: SqlAgentExecutionStore;
+		readonly executionStore: AgentExecutionStore;
 		readonly instance: CloudflareAgentInstance;
 		readonly payload: unknown;
 		readonly request: Request;
@@ -292,11 +292,11 @@ class CloudflareAgentCoordinator {
 		return this.prepared.agentName;
 	}
 
-	private get executionStore(): SqlAgentExecutionStore {
+	private get executionStore(): AgentExecutionStore {
 		return this.prepared.executionStore;
 	}
 
-	private get submissions(): SqlAgentSubmissionStore {
+	private get submissions(): AgentSubmissionStore {
 		return this.executionStore.submissions;
 	}
 
@@ -402,7 +402,7 @@ class CloudflareAgentCoordinator {
 	}
 
 	private logSubmissionReconciliationFailure(
-		submission: SqlAgentSubmission,
+		submission: AgentSubmission,
 		operation: 'reconcile_submission' | 'start_submission',
 		error: unknown,
 	): void {
@@ -421,7 +421,7 @@ class CloudflareAgentCoordinator {
 		);
 	}
 
-	private async reconcileInterruptedSubmission(submission: SqlAgentSubmission): Promise<void> {
+	private async reconcileInterruptedSubmission(submission: AgentSubmission): Promise<void> {
 		const { input } = submission;
 		const attempt = submissionAttemptRef(submission);
 		if (!attempt) return;
@@ -489,7 +489,7 @@ class CloudflareAgentCoordinator {
 	}
 
 	private async failInterruptedSubmission(
-		submission: SqlAgentSubmission,
+		submission: AgentSubmission,
 		reason: 'interrupted_before_input_marker' | 'interrupted_after_input_application',
 		error: Error,
 	): Promise<void> {
@@ -524,7 +524,7 @@ class CloudflareAgentCoordinator {
 		if (failed && submission.kind === 'direct') this.observers.fail(submission.submissionId, error);
 	}
 
-	private startSubmissionAttempt(submission: SqlAgentSubmission): void {
+	private startSubmissionAttempt(submission: AgentSubmission): void {
 		if (submission.status !== 'running' || !submission.attemptId) return;
 		const attemptKey = this.submissionAttemptLocalKey(submission);
 		if (this.activeAttempts.has(attemptKey)) return;
@@ -559,7 +559,7 @@ class CloudflareAgentCoordinator {
 			});
 	}
 
-	private submissionAttemptLocalKey(submission: SqlAgentSubmission): string {
+	private submissionAttemptLocalKey(submission: AgentSubmission): string {
 		return `${this.instance.ctx.id.toString()}:${submission.attemptId}`;
 	}
 
@@ -599,7 +599,7 @@ class CloudflareAgentCoordinator {
 		return { blockAll, keys };
 	}
 
-	private async processSubmission(submission: SqlAgentSubmission): Promise<void> {
+	private async processSubmission(submission: AgentSubmission): Promise<void> {
 		const { input } = submission;
 		const attempt = submissionAttemptRef(submission);
 		if (!attempt) return;
@@ -779,13 +779,13 @@ function isAttemptMarkerSnapshot(value: unknown): value is { submissionId: strin
 	return typeof snapshot.submissionId === 'string' && typeof snapshot.attemptId === 'string';
 }
 
-function submissionAttemptRef(submission: SqlAgentSubmission): SubmissionAttemptRef | undefined {
+function submissionAttemptRef(submission: AgentSubmission): SubmissionAttemptRef | undefined {
 	return submission.attemptId
 		? { submissionId: submission.submissionId, attemptId: submission.attemptId }
 		: undefined;
 }
 
-function submissionAttemptMarkerKey(submission: SqlAgentSubmission): string {
+function submissionAttemptMarkerKey(submission: AgentSubmission): string {
 	return `${submission.submissionId}:${submission.attemptId}`;
 }
 

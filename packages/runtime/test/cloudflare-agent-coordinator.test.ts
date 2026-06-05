@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FlueContextInternal } from '../src/client.ts';
 import { createCloudflareAgentRuntime } from '../src/cloudflare/agent-coordinator.ts';
-import type { SqlAgentExecutionStore } from '../src/cloudflare/agent-execution-store.ts';
+import type { AgentExecutionStore } from '../src/agent-execution-store.ts';
 import type {
 	AgentSubmissionInspection,
 	AgentSubmissionInterruption,
@@ -151,7 +151,7 @@ function dispatchInput() {
 function prepare(
 	runtime: ReturnType<typeof makeRuntime>,
 	instance: ReturnType<typeof makeInstance>,
-): SqlAgentExecutionStore {
+): AgentExecutionStore {
 	const prepared = runtime.prepare({
 		storage: instance.ctx.storage,
 		className: 'FlueAssistantAgent',

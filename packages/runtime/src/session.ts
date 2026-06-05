@@ -27,7 +27,7 @@ import {
 	type TaskToolParams,
 	type TaskToolResultDetails,
 } from './agent.ts';
-import type { SessionDeletionCoordinator } from './client.ts';
+import type { AgentSubmissionStore } from './agent-execution-store.ts';
 import {
 	type CompactionSettings,
 	type CompactionTurnHandle,
@@ -194,7 +194,7 @@ interface SessionInitOptions {
 	taskDepth?: number;
 	createTaskSession?: CreateTaskSession;
 	onDelete?: () => void;
-	sessionDeletionCoordinator?: SessionDeletionCoordinator;
+	submissionStore?: AgentSubmissionStore;
 }
 
 interface CallOverrides {
@@ -687,7 +687,7 @@ export class Session implements FlueSession {
 	private taskDepth: number;
 	private createTaskSession: CreateTaskSession | undefined;
 	private onDelete: (() => void) | undefined;
-	private sessionDeletionCoordinator: SessionDeletionCoordinator | undefined;
+	private submissionStore: AgentSubmissionStore | undefined;
 	private pendingSave: Promise<void> = Promise.resolve();
 	private harnessMessageCheckpointCursor = 0;
 	private activeCheckpointSource: MessageEntry['source'] | undefined;
@@ -755,7 +755,7 @@ export class Session implements FlueSession {
 		this.taskDepth = options.taskDepth ?? 0;
 		this.createTaskSession = options.createTaskSession;
 		this.onDelete = options.onDelete;
-		this.sessionDeletionCoordinator = options.sessionDeletionCoordinator;
+		this.submissionStore = options.submissionStore;
 
 		this.metadata = options.existingData?.metadata ?? {};
 		this.createdAt = options.existingData?.createdAt;
@@ -1202,7 +1202,7 @@ export class Session implements FlueSession {
 		this.deletionPromise = Promise.resolve()
 			.then(() => {
 				const deleteTree = () => deleteSessionTree(this.store, this.storageKey);
-				return this.sessionDeletionCoordinator?.(this.storageKey, deleteTree) ?? deleteTree();
+				return this.submissionStore?.deleteSession(this.storageKey, deleteTree) ?? deleteTree();
 			})
 			.then(() => {
 				this.onDelete?.();

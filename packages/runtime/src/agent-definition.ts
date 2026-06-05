@@ -26,7 +26,6 @@ const AGENT_RUNTIME_FIELDS = new Set([
 	'profile',
 	'cwd',
 	'sandbox',
-	'persist',
 ]);
 
 const VALID_THINKING_LEVELS = {

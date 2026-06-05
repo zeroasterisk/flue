@@ -18,6 +18,7 @@ import type {
 	FlueEvent,
 	FlueEventCallback,
 } from '../types.ts';
+import type { AgentSubmissionStore, SubmissionAttemptRef } from '../agent-execution-store.ts';
 import type { AttachedAgentSubmissionAdmission } from './agent-submissions.ts';
 import { createAgentSubmissionHandler, createDispatchAgentSubmissionInput } from './agent-submissions.ts';
 import type { DispatchInput, DispatchProcessor } from './dispatch-queue.ts';
@@ -44,6 +45,7 @@ interface AgentSessionTarget {
 export function createAgentDispatchProcessor(options: {
 	agents: Record<string, CreatedAgentHandler>;
 	createContext: CreateContextFn;
+	submissions?: AgentSubmissionStore;
 }): DispatchProcessor {
 	return {
 		async process(input) {
@@ -63,7 +65,70 @@ export function createAgentDispatchProcessor(options: {
 					undefined,
 					input.dispatchId,
 				);
-				await createAgentSubmissionHandler(agent, createDispatchAgentSubmissionInput(input))(ctx);
+				const submissionInput = createDispatchAgentSubmissionInput(input);
+				const submissions = options.submissions;
+				if (submissions) {
+					const admission = submissions.admitDispatch(input);
+					if (admission.kind !== 'submission') return;
+					const submission = admission.submission;
+					const attempt: SubmissionAttemptRef = {
+						submissionId: submission.submissionId,
+						attemptId: crypto.randomUUID(),
+					};
+					const claimed = submissions.claimSubmission(attempt);
+					if (!claimed) return;
+					let journalTurnId: string | undefined;
+					try {
+						await createAgentSubmissionHandler(agent, submissionInput, {
+							onInputApplied: () => {
+								submissions.markSubmissionInputApplied(attempt);
+							},
+							journal: {
+								beforeProvider: (state) => {
+									if (state.turnId !== journalTurnId) {
+										journalTurnId = state.turnId;
+										submissions.beginTurnJournal({
+											submissionId: submission.submissionId,
+											sessionKey: submission.sessionKey,
+											kind: submission.kind,
+											attemptId: attempt.attemptId,
+											operationId: state.operationId,
+											turnId: state.turnId,
+											recoveryRootId: submission.submissionId,
+											phase: 'before_provider',
+											checkpointLeafId: state.checkpointLeafId,
+										});
+									}
+								},
+								providerStarted: (state) => {
+									submissions.updateTurnJournalPhase(attempt, 'provider_started', {
+										checkpointLeafId: state.checkpointLeafId,
+									});
+								},
+								toolRequestRecorded: (state) => {
+									submissions.updateTurnJournalPhase(attempt, 'tool_request_recorded', {
+										checkpointLeafId: state.checkpointLeafId,
+										toolRequest: state.toolRequest,
+									});
+								},
+								checkpointReady: (state) => {
+									submissions.updateTurnJournalPhase(attempt, 'before_provider', {
+										checkpointLeafId: state.checkpointLeafId,
+									});
+								},
+								committed: (state) => {
+									submissions.commitTurnJournal(attempt, state.committedLeafId);
+								},
+							},
+						})(ctx);
+						submissions.completeSubmission(attempt);
+					} catch (error) {
+						submissions.failSubmission(attempt, error);
+						throw error;
+					}
+				} else {
+					await createAgentSubmissionHandler(agent, submissionInput)(ctx);
+				}
 			} finally {
 				releaseSessionLock();
 			}

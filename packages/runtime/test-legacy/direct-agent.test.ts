@@ -271,6 +271,22 @@ describe('direct attached agent delivery', () => {
 		const prompts: Array<{ session: string; message: string }> = [];
 		const store = new RecordingSessionStore();
 
+		const createTestContextWithStore = (id: string, runId: string | undefined, payload: unknown, req: Request) =>
+			createFlueContext({
+				id,
+				runId,
+				payload,
+				env: {},
+				req,
+				agentConfig: {
+					systemPrompt: '',
+					skills: {},
+					model: undefined,
+					resolveModel: () => undefined,
+				},
+				createDefaultEnv: async () => ({}) as never,
+				defaultStore: store,
+			});
 		configureFlueRuntime({
 			target: 'node',
 			manifest: {
@@ -281,7 +297,6 @@ describe('direct attached agent delivery', () => {
 					createAgent(() => ({
 						profile: { model: false },
 						cwd: '/workspace',
-						persist: store,
 						sandbox: {
 							async createSessionEnv(options) {
 								sandboxCalls.push(options);
@@ -291,7 +306,7 @@ describe('direct attached agent delivery', () => {
 					})),
 				),
 			},
-			createContext: createTestContext,
+			createContext: createTestContextWithStore,
 		});
 
 		const app = new Hono();

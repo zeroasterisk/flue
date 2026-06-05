@@ -291,17 +291,18 @@ describe('FlueHarness', () => {
 			]);
 		});
 
-		it('wraps selected-store deletion in one coordinated operation when delete() targets an unopened session', async () => {
-			const defaultStore = new TrackingSessionStore();
-			const authoredStore = new TrackingSessionStore();
+		it('wraps store deletion in one coordinated operation when delete() targets an unopened session', async () => {
+			const store = new TrackingSessionStore();
 			const calls: string[] = [];
-			const harness = await createContext(createEnv(), defaultStore, {
-				sessionDeletionCoordinator: async (storageKey, deleteSessionTree) => {
-					calls.push(`begin:${storageKey}`);
-					await deleteSessionTree();
-					calls.push(`finish:${storageKey}`);
-				},
-			}).init(createAgent(() => ({ model: false, persist: authoredStore })));
+			const harness = await createContext(createEnv(), store, {
+				submissionStore: {
+					deleteSession: async (storageKey: string, deleteSessionTree: () => Promise<void>) => {
+						calls.push(`begin:${storageKey}`);
+						await deleteSessionTree();
+						calls.push(`finish:${storageKey}`);
+					},
+				} as never,
+			}).init(createAgent(() => ({ model: false })));
 
 			await harness.sessions.delete('review');
 
@@ -309,8 +310,7 @@ describe('FlueHarness', () => {
 				'begin:agent-session:["agent-instance","default","review"]',
 				'finish:agent-session:["agent-instance","default","review"]',
 			]);
-			expect(defaultStore.deleteCalls).toEqual([]);
-			expect(authoredStore.deleteCalls).toEqual(['agent-session:["agent-instance","default","review"]']);
+			expect(store.deleteCalls).toEqual(['agent-session:["agent-instance","default","review"]']);
 		});
 
 		it('applies session management requests in order when concurrent requests target the same name', async () => {
@@ -519,17 +519,18 @@ describe('FlueSession', () => {
 		);
 	});
 
-	it('wraps selected-store deletion in one coordinated operation when an opened session is deleted', async () => {
-		const defaultStore = new TrackingSessionStore();
-		const authoredStore = new TrackingSessionStore();
+	it('wraps store deletion in one coordinated operation when an opened session is deleted', async () => {
+		const store = new TrackingSessionStore();
 		const calls: string[] = [];
-		const harness = await createContext(createEnv(), defaultStore, {
-			sessionDeletionCoordinator: async (storageKey, deleteSessionTree) => {
-				calls.push(`begin:${storageKey}`);
-				await deleteSessionTree();
-				calls.push(`finish:${storageKey}`);
-			},
-		}).init(createAgent(() => ({ model: false, persist: authoredStore })));
+		const harness = await createContext(createEnv(), store, {
+			submissionStore: {
+				deleteSession: async (storageKey: string, deleteSessionTree: () => Promise<void>) => {
+					calls.push(`begin:${storageKey}`);
+					await deleteSessionTree();
+					calls.push(`finish:${storageKey}`);
+				},
+			} as never,
+		}).init(createAgent(() => ({ model: false })));
 		const session = await harness.session('review');
 
 		await session.delete();
@@ -538,8 +539,7 @@ describe('FlueSession', () => {
 			'begin:agent-session:["agent-instance","default","review"]',
 			'finish:agent-session:["agent-instance","default","review"]',
 		]);
-		expect(defaultStore.deleteCalls).toEqual([]);
-		expect(authoredStore.deleteCalls).toEqual(['agent-session:["agent-instance","default","review"]']);
+		expect(store.deleteCalls).toEqual(['agent-session:["agent-instance","default","review"]']);
 	});
 
 	it('shares deletion work when delete() is called concurrently', async () => {
