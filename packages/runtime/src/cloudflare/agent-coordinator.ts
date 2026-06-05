@@ -8,14 +8,10 @@ import type { FlueContextInternal } from '../client.ts';
 import {
 	agentSubmissionDispatchId,
 	agentSubmissionProcessingPayload,
-	agentSubmissionReadPayload,
 	createAgentSubmissionHandler,
-	createAgentSubmissionInspectionHandler,
 	createAgentSubmissionObserverRegistry,
-	createAgentSubmissionRepairHandler,
-	createAgentSubmissionTerminalHandler,
 	createSubmissionJournalCallbacks,
-	type AgentSubmissionToolRequest,
+	reconcileInterruptedSubmission,
 	type DirectAgentSubmissionInput,
 } from '../runtime/agent-submissions.ts';
 import { type AgentHandler, assertAgentDispatchAdmissionInput, handleAgentRequest } from '../runtime/handle-agent.ts';
@@ -415,158 +411,29 @@ class CloudflareAgentCoordinator {
 	}
 
 	private async reconcileInterruptedSubmission(submission: AgentSubmission): Promise<void> {
-		const { input } = submission;
-		const attempt = submissionAttemptRef(submission);
-		if (!attempt) return;
-		if (submission.attemptCount >= submission.maxRetry) {
-			await this.failInterruptedSubmission(
-				submission,
-				'exhausted_retry_budget',
-				new Error(
-					`[flue] Agent submission exceeded maximum recovery attempts (${submission.attemptCount}/${submission.maxRetry}).`,
-				),
-			);
-			return;
-		}
-		if (submission.timeoutAt > 0 && Date.now() >= submission.timeoutAt) {
-			await this.failInterruptedSubmission(
-				submission,
-				'exceeded_timeout',
-				new Error('[flue] Agent submission exceeded configured timeout.'),
-			);
-			return;
-		}
 		const agent = this.options.createdAgents[this.agentName];
 		if (!agent) throw new Error('[flue] Agent target unavailable during durable reconciliation.');
-		const request = new Request(`https://flue.invalid${CLOUDFLARE_AGENT_INTERNAL_DISPATCH_PATH}`, {
-			method: 'POST',
-		});
-		const ctx = this.createContext(
-			agentSubmissionReadPayload(input),
-			request,
-			undefined,
-			agentSubmissionDispatchId(input),
-		);
-		const state = await this.runWithInstanceContext(() =>
-			createAgentSubmissionInspectionHandler(agent, input)(ctx),
-		);
-		const journal = this.submissions.getTurnJournal(submission.submissionId);
-		if (
-			journal &&
-			(journal.phase === 'before_provider' || journal.phase === 'provider_started') &&
-			!journal.committed &&
-			state === 'continuable'
-		) {
-			const replacement = this.submissions.replaceTurnJournalAttempt(attempt, crypto.randomUUID());
-			if (replacement) {
-				this.startSubmissionAttempt(replacement);
-				return;
-			}
-		}
-		if (
-			journal?.phase === 'tool_request_recorded' &&
-			journal.committed === false &&
-			journal.toolRequest
-		) {
-			const repaired = await this.repairInterruptedToolCalls(
+		const { replacement, failedError } = await this.runWithInstanceContext(() =>
+			reconcileInterruptedSubmission(
+				this.submissions,
 				submission,
-				attempt,
-				journal.toolRequest as AgentSubmissionToolRequest,
-			);
-			if (repaired) return;
-		}
-		if (submission.inputAppliedAt === undefined) {
-			if (state === 'absent') {
-				this.submissions.requeueSubmissionBeforeInputApplied(attempt);
-				return;
-			}
-			await this.failInterruptedSubmission(
-				submission,
-				'interrupted_before_input_marker',
-				new Error(
-					'[flue] Agent submission attempt was interrupted after canonical input persistence but before the input-application marker was recorded. Provider replay was not attempted.',
-				),
-			);
-			return;
-		}
-		if (state === 'completed') {
-			this.submissions.completeSubmission(attempt);
-			return;
-		}
-		await this.failInterruptedSubmission(
-			submission,
-			'interrupted_after_input_application',
-			new Error(
-				'[flue] Agent submission attempt was interrupted after input application without a completed canonical response. Provider replay was not attempted.',
+				agent,
+				(payload, dispatchId) =>
+					this.createContext(
+						payload,
+						new Request(`https://flue.invalid${CLOUDFLARE_AGENT_INTERNAL_DISPATCH_PATH}`, {
+							method: 'POST',
+						}),
+						undefined,
+						dispatchId,
+					),
 			),
 		);
-	}
-
-	private async repairInterruptedToolCalls(
-		submission: AgentSubmission,
-		attempt: SubmissionAttemptRef,
-		toolRequest: AgentSubmissionToolRequest,
-	): Promise<boolean> {
-		const { input } = submission;
-		const agent = this.options.createdAgents[this.agentName];
-		if (!agent) throw new Error('[flue] Agent target unavailable during interrupted-tool repair.');
-		const request = new Request(`https://flue.invalid${CLOUDFLARE_AGENT_INTERNAL_DISPATCH_PATH}`, {
-			method: 'POST',
-		});
-		const ctx = this.createContext(
-			agentSubmissionReadPayload(input),
-			request,
-			undefined,
-			agentSubmissionDispatchId(input),
-		);
-		const repairedLeafId = (await this.runWithInstanceContext(() =>
-			createAgentSubmissionRepairHandler(agent, input, toolRequest)(ctx),
-		)) as string | undefined;
-		if (!repairedLeafId) return false;
-		this.submissions.updateTurnJournalPhase(attempt, 'before_provider', {
-			checkpointLeafId: repairedLeafId,
-		});
-		const replacement = this.submissions.replaceTurnJournalAttempt(attempt, crypto.randomUUID());
 		if (replacement) {
 			this.startSubmissionAttempt(replacement);
-			return true;
+		} else if (failedError && submission.kind === 'direct') {
+			this.observers.fail(submission.submissionId, failedError);
 		}
-		return false;
-	}
-
-	private async failInterruptedSubmission(
-		submission: AgentSubmission,
-		reason:
-			| 'interrupted_before_input_marker'
-			| 'interrupted_after_input_application'
-			| 'exhausted_retry_budget'
-			| 'exceeded_timeout',
-		error: Error,
-	): Promise<void> {
-		const { input } = submission;
-		const attempt = submissionAttemptRef(submission);
-		if (!attempt) return;
-		const agent = this.options.createdAgents[this.agentName];
-		if (!agent) throw new Error('[flue] Agent target unavailable during durable terminalization.');
-		const request = new Request(`https://flue.invalid${CLOUDFLARE_AGENT_INTERNAL_DISPATCH_PATH}`, {
-			method: 'POST',
-		});
-		const ctx = this.createContext(
-			agentSubmissionProcessingPayload(input),
-			request,
-			undefined,
-			agentSubmissionDispatchId(input),
-		);
-		await this.runWithInstanceContext(() =>
-			createAgentSubmissionTerminalHandler(agent, input, {
-				submissionId: submission.submissionId,
-				kind: submission.kind,
-				reason,
-				message: error.message,
-			})(ctx),
-		);
-		const failed = this.submissions.failSubmission(attempt, error);
-		if (failed && submission.kind === 'direct') this.observers.fail(submission.submissionId, error);
 	}
 
 	private startSubmissionAttempt(submission: AgentSubmission): void {
@@ -646,8 +513,11 @@ class CloudflareAgentCoordinator {
 
 	private async processSubmission(submission: AgentSubmission): Promise<void> {
 		const { input } = submission;
-		const attempt = submissionAttemptRef(submission);
-		if (!attempt) return;
+		if (!submission.attemptId) return;
+		const attempt: SubmissionAttemptRef = {
+			submissionId: submission.submissionId,
+			attemptId: submission.attemptId,
+		};
 		const persisted = this.submissions.getSubmission(submission.submissionId);
 		if (persisted?.status !== 'running' || persisted.attemptId !== attempt.attemptId) return;
 		let ctx: FlueContextInternal | undefined;
@@ -784,12 +654,6 @@ function isAttemptMarkerSnapshot(value: unknown): value is { submissionId: strin
 	if (!value || typeof value !== 'object') return false;
 	const snapshot = value as Record<string, unknown>;
 	return typeof snapshot.submissionId === 'string' && typeof snapshot.attemptId === 'string';
-}
-
-function submissionAttemptRef(submission: AgentSubmission): SubmissionAttemptRef | undefined {
-	return submission.attemptId
-		? { submissionId: submission.submissionId, attemptId: submission.attemptId }
-		: undefined;
 }
 
 function submissionAttemptMarkerKey(submission: AgentSubmission): string {

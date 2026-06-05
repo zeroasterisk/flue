@@ -1,3 +1,8 @@
+import type {
+	AgentSubmission,
+	AgentSubmissionStore,
+	SubmissionAttemptRef,
+} from '../agent-execution-store.ts';
 import type { FlueContextInternal } from '../client.ts';
 import type {
 	AttachedAgentEvent,
@@ -270,6 +275,158 @@ export function createSubmissionJournalCallbacks(
 			submissions.commitTurnJournal(attempt, state.committedLeafId);
 		},
 	};
+}
+
+/**
+ * Reconciliation result. `replacement` is the new submission to start when
+ * a restart is needed. `failedError` is set when the submission was
+ * terminalized — the caller can use it for observer notification.
+ */
+export interface ReconciliationResult {
+	readonly replacement: AgentSubmission | null;
+	readonly failedError: Error | null;
+}
+
+/**
+ * Shared reconciliation decision tree for an interrupted running submission.
+ * Used by both the Cloudflare and Node agent coordinators.
+ *
+ * The `createContext` callback builds a `FlueContextInternal` for handler
+ * execution. The shared function selects the appropriate payload internally
+ * (read-only for inspection/repair, processing for terminal handlers).
+ */
+export async function reconcileInterruptedSubmission(
+	submissions: AgentSubmissionStore,
+	submission: AgentSubmission,
+	agent: CreatedAgent,
+	createContext: (payload: unknown, dispatchId: string | undefined) => FlueContextInternal,
+): Promise<ReconciliationResult> {
+	const { input } = submission;
+	const attempt = submissionAttemptRef(submission);
+	if (!attempt) return { replacement: null, failedError: null };
+
+	// Check retry budget.
+	if (submission.attemptCount >= submission.maxRetry) {
+		const error = new Error(
+			`[flue] Agent submission exceeded maximum recovery attempts (${submission.attemptCount}/${submission.maxRetry}).`,
+		);
+		const failed = await failInterruptedSubmission(
+			submissions, submission, attempt, agent, 'exhausted_retry_budget', error, createContext,
+		);
+		return { replacement: null, failedError: failed ? error : null };
+	}
+
+	// Check timeout.
+	if (submission.timeoutAt > 0 && Date.now() >= submission.timeoutAt) {
+		const error = new Error('[flue] Agent submission exceeded configured timeout.');
+		const failed = await failInterruptedSubmission(
+			submissions, submission, attempt, agent, 'exceeded_timeout', error, createContext,
+		);
+		return { replacement: null, failedError: failed ? error : null };
+	}
+
+	// Inspect canonical session state.
+	const readPayload = agentSubmissionReadPayload(input);
+	const dispatchId = agentSubmissionDispatchId(input);
+	const ctx = createContext(readPayload, dispatchId);
+	const state = await createAgentSubmissionInspectionHandler(agent, input)(ctx);
+
+	// Check turn journal for pre-commit interruption that can be retried.
+	const journal = submissions.getTurnJournal(submission.submissionId);
+	if (
+		journal &&
+		(journal.phase === 'before_provider' || journal.phase === 'provider_started') &&
+		!journal.committed &&
+		state === 'continuable'
+	) {
+		const replacement = submissions.replaceTurnJournalAttempt(attempt, crypto.randomUUID());
+		if (replacement) return { replacement, failedError: null };
+	}
+
+	// Check for interrupted tool calls that can be repaired.
+	if (
+		journal?.phase === 'tool_request_recorded' &&
+		journal.committed === false &&
+		journal.toolRequest
+	) {
+		const repairCtx = createContext(readPayload, dispatchId);
+		const repairedLeafId = (await createAgentSubmissionRepairHandler(
+			agent,
+			input,
+			journal.toolRequest as AgentSubmissionToolRequest,
+		)(repairCtx)) as string | undefined;
+		if (repairedLeafId) {
+			submissions.updateTurnJournalPhase(attempt, 'before_provider', {
+				checkpointLeafId: repairedLeafId,
+			});
+			const replacement = submissions.replaceTurnJournalAttempt(attempt, crypto.randomUUID());
+			if (replacement) return { replacement, failedError: null };
+		}
+	}
+
+	// Pre-input-application interruption.
+	if (submission.inputAppliedAt === undefined) {
+		if (state === 'absent') {
+			submissions.requeueSubmissionBeforeInputApplied(attempt);
+			return { replacement: null, failedError: null };
+		}
+		const error = new Error(
+			'[flue] Agent submission attempt was interrupted after canonical input persistence but before the input-application marker was recorded. Provider replay was not attempted.',
+		);
+		const failed = await failInterruptedSubmission(
+			submissions, submission, attempt, agent,
+			'interrupted_before_input_marker', error, createContext,
+		);
+		return { replacement: null, failedError: failed ? error : null };
+	}
+
+	// Post-input-application: check if the session already completed.
+	if (state === 'completed') {
+		submissions.completeSubmission(attempt);
+		return { replacement: null, failedError: null };
+	}
+
+	// Post-input-application interruption without completion.
+	const error = new Error(
+		'[flue] Agent submission attempt was interrupted after input application without a completed canonical response. Provider replay was not attempted.',
+	);
+	const failed = await failInterruptedSubmission(
+		submissions, submission, attempt, agent,
+		'interrupted_after_input_application', error, createContext,
+	);
+	return { replacement: null, failedError: failed ? error : null };
+}
+
+/** Synthetic dispatch request for reconciliation and Node dispatch contexts. */
+export function submissionDispatchRequest(): Request {
+	return new Request('http://flue.local/_dispatch', { method: 'POST' });
+}
+
+async function failInterruptedSubmission(
+	submissions: AgentSubmissionStore,
+	submission: AgentSubmission,
+	attempt: SubmissionAttemptRef,
+	agent: CreatedAgent,
+	reason: AgentSubmissionInterruption['reason'],
+	error: Error,
+	createContext: (payload: unknown, dispatchId: string | undefined) => FlueContextInternal,
+): Promise<boolean> {
+	const { input } = submission;
+	const processingPayload = agentSubmissionProcessingPayload(input);
+	const dispatchId = agentSubmissionDispatchId(input);
+	const ctx = createContext(processingPayload, dispatchId);
+	await createAgentSubmissionTerminalHandler(agent, input, {
+		submissionId: submission.submissionId,
+		kind: submission.kind,
+		reason,
+		message: error.message,
+	})(ctx);
+	return submissions.failSubmission(attempt, error);
+}
+
+function submissionAttemptRef(submission: AgentSubmission): SubmissionAttemptRef | null {
+	if (!submission.attemptId) return null;
+	return { submissionId: submission.submissionId, attemptId: submission.attemptId };
 }
 
 async function openAgentSubmissionSession(
