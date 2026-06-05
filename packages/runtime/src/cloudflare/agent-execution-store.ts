@@ -217,29 +217,31 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 	}
 
 	replaceTurnJournalAttempt(attempt: SubmissionAttemptRef, nextAttemptId: string): AgentSubmission | null {
-		const row = this.sql
-			.exec(
-				`UPDATE flue_agent_submissions
-				 SET attempt_id = ?, recovery_requested_at = NULL, started_at = ?, attempt_count = attempt_count + 1
-				 WHERE submission_id = ? AND status = 'running' AND attempt_id = ?
-				 RETURNING ${submissionColumns}`,
+		return this.transactionSync(() => {
+			const row = this.sql
+				.exec(
+					`UPDATE flue_agent_submissions
+					 SET attempt_id = ?, recovery_requested_at = NULL, started_at = ?, attempt_count = attempt_count + 1
+					 WHERE submission_id = ? AND status = 'running' AND attempt_id = ?
+					 RETURNING ${submissionColumns}`,
+					nextAttemptId,
+					Date.now(),
+					attempt.submissionId,
+					attempt.attemptId,
+				)
+				.toArray()[0];
+			if (!row) return null;
+			this.sql.exec(
+				`UPDATE flue_agent_turn_journals
+				 SET attempt_id = ?, revision = revision + 1, updated_at = ?
+				 WHERE submission_id = ? AND attempt_id = ? AND committed = 0`,
 				nextAttemptId,
 				Date.now(),
 				attempt.submissionId,
 				attempt.attemptId,
-			)
-			.toArray()[0];
-		if (!row) return null;
-		this.sql.exec(
-			`UPDATE flue_agent_turn_journals
-			 SET attempt_id = ?, revision = revision + 1, updated_at = ?
-			 WHERE submission_id = ? AND attempt_id = ? AND committed = 0`,
-			nextAttemptId,
-			Date.now(),
-			attempt.submissionId,
-			attempt.attemptId,
-		);
-		return parseSubmission(row);
+			);
+			return parseSubmission(row);
+		});
 	}
 
 	private getDispatchReceipt(submissionId: string): AgentDispatchReceipt | null {

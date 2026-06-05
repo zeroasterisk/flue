@@ -478,7 +478,8 @@ class CloudflareAgentCoordinator {
 		const keys = new Set<string>();
 		const rows = this.instance.ctx.storage.sql
 			?.exec(
-				`SELECT snapshot, created_at FROM cf_agents_runs WHERE name = '${FLUE_AGENT_SUBMISSION_ATTEMPT_FIBER}'`,
+				'SELECT snapshot, created_at FROM cf_agents_runs WHERE name = ?',
+				FLUE_AGENT_SUBMISSION_ATTEMPT_FIBER,
 			)
 			.toArray();
 		if (!rows) throw new Error('[flue] Cloudflare durable agent SQL storage is unavailable.');

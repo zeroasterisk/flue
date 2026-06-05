@@ -16,15 +16,21 @@ import { createSqlAgentExecutionStoreFromSql } from '../cloudflare/agent-executi
 /**
  * Adapt `node:sqlite` {@link DatabaseSync} to the Cloudflare {@link SqlStorage}
  * shape expected by the shared SQL store implementation.
+ *
+ * `node:sqlite`'s `.all()` only works for statements that return rows (SELECT,
+ * INSERT/UPDATE...RETURNING). Write-only statements (CREATE, INSERT, UPDATE
+ * without RETURNING) must use `.run()` instead. We distinguish by checking
+ * whether the query expects result rows.
  */
 function createNodeSqlStorage(db: DatabaseSync): SqlStorage {
 	return {
 		exec(query: string, ...bindings: unknown[]) {
 			const stmt = db.prepare(query);
+			const expectsRows = queryExpectsRows(query);
 			let rows: Record<string, unknown>[];
-			try {
+			if (expectsRows) {
 				rows = stmt.all(...(bindings as never[])) as Record<string, unknown>[];
-			} catch {
+			} else {
 				stmt.run(...(bindings as never[]));
 				rows = [];
 			}
@@ -35,6 +41,14 @@ function createNodeSqlStorage(db: DatabaseSync): SqlStorage {
 			};
 		},
 	};
+}
+
+/** Check whether a SQL query is expected to return result rows. */
+function queryExpectsRows(query: string): boolean {
+	const trimmed = query.trimStart().toUpperCase();
+	if (trimmed.startsWith('SELECT')) return true;
+	if (/\bRETURNING\b/i.test(query)) return true;
+	return false;
 }
 
 /**
