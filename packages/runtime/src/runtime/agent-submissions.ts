@@ -55,12 +55,20 @@ export interface ProcessAgentSubmissionOptions {
 	};
 }
 
+export interface AgentSubmissionToolRequest {
+	readonly toolCalls: ReadonlyArray<{ type: 'toolCall'; id: string; name: string }>;
+}
+
 interface AgentSubmissionSession {
 	inspectSubmissionInput?(input: AgentSubmissionInput): AgentSubmissionInspection;
 	processSubmissionInput?(
 		input: AgentSubmissionInput,
 		options?: ProcessAgentSubmissionOptions,
 	): PromiseLike<unknown>;
+	repairInterruptedToolCalls?(
+		input: AgentSubmissionInput,
+		toolRequest: AgentSubmissionToolRequest,
+	): Promise<string | undefined>;
 	recordSubmissionTerminal?(input: AgentSubmissionInterruption): Promise<void>;
 }
 
@@ -115,6 +123,20 @@ export function createAgentSubmissionInspectionHandler(
 			throw new Error('[flue] Internal session does not support submission input inspection.');
 		}
 		return session.inspectSubmissionInput(input);
+	};
+}
+
+export function createAgentSubmissionRepairHandler(
+	agent: CreatedAgent,
+	input: AgentSubmissionInput,
+	toolRequest: AgentSubmissionToolRequest,
+): AgentSubmissionHandler {
+	return async (ctx) => {
+		const session = await openAgentSubmissionSession(ctx, agent, input);
+		if (typeof session.repairInterruptedToolCalls !== 'function') {
+			throw new Error('[flue] Internal session does not support interrupted-tool repair.');
+		}
+		return session.repairInterruptedToolCalls(input, toolRequest);
 	};
 }
 

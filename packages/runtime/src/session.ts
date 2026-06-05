@@ -1008,6 +1008,60 @@ export class Session implements FlueSession {
 		);
 	}
 
+	/**
+	 * Repair interrupted tool calls by appending synthetic error results for any
+	 * tool calls in the journal's toolRequest that lack persisted results.
+	 * Already-settled results are preserved (first-write-wins).
+	 * Returns the new leaf ID after repair, or undefined if no repair was needed.
+	 */
+	async repairInterruptedToolCalls(
+		input: AgentSubmissionInput,
+		toolRequest: { toolCalls: Array<{ type: 'toolCall'; id: string; name: string }> },
+	): Promise<string | undefined> {
+		const inputEntry =
+			input.kind === 'dispatch'
+				? this.history.findDispatchInput(input.dispatchId)
+				: this.history.findDirectSubmissionInput(input.submissionId);
+		if (!inputEntry) return undefined;
+		const following = this.history.getActivePathSince(inputEntry.id);
+		const assistant = following.findLast(
+			(entry): entry is MessageEntry => entry.type === 'message' && entry.message.role === 'assistant',
+		);
+		if (!assistant || (assistant.message as AssistantMessage).stopReason !== 'toolUse') return undefined;
+
+		const settledIds = new Set<string>();
+		for (const entry of following) {
+			if (entry.type === 'message' && entry.message.role === 'toolResult') {
+				settledIds.add((entry.message as ToolResultMessage).toolCallId);
+			}
+		}
+
+		const unsettled = toolRequest.toolCalls.filter((tc) => !settledIds.has(tc.id));
+		if (unsettled.length === 0) return undefined;
+
+		const now = Date.now();
+		const syntheticResults: ToolResultMessage[] = unsettled.map((tc) => ({
+			role: 'toolResult' as const,
+			toolCallId: tc.id,
+			toolName: tc.name,
+			content: [
+				{
+					type: 'text' as const,
+					text: JSON.stringify({
+						type: 'interrupted',
+						message: 'Tool execution was interrupted before completion. The outcome is unknown.',
+					}),
+				},
+			],
+			isError: true,
+			timestamp: now,
+		}));
+		this.history.appendMessages(syntheticResults, undefined);
+		this.rebuildHarnessContext();
+		await this.save();
+		return this.history.getLeafId() ?? undefined;
+	}
+
 	async recordSubmissionTerminal(input: AgentSubmissionInterruption): Promise<void> {
 		if (this.history.findSubmissionTerminal(input.submissionId)) return;
 		this.history.appendMessage(

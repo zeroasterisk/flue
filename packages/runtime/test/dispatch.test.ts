@@ -1,10 +1,13 @@
 import {
 	type FauxProviderRegistration,
 	fauxAssistantMessage,
+	fauxToolCall,
 	registerFauxProvider,
 } from '@earendil-works/pi-ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Type } from '@earendil-works/pi-ai';
 import { createAgent } from '../src/agent-definition.ts';
+import { defineTool } from '../src/tool.ts';
 import { dispatch, observe } from '../src/index.ts';
 import {
 	configureFlueRuntime,
@@ -19,11 +22,14 @@ import {
 	createAgentSubmissionHandler,
 	createAgentSubmissionInspectionHandler,
 	createAgentSubmissionObserverRegistry,
+	createAgentSubmissionRepairHandler,
 	createAgentSubmissionTerminalHandler,
 	createDispatchAgentSubmissionInput,
 	type DirectAgentSubmissionInput,
 } from '../src/runtime/agent-submissions.ts';
 import { assertAgentDispatchAdmissionInput } from '../src/runtime/handle-agent.ts';
+import { generateSessionAffinityKey } from '../src/runtime/ids.ts';
+import { createSessionStorageKey } from '../src/session-identity.ts';
 import type { AgentConfig, FlueHarness, FlueSession } from '../src/types.ts';
 import { createNoopSessionEnv } from './fixtures/session-env.ts';
 
@@ -1215,6 +1221,313 @@ describe('createAgentDispatchProcessor() with submission store', () => {
 			status: 'settled',
 			error: expect.stringContaining('provider crashed'),
 		});
+	});
+});
+
+describe('repairInterruptedToolCalls()', () => {
+	function interruptedSessionData(
+		dispatchId: string,
+		instanceId: string,
+		sessionName: string,
+		toolCalls: Array<{ id: string; name: string }>,
+		settledToolCallIds: string[] = [],
+	): { data: import('../src/types.ts').SessionData; storageKey: string; toolCalls: typeof toolCalls } {
+		const now = new Date().toISOString();
+		const entries: import('../src/types.ts').SessionEntry[] = [];
+		let leafId: string | null = null;
+		let nextId = 1;
+		const makeId = () => `e${nextId++}`;
+
+		const userId = makeId();
+		entries.push({
+			type: 'message',
+			id: userId,
+			parentId: leafId,
+			timestamp: now,
+			message: { role: 'user', content: 'Run the tools.', timestamp: Date.now() } as any,
+			source: 'dispatch',
+			dispatch: {
+				dispatchId,
+				agent: 'moderator',
+				id: instanceId,
+				session: sessionName,
+				acceptedAt: now,
+				input: { type: 'flagged' },
+			},
+		});
+		leafId = userId;
+
+		const assistantId = makeId();
+		entries.push({
+			type: 'message',
+			id: assistantId,
+			parentId: leafId,
+			timestamp: now,
+			message: {
+				role: 'assistant',
+				content: toolCalls.map((tc) => ({
+					type: 'toolCall',
+					id: tc.id,
+					name: tc.name,
+					arguments: {},
+				})),
+				stopReason: 'toolUse',
+				api: 'test',
+				provider: 'test',
+				model: 'test',
+				usage: { inputTokens: 0, outputTokens: 0 },
+				timestamp: Date.now(),
+			} as any,
+		});
+		leafId = assistantId;
+
+		for (const tcId of settledToolCallIds) {
+			const tc = toolCalls.find((t) => t.id === tcId);
+			if (!tc) continue;
+			const resultId = makeId();
+			entries.push({
+				type: 'message',
+				id: resultId,
+				parentId: leafId,
+				timestamp: now,
+				message: {
+					role: 'toolResult',
+					toolCallId: tc.id,
+					toolName: tc.name,
+					content: [{ type: 'text', text: `Result for ${tc.name}` }],
+					isError: false,
+					timestamp: Date.now(),
+				} as any,
+			});
+			leafId = resultId;
+		}
+
+		return {
+			data: {
+				version: 5,
+				affinityKey: generateSessionAffinityKey(),
+				entries,
+				leafId,
+				metadata: {},
+				createdAt: now,
+				updatedAt: now,
+			},
+			storageKey: createSessionStorageKey(instanceId, 'default', sessionName),
+			toolCalls,
+		};
+	}
+
+	it('appends synthetic interrupted results for all unresolved tool calls', async () => {
+		const { createNodeAgentExecutionStore } = await import('../src/node/agent-execution-store.ts');
+		const store = createNodeAgentExecutionStore();
+		const provider = createProvider();
+		const tc1 = { id: `tc:a-${crypto.randomUUID()}`, name: 'lookup' };
+		const tc2 = { id: `tc:b-${crypto.randomUUID()}`, name: 'search' };
+
+		// Pre-populate with interrupted state: assistant requested 2 tools, no results persisted.
+		const { data, storageKey } = interruptedSessionData('dispatch:repair-all', 'guild:repair', 'case:repair', [tc1, tc2]);
+		await store.sessions.save(storageKey, data);
+
+		const submissionInput = {
+			dispatchId: 'dispatch:repair-all',
+			kind: 'dispatch' as const,
+			submissionId: 'dispatch:repair-all',
+			agent: 'moderator',
+			id: 'guild:repair',
+			session: 'case:repair',
+			input: { type: 'flagged' },
+			acceptedAt: '2026-06-01T00:00:00.000Z',
+		};
+		const agent = createAgent(() => ({
+			model: `${provider.getModel().provider}/${provider.getModel().id}`,
+		}));
+		const ctx = createFlueContext({
+			id: submissionInput.id, dispatchId: submissionInput.dispatchId, payload: submissionInput,
+			env: {}, req: new Request('http://flue.local/_dispatch', { method: 'POST' }),
+			agentConfig: { systemPrompt: '', skills: {}, subagents: {}, model: undefined, resolveModel: () => provider.getModel() },
+			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
+			defaultStore: store.sessions,
+			submissionStore: store.submissions,
+		});
+
+		const repairedLeafId = await createAgentSubmissionRepairHandler(
+			agent,
+			submissionInput,
+			{ toolCalls: [{ type: 'toolCall', ...tc1 }, { type: 'toolCall', ...tc2 }] },
+		)(ctx);
+
+		expect(repairedLeafId).toBeTruthy();
+
+		const sessionData = await store.sessions.load(storageKey);
+		const results = sessionData!.entries.filter(
+			(e) => e.type === 'message' && (e as any).message.role === 'toolResult',
+		);
+		expect(results).toHaveLength(2);
+		for (const r of results) {
+			const msg = (r as any).message;
+			expect(msg.isError).toBe(true);
+			expect(JSON.parse(msg.content[0].text)).toMatchObject({ type: 'interrupted' });
+		}
+		expect(results.map((r) => (r as any).message.toolCallId).sort()).toEqual(
+			[tc1.id, tc2.id].sort(),
+		);
+	});
+
+	it('preserves already-settled results and only repairs missing ones', async () => {
+		const { createNodeAgentExecutionStore } = await import('../src/node/agent-execution-store.ts');
+		const store = createNodeAgentExecutionStore();
+		const provider = createProvider();
+		const tc1 = { id: `tc:settled-${crypto.randomUUID()}`, name: 'fast_tool' };
+		const tc2 = { id: `tc:missing-${crypto.randomUUID()}`, name: 'slow_tool' };
+
+		// Pre-populate: tc1 has a result, tc2 does not.
+		const { data, storageKey } = interruptedSessionData('dispatch:repair-partial', 'guild:repair', 'case:repair', [tc1, tc2], [tc1.id]);
+		await store.sessions.save(storageKey, data);
+
+		const submissionInput = {
+			dispatchId: 'dispatch:repair-partial',
+			kind: 'dispatch' as const,
+			submissionId: 'dispatch:repair-partial',
+			agent: 'moderator',
+			id: 'guild:repair',
+			session: 'case:repair',
+			input: { type: 'flagged' },
+			acceptedAt: '2026-06-01T00:00:00.000Z',
+		};
+		const agent = createAgent(() => ({
+			model: `${provider.getModel().provider}/${provider.getModel().id}`,
+		}));
+		const ctx = createFlueContext({
+			id: submissionInput.id, dispatchId: submissionInput.dispatchId, payload: submissionInput,
+			env: {}, req: new Request('http://flue.local/_dispatch', { method: 'POST' }),
+			agentConfig: { systemPrompt: '', skills: {}, subagents: {}, model: undefined, resolveModel: () => provider.getModel() },
+			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
+			defaultStore: store.sessions,
+			submissionStore: store.submissions,
+		});
+
+		const repairedLeafId = await createAgentSubmissionRepairHandler(
+			agent,
+			submissionInput,
+			{ toolCalls: [{ type: 'toolCall', ...tc1 }, { type: 'toolCall', ...tc2 }] },
+		)(ctx);
+
+		expect(repairedLeafId).toBeTruthy();
+
+		const sessionData = await store.sessions.load(storageKey);
+		const results = sessionData!.entries.filter(
+			(e) => e.type === 'message' && (e as any).message.role === 'toolResult',
+		);
+		expect(results).toHaveLength(2);
+
+		const settledResult = results.find((r) => (r as any).message.toolCallId === tc1.id);
+		expect((settledResult as any).message.isError).toBe(false);
+
+		const repairedResult = results.find((r) => (r as any).message.toolCallId === tc2.id);
+		expect((repairedResult as any).message.isError).toBe(true);
+		expect(JSON.parse((repairedResult as any).message.content[0].text)).toMatchObject({
+			type: 'interrupted',
+		});
+	});
+
+	it('returns undefined when all tool calls already have results', async () => {
+		const { createNodeAgentExecutionStore } = await import('../src/node/agent-execution-store.ts');
+		const store = createNodeAgentExecutionStore();
+		const provider = createProvider();
+		const tc1 = { id: `tc:done-${crypto.randomUUID()}`, name: 'lookup' };
+
+		// Pre-populate: tc1 has a result.
+		const { data, storageKey } = interruptedSessionData('dispatch:repair-noop', 'guild:repair', 'case:repair', [tc1], [tc1.id]);
+		await store.sessions.save(storageKey, data);
+
+		const submissionInput = {
+			dispatchId: 'dispatch:repair-noop',
+			kind: 'dispatch' as const,
+			submissionId: 'dispatch:repair-noop',
+			agent: 'moderator',
+			id: 'guild:repair',
+			session: 'case:repair',
+			input: { type: 'flagged' },
+			acceptedAt: '2026-06-01T00:00:00.000Z',
+		};
+		const agent = createAgent(() => ({
+			model: `${provider.getModel().provider}/${provider.getModel().id}`,
+		}));
+		const ctx = createFlueContext({
+			id: submissionInput.id, dispatchId: submissionInput.dispatchId, payload: submissionInput,
+			env: {}, req: new Request('http://flue.local/_dispatch', { method: 'POST' }),
+			agentConfig: { systemPrompt: '', skills: {}, subagents: {}, model: undefined, resolveModel: () => provider.getModel() },
+			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
+			defaultStore: store.sessions,
+			submissionStore: store.submissions,
+		});
+
+		const repairedLeafId = await createAgentSubmissionRepairHandler(
+			agent,
+			submissionInput,
+			{ toolCalls: [{ type: 'toolCall', ...tc1 }] },
+		)(ctx);
+
+		expect(repairedLeafId).toBeUndefined();
+	});
+
+	it('records journal phase transitions through tool_request_recorded during a tool-use turn', async () => {
+		const { createNodeAgentExecutionStore } = await import('../src/node/agent-execution-store.ts');
+		const executionStore = createNodeAgentExecutionStore();
+		const provider = createProvider();
+		const toolCallId = `tool:journal-${crypto.randomUUID()}`;
+		provider.setResponses([
+			fauxAssistantMessage(fauxToolCall('lookup', { q: 'x' }, { id: toolCallId }), {
+				stopReason: 'toolUse',
+			}),
+			fauxAssistantMessage('Done.'),
+		]);
+		const lookup = defineTool({
+			name: 'lookup',
+			description: 'Look up.',
+			parameters: Type.Object({ q: Type.String() }),
+			execute: async () => 'found it',
+		});
+		const phases: string[] = [];
+		const dispatchInput: DispatchInput = {
+			dispatchId: 'dispatch:journal-phases',
+			agent: 'moderator',
+			id: 'guild:journal-phases',
+			session: 'case:journal-phases',
+			input: { type: 'flagged' },
+			acceptedAt: '2026-06-01T00:00:00.000Z',
+		};
+		const processor = createAgentDispatchProcessor({
+			agents: {
+				moderator: createAgent(() => ({
+					model: `${provider.getModel().provider}/${provider.getModel().id}`,
+					tools: [lookup],
+				})),
+			},
+			submissions: executionStore.submissions,
+			createContext: (id, runId, payload, req, initialEventIndex, dispatchId) =>
+				createFlueContext({
+					id, runId, dispatchId, payload, env: {}, req, initialEventIndex,
+					agentConfig: { systemPrompt: '', skills: {}, subagents: {}, model: undefined, resolveModel: () => provider.getModel() },
+					createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
+					defaultStore: executionStore.sessions,
+					submissionStore: executionStore.submissions,
+				}),
+		});
+
+		const originalUpdate = executionStore.submissions.updateTurnJournalPhase.bind(executionStore.submissions);
+		executionStore.submissions.updateTurnJournalPhase = (attempt, phase, options) => {
+			phases.push(phase);
+			return originalUpdate(attempt, phase, options);
+		};
+
+		await processor.process(dispatchInput);
+
+		expect(phases).toContain('provider_started');
+		expect(phases).toContain('tool_request_recorded');
+		expect(phases.filter((p) => p === 'before_provider').length).toBeGreaterThanOrEqual(1);
+		const journal = executionStore.submissions.getTurnJournal(dispatchInput.dispatchId);
+		expect(journal?.committed).toBe(true);
 	});
 });
 

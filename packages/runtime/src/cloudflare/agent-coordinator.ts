@@ -12,7 +12,9 @@ import {
 	createAgentSubmissionHandler,
 	createAgentSubmissionInspectionHandler,
 	createAgentSubmissionObserverRegistry,
+	createAgentSubmissionRepairHandler,
 	createAgentSubmissionTerminalHandler,
+	type AgentSubmissionToolRequest,
 	type DirectAgentSubmissionInput,
 } from '../runtime/agent-submissions.ts';
 import { type AgentHandler, assertAgentDispatchAdmissionInput, handleAgentRequest } from '../runtime/handle-agent.ts';
@@ -454,12 +456,26 @@ class CloudflareAgentCoordinator {
 			createAgentSubmissionInspectionHandler(agent, input)(ctx),
 		);
 		const journal = this.submissions.getTurnJournal(submission.submissionId);
-		if (journal?.phase === 'before_provider' && journal.committed === false && state === 'continuable') {
+		const safeRetryPhase =
+			journal?.phase === 'before_provider' || journal?.phase === 'provider_started';
+		if (safeRetryPhase && journal.committed === false && state === 'continuable') {
 			const replacement = this.submissions.replaceTurnJournalAttempt(attempt, crypto.randomUUID());
 			if (replacement) {
 				this.startSubmissionAttempt(replacement);
 				return;
 			}
+		}
+		if (
+			journal?.phase === 'tool_request_recorded' &&
+			journal.committed === false &&
+			journal.toolRequest
+		) {
+			const repaired = await this.repairInterruptedToolCalls(
+				submission,
+				attempt,
+				journal.toolRequest as AgentSubmissionToolRequest,
+			);
+			if (repaired) return;
 		}
 		if (submission.inputAppliedAt === undefined) {
 			if (state === 'absent') {
@@ -486,6 +502,38 @@ class CloudflareAgentCoordinator {
 				'[flue] Agent submission attempt was interrupted after input application without a completed canonical response. Provider replay was not attempted.',
 			),
 		);
+	}
+
+	private async repairInterruptedToolCalls(
+		submission: AgentSubmission,
+		attempt: SubmissionAttemptRef,
+		toolRequest: AgentSubmissionToolRequest,
+	): Promise<boolean> {
+		const { input } = submission;
+		const agent = this.options.createdAgents[this.agentName];
+		if (!agent) throw new Error('[flue] Agent target unavailable during interrupted-tool repair.');
+		const request = new Request(`https://flue.invalid${CLOUDFLARE_AGENT_INTERNAL_DISPATCH_PATH}`, {
+			method: 'POST',
+		});
+		const ctx = this.createContext(
+			agentSubmissionInspectionContextPayload(input),
+			request,
+			undefined,
+			agentSubmissionDispatchId(input),
+		);
+		const repairedLeafId = (await this.runWithInstanceContext(() =>
+			createAgentSubmissionRepairHandler(agent, input, toolRequest)(ctx),
+		)) as string | undefined;
+		if (!repairedLeafId) return false;
+		this.submissions.updateTurnJournalPhase(attempt, 'before_provider', {
+			checkpointLeafId: repairedLeafId,
+		});
+		const replacement = this.submissions.replaceTurnJournalAttempt(attempt, crypto.randomUUID());
+		if (replacement) {
+			this.startSubmissionAttempt(replacement);
+			return true;
+		}
+		return false;
 	}
 
 	private async failInterruptedSubmission(
