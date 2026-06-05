@@ -173,7 +173,7 @@ export function agentSubmissionProcessingPayload(input: AgentSubmissionInput): u
 }
 
 /** Payload for read-only contexts (inspection, repair): the full submission envelope. */
-export function agentSubmissionReadPayload(input: AgentSubmissionInput): unknown {
+function agentSubmissionReadPayload(input: AgentSubmissionInput): unknown {
 	return input.kind === 'dispatch' ? agentSubmissionDispatchInput(input) : input;
 }
 

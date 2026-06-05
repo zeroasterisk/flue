@@ -27,7 +27,7 @@ export const DURABILITY_DEFAULT_TIMEOUT_MINUTES = 60;
 
 // ─── Submission ─────────────────────────────────────────────────────────────
 
-export type AgentSubmissionStatus = 'queued' | 'running' | 'settled';
+type AgentSubmissionStatus = 'queued' | 'running' | 'settled';
 
 export interface AgentSubmission {
 	readonly sequence: number;
