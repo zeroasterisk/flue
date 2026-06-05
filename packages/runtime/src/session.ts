@@ -481,23 +481,67 @@ export class SessionHistory {
 
 function pathToContextEntries(path: SessionEntry[]): ContextEntry[] {
 	const context: ContextEntry[] = [];
-	for (const entry of path) {
-		if (entry.type === 'message') {
-			if (
-				entry.message.role === 'assistant' &&
-				(entry.message.stopReason === 'error' || entry.message.stopReason === 'aborted')
-			) {
+	let index = 0;
+	while (index < path.length) {
+		const entry = path[index];
+		if (entry?.type === 'message') {
+			if (entry.message.role === 'assistant') {
+				if (entry.message.stopReason === 'error' || entry.message.stopReason === 'aborted') {
+					index += 1;
+					continue;
+				}
+				const toolCalls = entry.message.content.filter((content) => content.type === 'toolCall');
+				if (toolCalls.length > 0) {
+					const resultEntries: MessageEntry[] = [];
+					let resultIndex = index + 1;
+					while (resultIndex < path.length) {
+						const resultEntry = path[resultIndex];
+						if (resultEntry?.type !== 'message' || resultEntry.message.role !== 'toolResult') break;
+						resultEntries.push(resultEntry);
+						resultIndex += 1;
+					}
+					if (isCompleteToolResultBatch(toolCalls, resultEntries)) {
+						context.push({ message: entry.message, entry });
+						for (const resultEntry of resultEntries) {
+							context.push({ message: resultEntry.message, entry: resultEntry });
+						}
+					}
+					index = resultIndex;
+					continue;
+				}
+				context.push({ message: entry.message, entry });
+				index += 1;
 				continue;
 			}
-			context.push({ message: entry.message, entry });
-		} else if (entry.type === 'branch_summary') {
+			if (entry.message.role !== 'toolResult') {
+				context.push({ message: entry.message, entry });
+			}
+		} else if (entry?.type === 'branch_summary') {
 			context.push({
 				message: createUserContextMessage(`[Branch Summary]\n\n${entry.summary}`, entry.timestamp),
 				entry,
 			});
 		}
+		index += 1;
 	}
 	return context;
+}
+
+function isCompleteToolResultBatch(
+	toolCalls: Extract<AssistantMessage['content'][number], { type: 'toolCall' }>[],
+	resultEntries: MessageEntry[],
+): boolean {
+	if (toolCalls.length !== resultEntries.length) return false;
+	const seenToolCallIds = new Set<string>();
+	for (let index = 0; index < toolCalls.length; index++) {
+		const toolCall = toolCalls[index];
+		const result = resultEntries[index]?.message;
+		if (!toolCall || !result || result.role !== 'toolResult') return false;
+		if (seenToolCallIds.has(toolCall.id)) return false;
+		seenToolCallIds.add(toolCall.id);
+		if (result.toolCallId !== toolCall.id || result.toolName !== toolCall.name) return false;
+	}
+	return true;
 }
 
 function findLatestCompactionIndex(path: SessionEntry[]): number {
@@ -645,6 +689,8 @@ export class Session implements FlueSession {
 	private onDelete: (() => void) | undefined;
 	private sessionDeletionCoordinator: SessionDeletionCoordinator | undefined;
 	private pendingSave: Promise<void> = Promise.resolve();
+	private harnessMessageCheckpointCursor = 0;
+	private activeCheckpointSource: MessageEntry['source'] | undefined;
 
 	private emitTurnRequestAndStream: StreamFn = (model, context, options) => {
 		if (this.activeTurnId === undefined) this.activeTurnId = generateTurnId();
@@ -729,6 +775,7 @@ export class Session implements FlueSession {
 			sessionId: this.affinityKey,
 		});
 
+		this.harnessMessageCheckpointCursor = this.harness.state.messages.length;
 		this.eventCallback = options.onAgentEvent;
 		this.harness.subscribe(async (event) => {
 			switch (event.type) {
@@ -762,6 +809,7 @@ export class Session implements FlueSession {
 					break;
 				}
 				case 'message_end':
+					if (event.message.role === 'user') await this.checkpointHarnessMessages();
 					this.emit({ type: 'message_end', message: event.message });
 					break;
 				case 'tool_execution_start':
@@ -807,6 +855,7 @@ export class Session implements FlueSession {
 					this.toolStartTimes.delete(event.toolCallId);
 					break;
 				case 'turn_end': {
+					await this.checkpointHarnessMessages();
 					const turnId = this.activeTurnId ?? generateTurnId();
 					this.emit({
 						type: 'turn_end',
@@ -839,6 +888,7 @@ export class Session implements FlueSession {
 					break;
 				}
 				case 'agent_end':
+					await this.checkpointHarnessMessages();
 					this.emit({ type: 'agent_end', messages: event.messages });
 					this.turnStartTime = undefined;
 					this.activeTurnId = undefined;
@@ -952,7 +1002,7 @@ export class Session implements FlueSession {
 				},
 			},
 		);
-		this.harness.state.messages = this.history.buildContext();
+		this.rebuildHarnessContext();
 		await this.save();
 	}
 
@@ -1736,14 +1786,26 @@ export class Session implements FlueSession {
 			timestamp,
 		};
 		this.history.appendMessages([userMessage, assistantMessage, toolResultMessage], 'shell');
-		this.harness.state.messages = this.history.buildContext();
+		this.rebuildHarnessContext();
 		await this.save();
 	}
 
-	private async syncHarnessMessagesSince(index: number, source: MessageSource): Promise<void> {
-		const messages = this.harness.state.messages.slice(index) as AgentMessage[];
+	private rebuildHarnessContext(): void {
+		const messages = this.history.buildContext();
+		this.harness.state.messages = messages;
+		this.harnessMessageCheckpointCursor = messages.length;
+	}
+
+	private async checkpointHarnessMessages(): Promise<void> {
+		const messages = this.harness.state.messages.slice(
+			this.harnessMessageCheckpointCursor,
+		) as AgentMessage[];
 		if (messages.length === 0) return;
-		this.history.appendMessages(messages, source);
+		if (!this.activeCheckpointSource) {
+			throw new Error('[flue] Cannot checkpoint harness messages without an active source.');
+		}
+		this.history.appendMessages(messages, this.activeCheckpointSource);
+		this.harnessMessageCheckpointCursor = this.harness.state.messages.length;
 		await this.save();
 	}
 
@@ -1788,10 +1850,17 @@ export class Session implements FlueSession {
 
 		while (true) {
 			if (options.signal.aborted) throw abortErrorFor(options.signal);
-			const beforeLength = this.harness.state.messages.length;
-			await start();
-			await this.harness.waitForIdle();
-			await this.syncHarnessMessagesSince(beforeLength, source);
+			this.activeCheckpointSource = source;
+			try {
+				await start();
+				await this.harness.waitForIdle();
+				await this.checkpointHarnessMessages();
+			} catch (error) {
+				this.rebuildHarnessContext();
+				throw error;
+			} finally {
+				this.activeCheckpointSource = undefined;
+			}
 
 			const messages = this.harness.state.messages;
 			const latest = messages[messages.length - 1];
@@ -1801,12 +1870,12 @@ export class Session implements FlueSession {
 
 			if (isContextOverflow(assistant, model.contextWindow ?? 0)) {
 				if (overflowRecoveryAttempted) {
-					this.harness.state.messages = this.history.buildContext();
+					this.rebuildHarnessContext();
 					return;
 				}
 				overflowRecoveryAttempted = true;
 				this.internalLog('info', '[flue:compaction] Overflow detected, compacting and retrying...');
-				this.harness.state.messages = this.history.buildContext();
+				this.rebuildHarnessContext();
 				if (!(await this.runCompaction('overflow'))) return;
 				this.internalLog('info', '[flue:compaction] Retrying after overflow recovery...');
 				start = () => this.harness.continue();
@@ -1824,7 +1893,7 @@ export class Session implements FlueSession {
 
 			await this.checkCompaction(assistant);
 			if (assistant.stopReason === 'error' || assistant.stopReason === 'aborted') {
-				this.harness.state.messages = this.history.buildContext();
+				this.rebuildHarnessContext();
 			}
 			return;
 		}
@@ -1839,11 +1908,11 @@ export class Session implements FlueSession {
 				attempts: attempt - 1,
 				error: assistant.errorMessage,
 			});
-			this.harness.state.messages = this.history.buildContext();
+			this.rebuildHarnessContext();
 			return false;
 		}
 		const delayMs = modelRetryDelayMs(attempt);
-		this.harness.state.messages = this.history.buildContext();
+		this.rebuildHarnessContext();
 		this.modelRetryAbortController = new AbortController();
 		this.internalLog('warn', '[flue:model-retry] Retrying transient model error', {
 			attempt,
@@ -1986,7 +2055,7 @@ export class Session implements FlueSession {
 				details: result.details,
 				usage: result.usage,
 			});
-			this.harness.state.messages = this.history.buildContext();
+			this.rebuildHarnessContext();
 
 			const messagesAfter = this.harness.state.messages.length;
 			this.internalLog(
@@ -2165,7 +2234,7 @@ export class Session implements FlueSession {
 				let inputEntry = options.findInput();
 				if (!inputEntry) {
 					options.persistInput();
-					this.harness.state.messages = this.history.buildContext();
+					this.rebuildHarnessContext();
 					await this.save();
 					inputEntry = options.findInput();
 				}
@@ -2186,7 +2255,7 @@ export class Session implements FlueSession {
 				if (!assistant || overflow || isRetryableModelError(assistant)) {
 					const transientRetries = countConsecutiveRetryableModelErrors(following);
 					if (assistant && overflow) {
-						this.harness.state.messages = this.history.buildContext();
+						this.rebuildHarnessContext();
 						this.internalLog(
 							'info',
 							'[flue:compaction] Overflow detected, compacting and retrying...',
