@@ -1,0 +1,507 @@
+import {
+	type FauxProviderRegistration,
+	fauxAssistantMessage,
+	fauxToolCall,
+	registerFauxProvider,
+} from '@earendil-works/pi-ai';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { createAgent } from '../src/agent-definition.ts';
+import { defineTool } from '../src/tool.ts';
+import { Type } from '@earendil-works/pi-ai';
+import { createFlueContext, InMemorySessionStore, type DispatchInput } from '../src/internal.ts';
+import { createNodeAgentExecutionStore } from '../src/node/agent-execution-store.ts';
+import { createNodeAgentCoordinator, type NodeAgentCoordinator } from '../src/node/agent-coordinator.ts';
+import type { CreateContextFn } from '../src/runtime/handle-agent.ts';
+import type { AgentExecutionStore } from '../src/agent-execution-store.ts';
+import { createSessionStorageKey } from '../src/session-identity.ts';
+import { generateSessionAffinityKey } from '../src/runtime/ids.ts';
+import { createNoopSessionEnv } from './fixtures/session-env.ts';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const providers: FauxProviderRegistration[] = [];
+let tempDirs: string[] = [];
+
+afterEach(() => {
+	for (const provider of providers.splice(0)) provider.unregister();
+	for (const dir of tempDirs.splice(0)) {
+		try { rmSync(dir, { recursive: true }); } catch {}
+	}
+});
+
+function createProvider(): FauxProviderRegistration {
+	const provider = registerFauxProvider({ provider: `node-coordinator-test-${crypto.randomUUID()}` });
+	providers.push(provider);
+	return provider;
+}
+
+function createTempDbPath(): string {
+	const dir = mkdtempSync(join(tmpdir(), 'flue-node-coordinator-'));
+	tempDirs.push(dir);
+	return join(dir, 'agent.db');
+}
+
+function makeCreateContext(
+	provider: FauxProviderRegistration,
+	executionStore: AgentExecutionStore,
+): CreateContextFn {
+	return (id, runId, payload, req, initialEventIndex, dispatchId) =>
+		createFlueContext({
+			id,
+			runId,
+			dispatchId,
+			payload,
+			env: {},
+			req,
+			initialEventIndex,
+			agentConfig: {
+				systemPrompt: '',
+				skills: {},
+				subagents: {},
+				model: undefined,
+				resolveModel: () => provider.getModel(),
+			},
+			createDefaultEnv: async () => createNoopSessionEnv({ cwd: '/' }),
+			defaultStore: executionStore.sessions,
+			submissionStore: executionStore.submissions,
+		});
+}
+
+function makeDispatchInput(overrides: Partial<DispatchInput> = {}): DispatchInput {
+	return {
+		dispatchId: `dispatch-${crypto.randomUUID()}`,
+		agent: 'assistant',
+		id: 'instance-1',
+		session: 'default',
+		input: { message: 'Hello' },
+		acceptedAt: new Date().toISOString(),
+		...overrides,
+	};
+}
+
+function createCoordinator(
+	dbPath: string,
+	provider: FauxProviderRegistration,
+	agentOverrides?: Parameters<typeof createAgent>[0],
+): { coordinator: NodeAgentCoordinator; executionStore: AgentExecutionStore } {
+	const executionStore = createNodeAgentExecutionStore(dbPath);
+	const agent = createAgent(agentOverrides ?? (() => ({
+		model: `${provider.getModel().provider}/${provider.getModel().id}`,
+	})));
+	const coordinator = createNodeAgentCoordinator({
+		submissions: executionStore.submissions,
+		agents: { assistant: agent },
+		createContext: makeCreateContext(provider, executionStore),
+	});
+	return { coordinator, executionStore };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('NodeAgentCoordinator', () => {
+	describe('basic lifecycle', () => {
+		it('processes a dispatch through the full submission lifecycle with file persistence', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			provider.setResponses([fauxAssistantMessage('Hello from durable dispatch.')]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+
+			const input = makeDispatchInput();
+			await coordinator.admitDispatch(input);
+
+			const submission = executionStore.submissions.getSubmission(input.dispatchId);
+			expect(submission).toMatchObject({ status: 'settled', kind: 'dispatch' });
+			expect(submission?.error).toBeUndefined();
+		});
+
+		it('persists settled submission across store reopens', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			provider.setResponses([fauxAssistantMessage('Persisted response.')]);
+			const { coordinator } = createCoordinator(dbPath, provider);
+
+			const input = makeDispatchInput();
+			await coordinator.admitDispatch(input);
+
+			// "Restart": open the same file with a fresh store.
+			const reopened = createNodeAgentExecutionStore(dbPath);
+			const submission = reopened.submissions.getSubmission(input.dispatchId);
+			expect(submission).toMatchObject({ status: 'settled', kind: 'dispatch' });
+			expect(submission?.error).toBeUndefined();
+			expect(reopened.submissions.hasUnsettledSubmissions()).toBe(false);
+		});
+	});
+
+	describe('interrupt and recover', () => {
+		it('reconciles an interrupted submission by requeuing when canonical input is absent', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			// First process will be "interrupted" — we manually admit+claim without processing.
+			const store1 = createNodeAgentExecutionStore(dbPath);
+			const input = makeDispatchInput();
+			store1.submissions.admitDispatch(input);
+			store1.submissions.claimSubmission({
+				submissionId: input.dispatchId,
+				attemptId: 'attempt-interrupted',
+			});
+			// Submission is now running with no canonical input — simulates crash before input applied.
+
+			// "Restart": new coordinator reconciles.
+			provider.setResponses([fauxAssistantMessage('Recovered response.')]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+			await coordinator.reconcileSubmissions();
+
+			const submission = executionStore.submissions.getSubmission(input.dispatchId);
+			expect(submission).toMatchObject({ status: 'settled' });
+			expect(submission?.error).toBeUndefined();
+		});
+
+		it('reconciles an interrupted submission as completed when the session already has a response', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			provider.setResponses([fauxAssistantMessage('Complete response.')]);
+
+			// Process fully, then simulate an interrupted second dispatch to same session.
+			const { coordinator: coord1, executionStore: store1 } = createCoordinator(dbPath, provider);
+			const input1 = makeDispatchInput({ dispatchId: 'dispatch-first', session: 'sess-1' });
+			await coord1.admitDispatch(input1);
+
+			// Now manually admit+claim a second dispatch without processing — leave running.
+			const input2 = makeDispatchInput({ dispatchId: 'dispatch-second', session: 'sess-1' });
+			store1.submissions.admitDispatch(input2);
+			store1.submissions.claimSubmission({
+				submissionId: input2.dispatchId,
+				attemptId: 'attempt-interrupted',
+			});
+			// Mark input applied to simulate crash after input was persisted.
+			store1.submissions.markSubmissionInputApplied({
+				submissionId: input2.dispatchId,
+				attemptId: 'attempt-interrupted',
+			});
+
+			// "Restart": the second submission's input is applied but no completed response.
+			// It should be terminalized (not replayed).
+			const { coordinator: coord2, executionStore: store2 } = createCoordinator(dbPath, provider);
+			await coord2.reconcileSubmissions();
+
+			const submission = store2.submissions.getSubmission(input2.dispatchId);
+			expect(submission).toMatchObject({ status: 'settled' });
+			// This should have an error because input was applied but no completed response exists
+			// for this specific submission.
+			expect(submission?.error).toBeDefined();
+		});
+	});
+
+	describe('attempt exhaustion', () => {
+		it('terminalizes a submission after exceeding the retry budget', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			const store = createNodeAgentExecutionStore(dbPath);
+
+			const input = makeDispatchInput();
+			store.submissions.admitDispatch(input);
+
+			// Simulate repeated interruptions until retry budget is exhausted.
+			// Default maxRetry is 10. We claim, then replace the attempt to increment count.
+			const claimed = store.submissions.claimSubmission({
+				submissionId: input.dispatchId,
+				attemptId: 'attempt-0',
+			});
+			expect(claimed).toBeTruthy();
+
+			// Create a journal so replaceTurnJournalAttempt can work.
+			store.submissions.beginTurnJournal({
+				submissionId: input.dispatchId,
+				sessionKey: claimed!.sessionKey,
+				kind: 'dispatch',
+				attemptId: 'attempt-0',
+				operationId: 'op-1',
+				turnId: 'turn-1',
+				phase: 'before_provider',
+			});
+
+			// Increment attempt count by repeatedly replacing the journal attempt.
+			let currentAttemptId = 'attempt-0';
+			for (let i = 1; i <= 10; i++) {
+				const nextAttemptId = `attempt-${i}`;
+				const replacement = store.submissions.replaceTurnJournalAttempt(
+					{ submissionId: input.dispatchId, attemptId: currentAttemptId },
+					nextAttemptId,
+				);
+				if (!replacement) break;
+				currentAttemptId = nextAttemptId;
+				// Re-create the journal for the new attempt so the next replace works.
+				if (i < 10) {
+					store.submissions.beginTurnJournal({
+						submissionId: input.dispatchId,
+						sessionKey: claimed!.sessionKey,
+						kind: 'dispatch',
+						attemptId: currentAttemptId,
+						operationId: 'op-1',
+						turnId: `turn-${i + 1}`,
+						phase: 'before_provider',
+					});
+				}
+			}
+
+			// Now attemptCount should be >= maxRetry.
+			const exhausted = store.submissions.getSubmission(input.dispatchId);
+			expect(exhausted?.attemptCount).toBeGreaterThanOrEqual(exhausted?.maxRetry ?? 0);
+
+			// "Restart": reconciliation should terminalize.
+			provider.setResponses([fauxAssistantMessage('Should not be called.')]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+			await coordinator.reconcileSubmissions();
+
+			const submission = executionStore.submissions.getSubmission(input.dispatchId);
+			expect(submission).toMatchObject({ status: 'settled' });
+			expect(submission?.error).toContain('exceeded maximum recovery attempts');
+		});
+	});
+
+	describe('timeout', () => {
+		it('terminalizes a submission after the configured timeout expires', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			const store = createNodeAgentExecutionStore(dbPath);
+
+			const input = makeDispatchInput();
+			store.submissions.admitDispatch(input);
+
+			// Claim with a timeout that's already expired.
+			const pastTimeout = Date.now() - 1000;
+			store.submissions.claimSubmission(
+				{ submissionId: input.dispatchId, attemptId: 'attempt-timeout' },
+				{ maxRetry: 10, timeoutAt: pastTimeout },
+			);
+
+			// "Restart": reconciliation should terminalize due to timeout.
+			provider.setResponses([fauxAssistantMessage('Should not be called.')]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+			await coordinator.reconcileSubmissions();
+
+			const submission = executionStore.submissions.getSubmission(input.dispatchId);
+			expect(submission).toMatchObject({ status: 'settled' });
+			expect(submission?.error).toContain('exceeded configured timeout');
+		});
+	});
+
+	describe('tool repair across restart', () => {
+		it('repairs interrupted tool calls and completes the submission after restart', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+
+			// Set up: two tool calls, process will be interrupted mid-execution.
+			const toolCalls = [
+				{ id: 'tc-1', name: 'get_weather' },
+				{ id: 'tc-2', name: 'get_time' },
+			];
+
+			// Manually build the interrupted session state in the store.
+			const store = createNodeAgentExecutionStore(dbPath);
+			const input = makeDispatchInput({ session: 'tool-repair-session' });
+			store.submissions.admitDispatch(input);
+			const claimed = store.submissions.claimSubmission({
+				submissionId: input.dispatchId,
+				attemptId: 'attempt-tool-repair',
+			});
+			expect(claimed).toBeTruthy();
+
+			// Mark input applied (the submission got past input application).
+			store.submissions.markSubmissionInputApplied({
+				submissionId: input.dispatchId,
+				attemptId: 'attempt-tool-repair',
+			});
+
+			// Create a journal at tool_request_recorded phase (interrupted during tool execution).
+			store.submissions.beginTurnJournal({
+				submissionId: input.dispatchId,
+				sessionKey: claimed!.sessionKey,
+				kind: 'dispatch',
+				attemptId: 'attempt-tool-repair',
+				operationId: 'op-1',
+				turnId: 'turn-1',
+				phase: 'before_provider',
+			});
+			store.submissions.updateTurnJournalPhase(
+				{ submissionId: input.dispatchId, attemptId: 'attempt-tool-repair' },
+				'tool_request_recorded',
+				{ toolRequest: { toolCalls: toolCalls.map((tc) => ({ type: 'toolCall' as const, ...tc })) } },
+			);
+
+			// Also persist the session history up to the tool calls (user msg + assistant msg).
+			const storageKey = createSessionStorageKey('instance-1', 'default', 'tool-repair-session');
+			const now = new Date().toISOString();
+			store.sessions.save(storageKey, {
+				version: 5,
+				affinityKey: generateSessionAffinityKey(),
+				entries: [
+					{
+						type: 'message',
+						id: 'e1',
+						parentId: null,
+						timestamp: now,
+						message: { role: 'user', content: 'Run the tools.', timestamp: Date.now() } as any,
+						source: 'dispatch',
+						dispatch: {
+							dispatchId: input.dispatchId,
+							agent: 'assistant',
+							id: 'instance-1',
+							session: 'tool-repair-session',
+							acceptedAt: now,
+							input: { message: 'Hello' },
+						},
+					},
+					{
+						type: 'message',
+						id: 'e2',
+						parentId: 'e1',
+						timestamp: now,
+						message: {
+							role: 'assistant',
+							content: toolCalls.map((tc) => ({
+								type: 'toolCall',
+								id: tc.id,
+								name: tc.name,
+								arguments: {},
+							})),
+							stopReason: 'toolUse',
+							api: 'test',
+							provider: 'test',
+							model: 'test',
+							usage: {
+								input: 0,
+								output: 0,
+								totalTokens: 0,
+								cost: { input: 0, output: 0, total: 0 },
+							},
+							timestamp: Date.now(),
+						} as any,
+					},
+				],
+				leafId: 'e2',
+				metadata: {},
+				createdAt: now,
+				updatedAt: now,
+			});
+
+			// "Restart": The new coordinator should repair the interrupted tools and re-process.
+			// After repair, the provider will be called again with the repaired context.
+			provider.setResponses([fauxAssistantMessage('Completed after tool repair.')]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+			await coordinator.reconcileSubmissions();
+
+			const submission = executionStore.submissions.getSubmission(input.dispatchId);
+			expect(submission).toMatchObject({ status: 'settled' });
+			expect(submission?.error).toBeUndefined();
+		});
+	});
+
+	describe('queue ordering across restart', () => {
+		it('reconciles the interrupted submission before processing queued work in the same session', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			const store = createNodeAgentExecutionStore(dbPath);
+
+			// Admit two dispatches to the same session.
+			const inputA = makeDispatchInput({ dispatchId: 'dispatch-A', session: 'ordered-session' });
+			const inputB = makeDispatchInput({ dispatchId: 'dispatch-B', session: 'ordered-session' });
+			store.submissions.admitDispatch(inputA);
+			store.submissions.admitDispatch(inputB);
+
+			// Claim A (the session head), leave B queued.
+			store.submissions.claimSubmission({
+				submissionId: inputA.dispatchId,
+				attemptId: 'attempt-A',
+			});
+			// A is now running but unprocessed (simulates crash).
+
+			// "Restart": reconcile should handle A (requeue since no input applied),
+			// then process A, then drain B.
+			let callCount = 0;
+			provider.setResponses([
+				() => {
+					callCount++;
+					return fauxAssistantMessage(`Response ${callCount}`);
+				},
+				() => {
+					callCount++;
+					return fauxAssistantMessage(`Response ${callCount}`);
+				},
+			]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+			await coordinator.reconcileSubmissions();
+
+			const subA = executionStore.submissions.getSubmission(inputA.dispatchId);
+			const subB = executionStore.submissions.getSubmission(inputB.dispatchId);
+			expect(subA).toMatchObject({ status: 'settled' });
+			expect(subA?.error).toBeUndefined();
+			expect(subB).toMatchObject({ status: 'settled' });
+			expect(subB?.error).toBeUndefined();
+			expect(executionStore.submissions.hasUnsettledSubmissions()).toBe(false);
+		});
+
+		it('processes queued submissions from different sessions independently', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+
+			let callCount = 0;
+			provider.setResponses([
+				() => { callCount++; return fauxAssistantMessage(`Response ${callCount}`); },
+				() => { callCount++; return fauxAssistantMessage(`Response ${callCount}`); },
+			]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+
+			const inputA = makeDispatchInput({ dispatchId: 'dispatch-sessA', session: 'session-A' });
+			const inputB = makeDispatchInput({ dispatchId: 'dispatch-sessB', session: 'session-B' });
+
+			await coordinator.admitDispatch(inputA);
+			await coordinator.admitDispatch(inputB);
+
+			const subA = executionStore.submissions.getSubmission(inputA.dispatchId);
+			const subB = executionStore.submissions.getSubmission(inputB.dispatchId);
+			expect(subA).toMatchObject({ status: 'settled' });
+			expect(subA?.error).toBeUndefined();
+			expect(subB).toMatchObject({ status: 'settled' });
+			expect(subB?.error).toBeUndefined();
+		});
+	});
+
+	describe('queue drain after dispatch', () => {
+		it('drains queued submissions after processing a new dispatch', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createProvider();
+			const store = createNodeAgentExecutionStore(dbPath);
+
+			// Pre-queue a submission from a "previous process" that was never claimed.
+			const inputOld = makeDispatchInput({ dispatchId: 'dispatch-old', session: 'drain-session' });
+			store.submissions.admitDispatch(inputOld);
+
+			// Now create a fresh coordinator and dispatch a new submission to a different session.
+			let callCount = 0;
+			provider.setResponses([
+				() => { callCount++; return fauxAssistantMessage(`Response ${callCount}`); },
+				() => { callCount++; return fauxAssistantMessage(`Response ${callCount}`); },
+			]);
+			const { coordinator, executionStore } = createCoordinator(dbPath, provider);
+
+			const inputNew = makeDispatchInput({ dispatchId: 'dispatch-new', session: 'other-session' });
+			await coordinator.admitDispatch(inputNew);
+
+			// Both should be settled: the new one from direct processing, the old one from drain.
+			const subOld = executionStore.submissions.getSubmission(inputOld.dispatchId);
+			const subNew = executionStore.submissions.getSubmission(inputNew.dispatchId);
+			expect(subNew).toMatchObject({ status: 'settled' });
+			expect(subNew?.error).toBeUndefined();
+			expect(subOld).toMatchObject({ status: 'settled' });
+			expect(subOld?.error).toBeUndefined();
+		});
+	});
+});

@@ -71,25 +71,34 @@ export function createNodeAgentCoordinator(options: {
 	}
 
 	async function drainRunnableSubmissions(): Promise<void> {
-		for (const submission of submissions.listRunnableSubmissions()) {
-			const claimed = submissions.claimSubmission({
-				submissionId: submission.submissionId,
-				attemptId: crypto.randomUUID(),
-			});
-			if (!claimed) continue;
-			try {
-				await processSubmission(claimed);
-			} catch (error) {
-				console.error(
-					'[flue:submission-reconciliation]',
-					{
-						submissionId: submission.submissionId,
-						operation: 'drain_queued',
-						outcome: 'failed',
-					},
-					error,
-				);
+		// Re-query after each processed submission because settling one session
+		// head may make the next same-session submission runnable.
+		let runnable: ReturnType<typeof submissions.listRunnableSubmissions>;
+		while ((runnable = submissions.listRunnableSubmissions()).length > 0) {
+			let progressed = false;
+			for (const submission of runnable) {
+				const claimed = submissions.claimSubmission({
+					submissionId: submission.submissionId,
+					attemptId: crypto.randomUUID(),
+				});
+				if (!claimed) continue;
+				progressed = true;
+				try {
+					await processSubmission(claimed);
+				} catch (error) {
+					console.error(
+						'[flue:submission-reconciliation]',
+						{
+							submissionId: submission.submissionId,
+							operation: 'drain_queued',
+							outcome: 'failed',
+						},
+						error,
+					);
+				}
 			}
+			// If nothing was claimed in a full pass, stop to avoid infinite loops.
+			if (!progressed) break;
 		}
 	}
 
