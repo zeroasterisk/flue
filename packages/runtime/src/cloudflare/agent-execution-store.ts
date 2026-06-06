@@ -7,9 +7,9 @@ import type {
 	AgentTurnJournal,
 	AgentTurnJournalPhase,
 	CreateTurnJournalInput,
-	SqlStorage,
 	SubmissionAttemptRef,
 } from '../agent-execution-store.ts';
+import type { SqlStorage } from '../sql-storage.ts';
 import {
 	DURABILITY_DEFAULT_MAX_RETRY,
 	DURABILITY_DEFAULT_TIMEOUT_MINUTES,
@@ -353,7 +353,7 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 		this.transactionSync(() => {
 			this.sql.exec(
 				`INSERT OR IGNORE INTO flue_agent_dispatch_receipts (dispatch_id, accepted_at, settled_at)
-				 SELECT submission_id, accepted_at, settled_at
+				 SELECT submission_id, accepted_at, COALESCE(settled_at, accepted_at)
 				 FROM flue_agent_submissions
 				 WHERE session_key = ? AND kind = 'dispatch' AND status = 'settled'`,
 				sessionKey,
@@ -700,16 +700,6 @@ function ensureSubmissionTable(sql: SqlStorage): void {
 		 timeout_at INTEGER NOT NULL DEFAULT 0
 		)`,
 	);
-	// Additive migration for existing tables created before durability columns existed.
-	try {
-		sql.exec(`ALTER TABLE flue_agent_submissions ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`);
-	} catch { /* column already exists */ }
-	try {
-		sql.exec(`ALTER TABLE flue_agent_submissions ADD COLUMN max_retry INTEGER NOT NULL DEFAULT ${DURABILITY_DEFAULT_MAX_RETRY}`);
-	} catch { /* column already exists */ }
-	try {
-		sql.exec(`ALTER TABLE flue_agent_submissions ADD COLUMN timeout_at INTEGER NOT NULL DEFAULT 0`);
-	} catch { /* column already exists */ }
 	sql.exec(
 		`CREATE TABLE IF NOT EXISTS flue_agent_session_deletions (
 		 session_key TEXT PRIMARY KEY,

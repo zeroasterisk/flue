@@ -553,10 +553,10 @@ class LmdbSubmissionStore implements AgentSubmissionStore {
 			for (const { value: doc } of this.subs.getRange()) {
 				if (doc.sessionKey !== sessionKey || doc.status !== 'settled') continue;
 				// Preserve dispatch receipt for idempotent replay.
-				if (doc.kind === 'dispatch' && doc.settledAt !== null) {
+				if (doc.kind === 'dispatch') {
 					this.receipts.putSync(doc.submissionId, {
 						acceptedAt: doc.acceptedAt,
-						settledAt: doc.settledAt,
+						settledAt: doc.settledAt ?? doc.acceptedAt,
 					});
 				}
 				this.subs.removeSync(doc.submissionId);

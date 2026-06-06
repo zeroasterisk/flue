@@ -11,13 +11,6 @@ import type { AgentSubmissionInput, DirectAgentSubmissionInput } from './runtime
 import type { DispatchInput } from './runtime/dispatch-queue.ts';
 import type { SessionData, SessionStore } from './types.ts';
 
-// ─── SQL storage adapter ────────────────────────────────────────────────────
-
-/** Minimal SQLite storage interface shared by both Cloudflare DO and node:sqlite. */
-export interface SqlStorage {
-	exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
-}
-
 // ─── Durability defaults ────────────────────────────────────────────────────
 
 /** Default maximum recovery attempts before terminalization. */

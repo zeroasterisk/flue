@@ -9,7 +9,8 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { AgentExecutionStore, PersistenceAdapter, SqlStorage } from '../agent-execution-store.ts';
+import type { AgentExecutionStore, PersistenceAdapter } from '../agent-execution-store.ts';
+import type { SqlStorage } from '../sql-storage.ts';
 import { createSqlAgentExecutionStoreFromSql } from '../cloudflare/agent-execution-store.ts';
 
 /**

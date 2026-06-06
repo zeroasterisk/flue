@@ -348,7 +348,9 @@ if (isLocalCliMode) {
   } else {
     startLocalAgent(localCliName, localCliId);
   }
-  process.on('disconnect', () => process.exit(0));
+  process.on('disconnect', async () => {${dbEntry ? "\n    if (userPersistenceAdapter.close) await userPersistenceAdapter.close();" : ''}
+    process.exit(0);
+  });
 } else {
   const port = parseInt(process.env.PORT || '3000', 10);
   const server = serve({

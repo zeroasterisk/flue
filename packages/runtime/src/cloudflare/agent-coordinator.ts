@@ -33,14 +33,10 @@ const FLUE_AGENT_SUBMISSION_WAKE_SECONDS = 30;
 const FLUE_AGENT_SUBMISSION_ATTEMPT_STALE_MS = 15 * 60 * 1000;
 const FLUE_AGENT_SUBMISSION_ATTEMPT_FIBER = 'flue:submission-attempt';
 
-interface SqlResult {
-	toArray(): Array<Record<string, unknown>>;
-}
+import type { SqlStorage } from '../sql-storage.ts';
 
 interface CloudflareAgentStorage {
-	sql?: {
-		exec(query: string, ...bindings: unknown[]): SqlResult;
-	};
+	sql?: SqlStorage;
 	transactionSync?<T>(closure: () => T): T;
 }
 

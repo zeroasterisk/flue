@@ -629,7 +629,7 @@ class PgSubmissionStore implements AgentSubmissionStore {
 		await this.runner.transaction(async (tx) => {
 			await tx.query(
 				`INSERT INTO flue_agent_dispatch_receipts (dispatch_id, accepted_at, settled_at)
-				 SELECT submission_id, accepted_at, settled_at
+				 SELECT submission_id, accepted_at, COALESCE(settled_at, accepted_at)
 				 FROM flue_agent_submissions
 				 WHERE session_key = $1 AND kind = 'dispatch' AND status = 'settled'
 				 ON CONFLICT (dispatch_id) DO NOTHING`,
