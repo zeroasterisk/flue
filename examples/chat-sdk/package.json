@@ -8,7 +8,7 @@
 	"dependencies": {
 		"@chat-adapter/github": "^4.29.0",
 		"@chat-adapter/state-memory": "^4.29.0",
-		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-ai": "^0.78.1",
 		"@flue/runtime": "workspace:*",
 		"agents": "^0.14.1",
 		"chat": "^4.29.0",
