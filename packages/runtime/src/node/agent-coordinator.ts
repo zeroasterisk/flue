@@ -11,6 +11,7 @@ import {
 	submissionSyntheticRequest,
 } from '../runtime/agent-submissions.ts';
 import type { CreateContextFn } from '../runtime/handle-agent.ts';
+import { agentStreamPath } from '../runtime/event-stream-store.ts';
 import type { DispatchInput, DispatchQueue } from '../runtime/dispatch-queue.ts';
 
 export interface NodeAgentCoordinator {
@@ -22,8 +23,8 @@ export interface NodeAgentCoordinator {
 	 * Create a durable admission hook for a specific agent instance. The returned
 	 * function accepts a direct prompt payload, persists it as a durable submission,
 	 * and resolves when the submission settles. Pass the result as the
-	 * `admitAttachedSubmission` option to `handleAgentRequest()` or the WebSocket
-	 * transport so that direct prompts enter the same durable lifecycle as dispatches.
+	 * `admitAttachedSubmission` option to `handleAgentRequest()` so that direct
+	 * prompts enter the same durable lifecycle as dispatches.
 	 */
 	createAdmission(agentName: string, instanceId: string): AttachedAgentSubmissionAdmission;
 	/**
@@ -67,8 +68,9 @@ export function createNodeAgentCoordinator(options: {
 	submissions: AgentSubmissionStore;
 	agents: Record<string, CreatedAgent>;
 	createContext: CreateContextFn;
+	eventStreamStore: import('../runtime/event-stream-store.ts').EventStreamStore;
 }): NodeAgentCoordinator {
-	const { submissions, agents, createContext } = options;
+	const { submissions, agents, createContext, eventStreamStore } = options;
 	const observers = createAgentSubmissionObserverRegistry();
 
 	// ── Lease ownership ──────────────────────────────────────────────────
@@ -133,8 +135,18 @@ export function createNodeAgentCoordinator(options: {
 	// ── Helpers ──────────────────────────────────────────────────────────
 
 	function makeSubmissionContext(input: AgentSubmissionInput) {
-		return (payload: unknown, dispatchId: string | undefined) =>
-			createContext(input.id, undefined, payload, submissionSyntheticRequest(input), undefined, dispatchId);
+		return (payload: unknown, dispatchId: string | undefined) => {
+			const ctx = createContext(input.id, undefined, payload, submissionSyntheticRequest(input), undefined, dispatchId);
+			// Subscribe to events for durable agent event persistence.
+			// createStream is called before processSubmission (see spawnSubmissionTask).
+			const streamPath = agentStreamPath(input.agent, input.id);
+			ctx.subscribeEvent((event) => {
+				eventStreamStore.appendEvent(streamPath, event).catch((error) => {
+					console.error('[flue:event-stream] appendEvent failed:', error);
+				});
+			});
+			return ctx;
+		};
 	}
 
 	function resolveAgent(name: string): CreatedAgent {
@@ -151,7 +163,13 @@ export function createNodeAgentCoordinator(options: {
 	 */
 	function spawnSubmissionTask(claimed: AgentSubmission): void {
 		const controller = new AbortController();
-		const task = processSubmission({
+		const task = (async () => {
+			// Ensure the agent event stream exists before processing.
+			// createStream is idempotent — safe to call on every submission.
+			// Must complete before processSubmission so appendEvent calls
+			// in the subscribeEvent callback don't hit a missing stream.
+			await eventStreamStore.createStream(agentStreamPath(claimed.input.agent, claimed.input.id));
+			return processSubmission({
 				submissions,
 				submission: claimed,
 				resolveAgent,
@@ -159,7 +177,8 @@ export function createNodeAgentCoordinator(options: {
 				observers,
 				signal: controller.signal,
 				isShutdownAbort: (error) => stopping && error instanceof DOMException && error.name === 'AbortError',
-			})
+			});
+		})()
 			.catch((error) => {
 				// AbortErrors during shutdown are expected — don't log them.
 				if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -401,6 +420,7 @@ export function createNodeAgentCoordinator(options: {
 			return async (
 				payload: DirectAgentPayload,
 				onEvent?: (event: AttachedAgentEvent) => Promise<void> | void,
+				waitForResult = true,
 			): Promise<unknown> => {
 				if (stopping) throw new Error('[flue] Coordinator is shutting down.');
 				const agent = agents[agentName];
@@ -417,6 +437,7 @@ export function createNodeAgentCoordinator(options: {
 					// resolves when processSubmission settles or fails this submission.
 					ensureClaimLoop();
 					wake();
+					if (!waitForResult) return undefined;
 					return await attachment.completion;
 				} catch (error) {
 					// If admission itself fails (before the claim loop could

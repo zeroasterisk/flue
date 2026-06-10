@@ -114,6 +114,7 @@ interface AgentSubmissionObserverRegistry {
 export type AttachedAgentSubmissionAdmission = (
 	payload: DirectAgentPayload,
 	onEvent?: (event: AttachedAgentEvent) => Promise<void> | void,
+	waitForResult?: boolean,
 ) => Promise<unknown>;
 
 export function createDispatchAgentSubmissionInput(input: DispatchInput): DispatchAgentSubmissionInput {
@@ -130,10 +131,7 @@ export function createDirectAgentSubmissionInput(options: {
 		submissionId: crypto.randomUUID(),
 		agent: options.agent,
 		id: options.id,
-		session:
-			typeof options.payload.session === 'string' && options.payload.session.trim() !== ''
-				? options.payload.session
-				: 'default',
+		session: 'default',
 		payload: options.payload,
 		acceptedAt: new Date().toISOString(),
 	};
@@ -185,6 +183,10 @@ export function createAgentSubmissionObserverRegistry(): AgentSubmissionObserver
 				resolve = resolve_;
 				reject = reject_;
 			});
+			// Callers may never await completion (fire-and-forget admission, or
+			// a failure before the await attaches) — keep a rejection from
+			// surfacing as an unhandled-rejection crash.
+			completion.catch(() => {});
 			const attached = { ...observer, resolve, reject };
 			observers.set(submissionId, attached);
 			return {

@@ -2,43 +2,34 @@ export type {
 	CreateFlueClientOptions,
 	FlueClient,
 	ListRunsOptions,
+	HttpClientOptions,
 	RequestHeaders,
-	RunEventsOptions,
+	WorkflowInvokeOptions,
+	WorkflowInvokeResult,
 } from './client.ts';
 export { createFlueClient } from './client.ts';
 export { FlueApiError } from './http.ts';
 export type {
-	AgentInvokeOptions,
-	AgentStreamInvokeOptions,
-	AgentSyncInvokeOptions,
+	AgentPromptOptions,
+	AgentPromptResult,
 } from './public/invoke.ts';
-export type { RunStreamOptions } from './public/stream.ts';
+export {
+	DurableStreamError,
+	FetchBackoffAbortError,
+	FetchError,
+	InvalidSignalError,
+	MissingStreamUrlError,
+	StreamClosedError,
+} from '@durable-streams/client';
+export type { BackoffOptions, LiveMode } from '@durable-streams/client';
 export type {
-	AgentSocket,
-	AgentSocketEventContext,
-	AgentSocketEventListener,
-	AgentSocketInvokeResult,
-	AgentSocketPromptOptions,
-	SocketEventContext,
-	SocketEventListener,
-	SocketInvokeResult,
-	WebSocketFactory,
-	WebSocketLike,
-	WebSocketTarget,
-	WebSocketUrlTransform,
-	WorkflowSocket,
-	WorkflowSocketEventContext,
-	WorkflowSocketEventListener,
-	WorkflowSocketInvokeResult,
-} from './public/websocket.ts';
-export { FlueSocketError } from './public/websocket.ts';
+	FlueEventStream,
+	FlueStreamOptions,
+} from './public/stream.ts';
 export type {
 	AgentManifestEntry,
-	AgentWebSocketClientMessage,
-	AgentWebSocketServerMessage,
 	AttachedAgentEvent,
-	AttachedAgentStreamError,
-	DirectAgentPayload,
+
 	FlueEvent,
 	FluePublicError,
 	ListResponse,
@@ -56,9 +47,4 @@ export type {
 	RunPointer,
 	RunRecord,
 	RunStatus,
-	WebSocketErrorMessage,
-	WebSocketServerMessage,
-	WorkflowRunWebSocketErrorMessage,
-	WorkflowWebSocketClientMessage,
-	WorkflowWebSocketServerMessage,
 } from './types.ts';

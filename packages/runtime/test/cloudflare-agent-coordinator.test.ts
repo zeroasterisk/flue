@@ -8,6 +8,7 @@ import type {
 	AgentSubmissionInterruption,
 	DirectAgentSubmissionInput,
 } from '../src/runtime/agent-submissions.ts';
+import { createTestEventStreamStore } from './helpers/test-event-stream-store.ts';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -64,20 +65,17 @@ function makeFakeSql(events: string[] = []) {
 function makeRuntime(options: {
 	createdAgent?: Parameters<typeof createCloudflareAgentRuntime>[0]['createdAgents'][string];
 	createContext?: Parameters<typeof createCloudflareAgentRuntime>[0]['createContext'];
+	createEventStreamStore?: Parameters<typeof createCloudflareAgentRuntime>[0]['createEventStreamStore'];
 } = {}) {
 	return createCloudflareAgentRuntime({
 		createdAgents: options.createdAgent ? { assistant: options.createdAgent } : {},
-		directHandlers: {},
-		websocketAgentHandlers: {},
 		createContext: options.createContext ?? (() => {
 			throw new Error('Unexpected context creation.');
 		}),
 		runWithInstanceContext(_instance, _agentName, callback) {
 			return callback();
 		},
-		createWebSocketPair() {
-			throw new Error('Unexpected WebSocket pair creation.');
-		},
+		createEventStreamStore: options.createEventStreamStore ?? (() => createTestEventStreamStore()),
 	});
 }
 
@@ -91,7 +89,6 @@ function makeInstance(
 		ctx: {
 			id: { toString: () => 'do-1' },
 			storage,
-			acceptWebSocket() {},
 		},
 		async __unsafe_ensureInitialized() {},
 		async schedule(_delaySeconds: number, _callback: string, _payload: undefined, options: { idempotent: boolean }) {
@@ -168,6 +165,27 @@ function prepare(
 }
 
 describe('createCloudflareAgentRuntime()', () => {
+	it('reuses one event stream store for reads and writes on an instance', async () => {
+		const store = {
+			getStreamMeta: vi.fn(),
+			readEvents: vi.fn(),
+			createStream: vi.fn(),
+			appendEvent: vi.fn(),
+			closeStream: vi.fn(),
+			subscribe: vi.fn(),
+			deleteStream: vi.fn(),
+		};
+		const createEventStreamStore = vi.fn(() => store);
+		const runtime = makeRuntime({ createEventStreamStore });
+		const { storage } = makeFakeSql();
+		const instance = makeInstance(storage);
+		prepare(runtime, instance);
+
+		await runtime.onRequest(instance, new Request('http://localhost/agents/assistant/agent-1'));
+
+		expect(createEventStreamStore).toHaveBeenCalledOnce();
+	});
+
 	it('initializes SQLite during preparation before instance attachment', () => {
 		const runtime = makeRuntime();
 
@@ -319,61 +337,7 @@ describe('createCloudflareAgentRuntime()', () => {
 		expect(await executionStore.submissions.getSubmission('direct-1')).toMatchObject({ status: 'settled' });
 	});
 
-	it('starts unrelated queued sessions when interrupted-session inspection fails', async () => {
-		const { storage } = makeFakeSql();
-		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-		let resolveProcessed!: () => void;
-		const processed = new Promise<void>((resolve) => {
-			resolveProcessed = resolve;
-		});
-		const runtime = makeRuntime({
-			createdAgent: {} as never,
-			createContext: () => {
-				return {
-					async initializeCreatedAgent() {
-						return {
-							async session() {
-								return {
-									inspectSubmissionInput() {
-										throw new Error('snapshot inspection failed');
-									},
-									async processSubmissionInput(input: DirectAgentSubmissionInput) {
-										if (input.session === 'healthy') resolveProcessed();
-									},
-								};
-							},
-						};
-					},
-					setEventCallback() {},
-				} as unknown as FlueContextInternal;
-			},
-		});
-		const instance = makeInstance(storage);
-		instance.runFiber = async (_name, callback) => callback({ stash() {} });
-		const executionStore = prepare(runtime, instance);
-		await executionStore.submissions.admitDirect(directInput());
-		await executionStore.submissions.claimSubmission({ submissionId: 'direct-1', attemptId: 'attempt-1', ownerId: 'test-owner', leaseExpiresAt: Date.now() + 30_000 });
-		await executionStore.submissions.admitDirect(directInput({ submissionId: 'direct-2', session: 'healthy' }));
-
-		await runtime.onStart(instance, () => {});
-		await processed;
-
-		expect(await executionStore.submissions.getSubmission('direct-1')).toMatchObject({ status: 'running' });
-		await vi.waitFor(async () => {
-			expect(await executionStore.submissions.getSubmission('direct-2')).toMatchObject({ status: 'settled' });
-		});
-		expect(consoleError).toHaveBeenCalledWith(
-			'[flue:submission-reconciliation]',
-			expect.objectContaining({
-				submissionId: 'direct-1',
-				operation: 'reconcile_submission',
-				outcome: 'deferred_to_scheduled_wake',
-			}),
-			expect.any(Error),
-		);
-	});
-
-	it('claims unrelated queued sessions when another attempt fails to start synchronously', async () => {
+	it('claims queued submissions when another attempt fails to start synchronously', async () => {
 		const { storage } = makeFakeSql();
 		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 		let startCalls = 0;
@@ -386,13 +350,11 @@ describe('createCloudflareAgentRuntime()', () => {
 		};
 		const executionStore = prepare(runtime, instance);
 		await executionStore.submissions.admitDirect(directInput());
-		await executionStore.submissions.admitDirect(directInput({ submissionId: 'direct-2', session: 'healthy' }));
 
 		await runtime.onStart(instance, () => {});
 
-		expect(startCalls).toBe(2);
+		expect(startCalls).toBe(1);
 		expect(await executionStore.submissions.getSubmission('direct-1')).toMatchObject({ status: 'running' });
-		expect(await executionStore.submissions.getSubmission('direct-2')).toMatchObject({ status: 'running' });
 		expect(consoleError).toHaveBeenCalledWith(
 			'[flue:submission-reconciliation]',
 			expect.objectContaining({
@@ -462,6 +424,9 @@ describe('createCloudflareAgentRuntime()', () => {
 						};
 					},
 					setEventCallback() {},
+					subscribeEvent() {
+						return () => {};
+					},
 				} as unknown as FlueContextInternal;
 			},
 		});

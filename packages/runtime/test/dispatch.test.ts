@@ -23,11 +23,11 @@ import {
 	createDispatchAgentSubmissionInput,
 	type DirectAgentSubmissionInput,
 } from '../src/runtime/agent-submissions.ts';
-import { assertAgentDispatchAdmissionInput } from '../src/runtime/handle-agent.ts';
 import { generateSessionAffinityKey } from '../src/runtime/ids.ts';
 import { createSessionStorageKey } from '../src/session-identity.ts';
 import type { AgentConfig } from '../src/types.ts';
 import { createNoopSessionEnv } from './fixtures/session-env.ts';
+import { createTestEventStreamStore } from './helpers/test-event-stream-store.ts';
 
 const providers: FauxProviderRegistration[] = [];
 
@@ -80,7 +80,6 @@ describe('dispatch()', () => {
 		const receipt = await dispatch({
 			agent: 'moderator',
 			id: 'guild:admission',
-			session: 'case:admission',
 			input: { type: 'flagged', reportId: 'report:admission' },
 		});
 
@@ -107,7 +106,6 @@ describe('dispatch()', () => {
 
 		await dispatch(moderator, {
 			id: 'guild:created',
-			session: 'case:created',
 			input: { type: 'flagged', reportId: 'report:created' },
 		});
 
@@ -115,7 +113,7 @@ describe('dispatch()', () => {
 			{
 				agent: 'moderator',
 				id: 'guild:created',
-				session: 'case:created',
+				session: 'default',
 				input: { type: 'flagged', reportId: 'report:created' },
 			},
 		]);
@@ -136,35 +134,6 @@ describe('dispatch()', () => {
 				input: { type: 'flagged', reportId: 'report:local' },
 			}),
 		).rejects.toThrow('not a discovered default-exported agent');
-	});
-
-	it('defaults the session name when dispatch() receives no session', async () => {
-		const admitted: DispatchInput[] = [];
-		configureFlueRuntime({
-			target: 'node',
-			dispatchQueue: {
-				async enqueue(input) {
-					admitted.push(input);
-					return { dispatchId: input.dispatchId, acceptedAt: input.acceptedAt };
-				},
-			},
-			manifest: { agents: [{ name: 'moderator', transports: {}, created: true }] },
-		});
-
-		await dispatch({
-			agent: 'moderator',
-			id: 'guild:default-session',
-			input: { type: 'flagged', reportId: 'report:default-session' },
-		});
-
-		expect(admitted).toMatchObject([
-			{
-				agent: 'moderator',
-				id: 'guild:default-session',
-				session: 'default',
-				input: { type: 'flagged', reportId: 'report:default-session' },
-			},
-		]);
 	});
 
 	it('snapshots JSON-like input when dispatch() admits a payload', async () => {
@@ -274,48 +243,6 @@ describe('dispatch()', () => {
 		).rejects.toThrow('requires a non-empty "id" target agent instance id');
 	});
 
-	it('rejects a blank session name when dispatch() receives a session', async () => {
-		configureFlueRuntime({
-			target: 'node',
-			dispatchQueue: noopDispatchQueue(),
-			manifest: { agents: [{ name: 'moderator', transports: {}, created: true }] },
-		});
-
-		await expect(
-			dispatch({ agent: 'moderator', id: 'guild:blank-session', session: '  ', input: null }),
-		).rejects.toThrow('requires a non-empty "session" target session id');
-	});
-
-	it('rejects a reserved task session name when dispatch() receives a session', async () => {
-		configureFlueRuntime({
-			target: 'node',
-			dispatchQueue: noopDispatchQueue(),
-			manifest: { agents: [{ name: 'moderator', transports: {}, created: true }] },
-		});
-
-		await expect(
-			dispatch({
-				agent: 'moderator',
-				id: 'guild:task-session',
-				session: 'task:default:child',
-				input: null,
-			}),
-		).rejects.toThrow('session names beginning with "task:" are reserved for delegated tasks');
-	});
-
-	it('rejects a reserved task session name when durable dispatch admission receives internal input', () => {
-		expect(() =>
-			assertAgentDispatchAdmissionInput({
-				dispatchId: 'dispatch:task-session',
-				agent: 'moderator',
-				id: 'guild:task-session',
-				session: 'task:default:child',
-				input: null,
-				acceptedAt: '2026-06-02T00:00:00.000Z',
-			}),
-		).toThrow('session names beginning with "task:" are reserved for delegated tasks');
-	});
-
 	it('rejects calls when the runtime has no dispatch queue', async () => {
 		configureFlueRuntime({
 			target: 'node',
@@ -353,7 +280,7 @@ describe('dispatched session processing', () => {
 			dispatchId: 'dispatch:input-marker-order',
 			agent: 'moderator',
 			id: 'guild:input-marker-order',
-			session: 'case:input-marker-order',
+			session: 'default',
 			input: { type: 'flagged', reportId: 'report:input-marker-order' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -412,7 +339,7 @@ describe('dispatched session processing', () => {
 			submissionId: 'direct:input-marker-order',
 			agent: 'moderator',
 			id: 'guild:direct-input-marker-order',
-			session: 'case:direct-input-marker-order',
+			session: 'default',
 			payload: { message: 'Hello directly' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -459,7 +386,7 @@ describe('dispatched session processing', () => {
 			submissionId: 'direct:terminal-advisory',
 			agent: 'moderator',
 			id: 'guild:terminal-advisory',
-			session: 'case:terminal-advisory',
+			session: 'default',
 			payload: { message: 'Hello directly' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -510,7 +437,7 @@ describe('dispatched session processing', () => {
 			submissionId: 'direct:inspect-completed',
 			agent: 'moderator',
 			id: 'guild:direct-inspect-completed',
-			session: 'case:direct-inspect-completed',
+			session: 'default',
 			payload: { message: 'Hello directly' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -566,7 +493,7 @@ describe('dispatched session processing', () => {
 			dispatchId: 'dispatch:inspect-completed',
 			agent: 'moderator',
 			id: 'guild:inspect-completed',
-			session: 'case:inspect-completed',
+			session: 'default',
 			input: { type: 'flagged', reportId: 'report:inspect-completed' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -623,7 +550,7 @@ describe('dispatched session processing', () => {
 			dispatchId: 'dispatch:inspect-applied',
 			agent: 'moderator',
 			id: 'guild:inspect-applied',
-			session: 'case:inspect-applied',
+			session: 'default',
 			input: { type: 'flagged', reportId: 'report:inspect-applied' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -766,7 +693,7 @@ describe('repairInterruptedToolCalls()', () => {
 		const tc2 = { id: `tc:b-${crypto.randomUUID()}`, name: 'search' };
 
 		// Pre-populate with interrupted state: assistant requested 2 tools, no results persisted.
-		const { data, storageKey } = interruptedSessionData('dispatch:repair-all', 'guild:repair', 'case:repair', [tc1, tc2]);
+		const { data, storageKey } = interruptedSessionData('dispatch:repair-all', 'guild:repair', 'default', [tc1, tc2]);
 		await store.sessions.save(storageKey, data);
 
 		const submissionInput = {
@@ -775,7 +702,7 @@ describe('repairInterruptedToolCalls()', () => {
 			submissionId: 'dispatch:repair-all',
 			agent: 'moderator',
 			id: 'guild:repair',
-			session: 'case:repair',
+			session: 'default',
 			input: { type: 'flagged' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -834,7 +761,7 @@ describe('repairInterruptedToolCalls()', () => {
 		const tc2 = { id: `tc:missing-${crypto.randomUUID()}`, name: 'slow_tool' };
 
 		// Pre-populate: tc1 has a result, tc2 does not.
-		const { data, storageKey } = interruptedSessionData('dispatch:repair-partial', 'guild:repair', 'case:repair', [tc1, tc2], [tc1.id]);
+		const { data, storageKey } = interruptedSessionData('dispatch:repair-partial', 'guild:repair', 'default', [tc1, tc2], [tc1.id]);
 		await store.sessions.save(storageKey, data);
 
 		const submissionInput = {
@@ -843,7 +770,7 @@ describe('repairInterruptedToolCalls()', () => {
 			submissionId: 'dispatch:repair-partial',
 			agent: 'moderator',
 			id: 'guild:repair',
-			session: 'case:repair',
+			session: 'default',
 			input: { type: 'flagged' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -902,7 +829,7 @@ describe('repairInterruptedToolCalls()', () => {
 
 		// Pre-populate: only tc2 (the middle tool) has a settled result.
 		const { data, storageKey } = interruptedSessionData(
-			'dispatch:repair-order', 'guild:repair', 'case:repair',
+			'dispatch:repair-order', 'guild:repair', 'default',
 			[tc1, tc2, tc3], [tc2.id],
 		);
 		await store.sessions.save(storageKey, data);
@@ -913,7 +840,7 @@ describe('repairInterruptedToolCalls()', () => {
 			submissionId: 'dispatch:repair-order',
 			agent: 'moderator',
 			id: 'guild:repair',
-			session: 'case:repair',
+			session: 'default',
 			input: { type: 'flagged' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -970,7 +897,7 @@ describe('repairInterruptedToolCalls()', () => {
 		const tc1 = { id: `tc:done-${crypto.randomUUID()}`, name: 'lookup' };
 
 		// Pre-populate: tc1 has a result.
-		const { data, storageKey } = interruptedSessionData('dispatch:repair-noop', 'guild:repair', 'case:repair', [tc1], [tc1.id]);
+		const { data, storageKey } = interruptedSessionData('dispatch:repair-noop', 'guild:repair', 'default', [tc1], [tc1.id]);
 		await store.sessions.save(storageKey, data);
 
 		const submissionInput = {
@@ -979,7 +906,7 @@ describe('repairInterruptedToolCalls()', () => {
 			submissionId: 'dispatch:repair-noop',
 			agent: 'moderator',
 			id: 'guild:repair',
-			session: 'case:repair',
+			session: 'default',
 			input: { type: 'flagged' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -1034,7 +961,7 @@ describe('repairInterruptedToolCalls()', () => {
 			dispatchId: 'dispatch:journal-order',
 			agent: 'moderator',
 			id: 'guild:journal-order',
-			session: 'case:journal-order',
+			session: 'default',
 			input: { type: 'flagged' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -1055,6 +982,7 @@ describe('repairInterruptedToolCalls()', () => {
 					defaultStore: executionStore.sessions,
 					submissionStore: executionStore.submissions,
 				}),
+			eventStreamStore: createTestEventStreamStore(),
 		});
 		const originalUpdate = executionStore.submissions.updateTurnJournalPhase.bind(executionStore.submissions);
 		executionStore.submissions.updateTurnJournalPhase = async (attempt, phase, options) => {
@@ -1102,7 +1030,7 @@ describe('repairInterruptedToolCalls()', () => {
 			dispatchId: 'dispatch:journal-phases',
 			agent: 'moderator',
 			id: 'guild:journal-phases',
-			session: 'case:journal-phases',
+			session: 'default',
 			input: { type: 'flagged' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
@@ -1123,6 +1051,7 @@ describe('repairInterruptedToolCalls()', () => {
 					defaultStore: executionStore.sessions,
 					submissionStore: executionStore.submissions,
 				}),
+			eventStreamStore: createTestEventStreamStore(),
 		});
 
 		const originalUpdate = executionStore.submissions.updateTurnJournalPhase.bind(executionStore.submissions);
