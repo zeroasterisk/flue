@@ -126,6 +126,24 @@ describe('createSandboxSessionEnv()', () => {
 		});
 	});
 
+	it('resolves a relative command cwd against the environment cwd when exec receives one', async () => {
+		const exec = vi.fn(async () => ({ stdout: 'done', stderr: '', exitCode: 0 }));
+		const env = createSandboxSessionEnv(createSandboxApi({ exec }), '/workspace/project');
+
+		await expect(env.exec('ls', { cwd: 'data' })).resolves.toEqual({
+			stdout: 'done',
+			stderr: '',
+			exitCode: 0,
+		});
+
+		expect(exec).toHaveBeenCalledWith('ls', {
+			cwd: '/workspace/project/data',
+			env: undefined,
+			timeout: undefined,
+			signal: undefined,
+		});
+	});
+
 	it('defaults command cwd to the environment cwd when exec receives no cwd', async () => {
 		const exec = vi.fn(async () => ({ stdout: '/workspace/project', stderr: '', exitCode: 0 }));
 		const env = createSandboxSessionEnv(createSandboxApi({ exec }), '/workspace/project');

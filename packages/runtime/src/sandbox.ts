@@ -33,7 +33,7 @@ export function createCwdSessionEnv(parentEnv: SessionEnv, cwd: string): Session
 	return {
 		exec: (cmd, opts) =>
 			parentEnv.exec(cmd, {
-				cwd: opts?.cwd ?? scopedCwd,
+				cwd: opts?.cwd !== undefined ? resolvePath(opts.cwd) : scopedCwd,
 				env: opts?.env,
 				timeout: opts?.timeout,
 				signal: opts?.signal,
@@ -206,7 +206,7 @@ export function createSandboxSessionEnv(api: SandboxApi, cwd: string): SessionEn
 			const signal = options?.signal;
 			if (signal?.aborted) throw abortErrorFor(signal);
 			const result = await api.exec(command, {
-				cwd: options?.cwd ?? cwd,
+				cwd: options?.cwd !== undefined ? resolvePath(options.cwd) : cwd,
 				env: options?.env,
 				timeout: options?.timeout,
 				signal,
