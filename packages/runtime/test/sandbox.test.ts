@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSandboxSessionEnv, type SandboxApi } from '../src/index.ts';
+import { bashFactoryToSessionEnv } from '../src/internal.ts';
+import type { BashLike } from '../src/types.ts';
 
 function createSandboxApi(overrides: Partial<SandboxApi> = {}): SandboxApi {
 	return {
@@ -262,5 +264,35 @@ describe('createSandboxSessionEnv()', () => {
 			timeoutMs: undefined,
 			signal: controller.signal,
 		});
+	});
+});
+
+describe('bashFactoryToSessionEnv()', () => {
+	it('rejects before execution when a signal-blind Bash runtime receives an already-aborted signal', async () => {
+		const exec = vi.fn(async () => ({ stdout: 'unexpected', stderr: '', exitCode: 0 }));
+		const bash: BashLike = {
+			exec,
+			getCwd: () => '/workspace/project',
+			fs: {
+				readFile: async () => '',
+				readFileBuffer: async () => new Uint8Array(),
+				writeFile: async () => {},
+				stat: async () => ({}),
+				readdir: async () => [],
+				exists: async () => false,
+				mkdir: async () => {},
+				rm: async () => {},
+				resolvePath: (base, path) => `${base}/${path}`,
+			},
+		};
+		const env = await bashFactoryToSessionEnv(() => bash);
+		const controller = new AbortController();
+		controller.abort('stop before execution');
+
+		await expect(env.exec('npm test', { signal: controller.signal })).rejects.toMatchObject({
+			name: 'AbortError',
+			message: 'stop before execution',
+		});
+		expect(exec).not.toHaveBeenCalled();
 	});
 });

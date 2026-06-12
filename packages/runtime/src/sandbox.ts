@@ -99,6 +99,10 @@ function createBashSessionEnv(bash: BashLike): SessionEnv {
 
 	return {
 		exec: async (cmd, opts) => {
+			// Pre/post abort checks here — mirrors the sandbox and local
+			// adapters, so a Bash-like implementation that ignores
+			// AbortSignal still never executes on a pre-aborted call.
+			if (opts?.signal?.aborted) throw abortErrorFor(opts.signal);
 			const exec = bash.exec as unknown as (
 				this: BashLike,
 				command: string,
