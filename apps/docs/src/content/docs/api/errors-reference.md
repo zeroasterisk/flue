@@ -36,25 +36,25 @@ Caller-safe error details exposed by Flue transports. Unknown failures become a 
 
 The following categories are stable for framework-owned transport failures. HTTP responses use the listed status code.
 
-| Type                       | HTTP status | Meaning                                                                                   |
-| -------------------------- | ----------- | ----------------------------------------------------------------------------------------- |
-| `method_not_allowed`       | `405`       | The endpoint does not accept the request method. HTTP responses include `Allow`.          |
-| `unsupported_media_type`   | `415`       | A request body was not sent as JSON.                                                      |
-| `invalid_json`             | `400`       | A request body could not be read or parsed as JSON.                                       |
-| `agent_not_found`          | `404`       | The requested agent is not registered or not exposed through the requested transport.     |
-| `workflow_not_found`       | `404`       | The requested workflow is not registered.                                                 |
-| `workflow_not_http`        | `404`       | The workflow exists but does not expose an HTTP route.                                    |
-| `route_not_found`          | `404`       | No generated default-application route matches the request.                               |
-| `run_not_found`            | `404`       | The workflow run is missing, expired, or not owned by the resolved workflow instance.     |
-| `run_store_unavailable`    | `501`       | The runtime does not provide workflow-run storage, lookup, or listing.                    |
-| `invalid_request`          | `400`       | The request shape, parameters, or protocol message is invalid. Read `details` for the specific reason. |
-| `internal_error`           | `500`       | An unknown or non-public server failure occurred.                                         |
+| Type                     | HTTP status | Meaning                                                                                                |
+| ------------------------ | ----------- | ------------------------------------------------------------------------------------------------------ |
+| `method_not_allowed`     | `405`       | The endpoint does not accept the request method. HTTP responses include `Allow`.                       |
+| `unsupported_media_type` | `415`       | A request body was not sent as JSON.                                                                   |
+| `invalid_json`           | `400`       | A request body could not be read or parsed as JSON.                                                    |
+| `agent_not_found`        | `404`       | The requested agent is not registered or not exposed through the requested transport.                  |
+| `workflow_not_found`     | `404`       | The requested workflow is not registered.                                                              |
+| `workflow_not_http`      | `404`       | The workflow exists but does not expose an HTTP route.                                                 |
+| `route_not_found`        | `404`       | No generated default-application route matches the request.                                            |
+| `run_not_found`          | `404`       | The workflow run is missing, expired, or not owned by the resolved workflow instance.                  |
+| `run_store_unavailable`  | `501`       | The runtime does not provide workflow-run storage, lookup, or listing.                                 |
+| `invalid_request`        | `400`       | The request shape, parameters, or protocol message is invalid. Read `details` for the specific reason. |
+| `internal_error`         | `500`       | An unknown or non-public server failure occurred.                                                      |
 
 ## Transport envelopes
 
-| Surface | Envelope |
-| --- | --- |
-| Framework HTTP error response | `{ error: FluePublicError }` |
+| Surface                                                  | Envelope                     |
+| -------------------------------------------------------- | ---------------------------- |
+| Framework HTTP error response                            | `{ error: FluePublicError }` |
 | Durable Streams invalid-query or missing-stream response | `{ error: FluePublicError }` |
 
 Durable Streams reads use the same framework envelope for invalid query parameters and missing streams. A stream may still terminate through transport behavior rather than a JSON error body, such as a client disconnect during SSE.
@@ -71,6 +71,39 @@ Workflow-run records, `run_end` events, and operation events expose open-ended `
 
 ## Runtime exceptions
 
+### `FlueError`
+
+```ts
+class FlueError extends Error {
+  readonly type: string;
+  readonly details: string;
+  readonly dev: string;
+  readonly meta?: Record<string, unknown>;
+}
+```
+
+The catchable base class for framework-thrown runtime failures, exported from `@flue/runtime`. Application code distinguishes Flue failures from arbitrary errors with `instanceof FlueError`, then narrows with the concrete subclasses below or the stable `type` field. Message, `details`, and `dev` strings are human-readable prose, not API.
+
+### Session errors
+
+Harness and session operations reject with typed `FlueError` subclasses, all importable from `@flue/runtime`:
+
+| Class                       | `type`                   | Thrown when                                                                               |
+| --------------------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
+| `SessionNotFoundError`      | `session_not_found`      | `sessions.get()` targets a session that does not exist.                                   |
+| `SessionAlreadyExistsError` | `session_already_exists` | `sessions.create()` targets a session that already exists.                                |
+| `SessionBusyError`          | `session_busy`           | An operation starts, or deletion is requested, while another operation is running.        |
+| `SessionDeletedError`       | `session_deleted`        | An operation targets a deleted session.                                                   |
+| `SkillNotRegisteredError`   | `skill_not_registered`   | A skill call or activation names a skill that is not registered.                          |
+| `ModelNotConfiguredError`   | `model_not_configured`   | A model operation runs with no call-level or agent-level model configured.                |
+| `TaskDepthExceededError`    | `task_depth_exceeded`    | Nested `task()` delegation exceeds the supported depth.                                   |
+| `SubagentNotDeclaredError`  | `subagent_not_declared`  | `task()` names a subagent the agent does not declare.                                     |
+| `ToolNameConflictError`     | `tool_name_conflict`     | Custom or connector tool names collide with each other or with framework-reserved names.  |
+| `OperationFailedError`      | `operation_failed`       | An operation ran but did not complete successfully (for example, the model call errored). |
+| `SubmissionTimeoutError`    | `submission_timeout`     | A durable submission exceeded its configured processing timeout.                          |
+
+When one of these errors escapes to an HTTP transport (for example, a synchronous `?wait=result` invocation), the response body carries the error's typed envelope with status `500` instead of the generic `internal_error` payload.
+
 ### `ResultUnavailableError`
 
 ```ts
@@ -84,9 +117,9 @@ Thrown when an agent cannot produce a required structured result, either because
 
 ### Cancellation
 
-Aborted prompt, skill, task, and shell operations reject with a standard `AbortError` carrying the abort reason as `cause` when the runtime permits it.
+Aborted prompt, skill, task, and shell operations reject with a standard `AbortError` (`DOMException`) carrying the abort reason as `cause` when the runtime permits it. Cancellation is deliberately not part of the `FlueError` vocabulary.
 
-Other authoring and execution failures, such as invalid agent profiles, tool definitions, dispatch payloads, model ids, skills, or session operations, reject with human-readable `Error` messages. Those messages are not stable machine-readable categories.
+Authoring and definition-time validation failures, such as invalid agent profiles, tool definitions, dispatch payloads, or model ids, reject with human-readable `Error` messages. Those messages are not stable machine-readable categories.
 
 ## CLI, build, and development diagnostics
 
@@ -112,6 +145,7 @@ An authored [`app.ts`](/docs/api/routing-api/) owns its request pipeline. Custom
 | Surface                                                           | Contract                                                 |
 | ----------------------------------------------------------------- | -------------------------------------------------------- |
 | `FluePublicError` fields and documented categories                | Stable public transport contract.                        |
+| Exported `FlueError` subclasses and their `type` fields           | Stable public runtime contract.                          |
 | Workflow-run records, workflow events, and operation events       | Structured but open-ended failure data.                  |
 | Runtime exception messages and CLI, configuration, build messages | Human-oriented diagnostics subject to refinement.        |
 | Generated target internals                                        | Implementation details, not public transport categories. |

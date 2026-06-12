@@ -8,6 +8,7 @@ The agent API is exported from `@flue/runtime`.
 
 ```ts
 import {
+  FlueError,
   ResultUnavailableError,
   Type,
   connectMcpServer,
@@ -81,9 +82,9 @@ Throws when the profile contains unknown fields, invalid capabilities, duplicate
 
 #### `DurabilityConfig`
 
-| Field     | Type     | Default | Description                                                                                                                                      |
-| --------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `retry`   | `number` | `10`    | Maximum recovery attempts before the submission is terminalized as failed. Each interruption that requires a new attempt counts toward this limit. |
+| Field     | Type     | Default | Description                                                                                                                                                                                                                                                                                  |
+| --------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retry`   | `number` | `10`    | Maximum recovery attempts before the submission is terminalized as failed. Each interruption that requires a new attempt counts toward this limit.                                                                                                                                           |
 | `timeout` | `number` | `60`    | Maximum wall-clock minutes for a single submission. Submissions exceeding this limit are aborted and settled as failed. Set higher for long-running agents (e.g. `360` for a 6-hour agent). The timeout is checked cooperatively at turn boundaries, not preemptively during provider calls. |
 
 #### `CompactionConfig`
@@ -151,15 +152,15 @@ Adapted tool names use `mcp__<server>__<tool>`. Unsupported characters are repla
 
 #### `McpServerOptions`
 
-| Field           | Type                         | Default             | Description                                            |
-| --------------- | ---------------------------- | ------------------- | ------------------------------------------------------ |
-| `url`           | `string \| URL`              | —                   | MCP server endpoint.                                   |
-| `transport`     | `'streamable-http' \| 'sse'` | `'streamable-http'` | Remote MCP transport. Use `'sse'` for legacy servers.  |
-| `headers`       | `HeadersInit`                | —                   | Headers merged into MCP transport requests.            |
-| `requestInit`   | `RequestInit`                | —                   | Additional MCP transport request configuration.        |
-| `fetch`         | `typeof fetch`               | —                   | Custom fetch implementation used by the MCP transport. |
-| `timeout`       | `number`                     | `60000`             | Per-request timeout in milliseconds for MCP requests.  |
-| `resetTimeoutOnProgress` | `boolean`           | `false`             | Reset the per-request timeout whenever the server sends a progress notification. |
+| Field                    | Type                         | Default             | Description                                                                      |
+| ------------------------ | ---------------------------- | ------------------- | -------------------------------------------------------------------------------- |
+| `url`                    | `string \| URL`              | —                   | MCP server endpoint.                                                             |
+| `transport`              | `'streamable-http' \| 'sse'` | `'streamable-http'` | Remote MCP transport. Use `'sse'` for legacy servers.                            |
+| `headers`                | `HeadersInit`                | —                   | Headers merged into MCP transport requests.                                      |
+| `requestInit`            | `RequestInit`                | —                   | Additional MCP transport request configuration.                                  |
+| `fetch`                  | `typeof fetch`               | —                   | Custom fetch implementation used by the MCP transport.                           |
+| `timeout`                | `number`                     | `60000`             | Per-request timeout in milliseconds for MCP requests.                            |
+| `resetTimeoutOnProgress` | `boolean`                    | `false`             | Reset the per-request timeout whenever the server sends a progress notification. |
 
 #### `McpServerConnection`
 
@@ -311,7 +312,7 @@ Gets or creates a session in this harness. Defaults to the `'default'` session. 
 get(name?: string): Promise<FlueSession>;
 ```
 
-Loads an existing session. Defaults to `'default'`. Throws if it does not exist.
+Loads an existing session. Defaults to `'default'`. Rejects with `SessionNotFoundError` if it does not exist.
 
 ### `harness.sessions.create(...)`
 
@@ -319,7 +320,7 @@ Loads an existing session. Defaults to `'default'`. Throws if it does not exist.
 create(name?: string): Promise<FlueSession>;
 ```
 
-Creates a new session. Defaults to `'default'`. Throws if it already exists.
+Creates a new session. Defaults to `'default'`. Rejects with `SessionAlreadyExistsError` if it already exists.
 
 ### `harness.sessions.delete(...)`
 
@@ -327,7 +328,7 @@ Creates a new session. Defaults to `'default'`. Throws if it already exists.
 delete(name?: string): Promise<void>;
 ```
 
-Deletes a session's stored conversation state. Defaults to `'default'`. No-op when missing. Rejects if the open session has an active operation. It also rejects while the session has accepted durable submissions queued or running. Session-management requests for one name are applied in request order.
+Deletes a session's stored conversation state. Defaults to `'default'`. No-op when missing. Rejects with `SessionBusyError` if the open session has an active operation. It also rejects while the session has accepted durable submissions queued or running. Session-management requests for one name are applied in request order.
 
 ### `harness.shell(...)`
 
@@ -526,7 +527,7 @@ Reads and writes files in the session sandbox without recording them in the conv
 compact(): Promise<void>;
 ```
 
-Triggers conversation compaction immediately. Resolves without work when there is nothing to compact. Rejects when summarization fails or is aborted. Throws if another operation is active on the session.
+Triggers conversation compaction immediately. Resolves without work when there is nothing to compact. Rejects when summarization fails or is aborted. Rejects with `SessionBusyError` if another operation is active on the session.
 
 ### `session.delete()`
 
@@ -534,7 +535,7 @@ Triggers conversation compaction immediately. Resolves without work when there i
 delete(): Promise<void>;
 ```
 
-Deletes this session's stored conversation state. Rejects while an operation is active. It also rejects while accepted durable submissions are queued or running for the session. Once deletion starts, the session is unusable and concurrent calls share the same deletion work.
+Deletes this session's stored conversation state. Rejects with `SessionBusyError` while an operation is active. It also rejects while accepted durable submissions are queued or running for the session. Once deletion starts, the session is unusable and concurrent calls share the same deletion work.
 
 #### `CallHandle<T>`
 
@@ -546,6 +547,8 @@ interface CallHandle<T> extends PromiseLike<T> {
 ```
 
 `prompt()`, `skill()`, `task()`, and `shell()` return awaitable call handles. Retain the handle when application code needs to cancel in-flight work. Aborting rejects the awaited operation with an `AbortError` (`DOMException`). Pass `options.signal` to merge an external abort signal with the handle's signal.
+
+Other session failures reject with typed `FlueError` subclasses such as `SessionBusyError`, `SkillNotRegisteredError`, and `ModelNotConfiguredError`, all importable from `@flue/runtime`. See the [Errors Reference](/docs/api/errors-reference/) for the full vocabulary.
 
 #### `FlueFs`
 
