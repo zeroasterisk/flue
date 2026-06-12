@@ -89,7 +89,7 @@ test('forwards repeated headers to automatic metadata and replay requests', asyn
 				'--header',
 				'X-Tenant-ID: tenant-1',
 				'--format',
-				'json',
+				'ndjson',
 			]);
 			assert.equal(result.code, 0, result.stderr);
 		},
@@ -148,7 +148,7 @@ test('forwards authentication headers to follow-mode streams', async () => {
 				'--header',
 				'Authorization: Bearer secret',
 				'--format',
-				'json',
+				'ndjson',
 			]);
 			assert.equal(result.code, 0, result.stderr);
 			assert.match(result.stdout, /"type":"run_end"/);
@@ -283,7 +283,7 @@ test('exits with code 2 and filters output when --types excludes the failing run
 				'--types',
 				'log',
 				'--format',
-				'json',
+				'ndjson',
 			]);
 			// run_end.isError drives the exit code even when filtered from output.
 			assert.equal(result.code, 2, result.stderr);

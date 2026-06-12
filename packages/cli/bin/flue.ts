@@ -98,7 +98,7 @@ function printUsage() {
 			'  flue init  --target <node|cloudflare> [--root <path>] [--force]\n' +
 			'  flue add   [<name>|<url>] [--category <category>] [--print]\n' +
 			'  flue docs  [read <path> | search <query>]\n' +
-			"  flue logs  <workflowRunId> [--server <url>] [--header 'Name: value'] [--follow|-f|--no-follow] [--since <offset>] [--types a,b,c] [--limit <n>] [--format pretty|json|ndjson]\n" +
+			"  flue logs  <workflowRunId> [--server <url>] [--header 'Name: value'] [--follow|-f|--no-follow] [--since <offset>] [--types a,b,c] [--limit <n>] [--format pretty|ndjson]\n" +
 			'\n' +
 			'Commands:\n' +
 			'  dev    Long-running watch-mode dev server. Rebuilds and reloads on file changes.\n' +
@@ -142,7 +142,7 @@ function printUsage() {
 			'  flue docs search "durable execution"\n' +
 			'  flue logs run_01H...                              # tail a workflow run\n' +
 			'  flue logs run_01H... --no-follow                  # replay a workflow run\n' +
-			'  flue logs run_01H... --types tool,log,run_end --format json\n' +
+			'  flue logs run_01H... --types tool,log,run_end --format ndjson\n' +
 			'\n' +
 			'Note: set the model in `createAgent(() => ({ model: "provider-id/model-id" }))` ' +
 			'or per-call `{ model: ... }` on prompt/skill/task.',
@@ -247,7 +247,7 @@ interface LogsArgs {
 	types: ReadonlySet<string> | undefined;
 	/** Cap emitted event count. Applied client-side. */
 	limit: number | undefined;
-	format: 'pretty' | 'json' | 'ndjson';
+	format: 'pretty' | 'ndjson';
 }
 
 type ParsedArgs =
@@ -548,8 +548,8 @@ function parseLogsArgs(rest: string[]): LogsArgs {
 			limit = parsed;
 		} else if (arg === '--format') {
 			const value = rest[++i];
-			if (value !== 'pretty' && value !== 'json' && value !== 'ndjson') {
-				console.error(`Invalid value for --format: "${value}". Allowed: pretty, json, ndjson`);
+			if (value !== 'pretty' && value !== 'ndjson') {
+				console.error(`Invalid value for --format: "${value}". Allowed: pretty, ndjson`);
 				process.exit(1);
 			}
 			format = value;
@@ -1420,12 +1420,12 @@ function normalizeSinceOffset(value: string): string {
 }
 
 function logsEmitEvent(event: FlueEvent, format: LogsArgs['format']): void {
-	if (format === 'json' || format === 'ndjson') {
+	if (format === 'ndjson') {
 		// ndjson lines carry a per-event resume offset derived from eventIndex
 		// (on run streams, event index == stream sequence; flue logs reads
 		// runs only). The stream's own offset getter is batch-granular and
 		// would skip events if used as a mid-batch checkpoint.
-		const offset = format === 'ndjson' && typeof event.eventIndex === 'number'
+		const offset = typeof event.eventIndex === 'number'
 			? formatEventOffset(event.eventIndex)
 			: undefined;
 		const output = offset ? { ...event, offset } : event;

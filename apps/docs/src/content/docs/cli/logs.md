@@ -7,7 +7,7 @@ lastReviewedAt: 2026-06-09
 ## Synopsis
 
 ```bash
-flue logs <workflowRunId> [--server <url>] [--header 'Name: value'] [--follow|-f|--no-follow] [--since <offset>] [--types <a,b,c>] [--limit <n>] [--format <pretty|json|ndjson>]
+flue logs <workflowRunId> [--server <url>] [--header 'Name: value'] [--follow|-f|--no-follow] [--since <offset>] [--types <a,b,c>] [--limit <n>] [--format <pretty|ndjson>]
 ```
 
 ## Description
@@ -37,7 +37,7 @@ Runs are workflow-only. Direct HTTP agent prompts and dispatched agent inputs ar
 | `--since <offset>`                | Beginning of history             | Resume strictly after a stream offset. Accepts integer event indices (legacy) or opaque Durable Streams offset strings.   |
 | `--types <a,b,c>`                 | All event types                  | Emit only the selected comma-separated event types. Filtering is applied client-side.                                     |
 | `--limit <n>`                     | Unlimited                        | Limit emitted events. Applied client-side in both replay and follow modes.                                                |
-| `--format <pretty\|json\|ndjson>` | `pretty`                         | Select human-readable or line-delimited JSON output.                                                                      |
+| `--format <pretty\|ndjson>`       | `pretty`                         | Select human-readable or line-delimited JSON output.                                                                      |
 
 When neither follow option is passed, `flue logs` reads the run record from the public `GET /runs/<runId>?meta` view to determine run status: active runs are followed, terminal runs are replayed once. The record and the event stream are served by the same public `flue()` mount behind the same middleware, so no extra mount or option is required.
 
@@ -53,7 +53,7 @@ The expanded token may still be visible in process arguments while the command r
 
 ## Output and exit behavior
 
-`pretty` writes human-readable events to stderr. `json` and `ndjson` each write one JSON event object per stdout line. `json` emits the event object unmodified. `ndjson` additionally adds a per-event `offset` field, derived from the event's `eventIndex`, that can be passed directly to `--since` to resume strictly after that event. The `offset` field is present in both replay and follow modes.
+`pretty` writes human-readable events to stderr. `ndjson` writes one JSON event object per stdout line, adding a per-event `offset` field, derived from the event's `eventIndex`, that can be passed directly to `--since` to resume strictly after that event. The `offset` field is present in both replay and follow modes.
 
 Request failures exit with status `1`. A failed workflow exits with status `2` only when its failing `run_end` event is consumed. Signal interruption (Ctrl-C) exits with status `130`.
 
