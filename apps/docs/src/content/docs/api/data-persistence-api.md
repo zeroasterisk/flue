@@ -13,6 +13,7 @@ import type {
   EventStreamReadResult,
   EventStreamStore,
   PersistenceAdapter,
+  PersistenceStores,
   RunStore,
   SessionData,
   SessionStore,
@@ -28,21 +29,23 @@ Always typecheck a custom adapter against the real types from `@flue/runtime/ada
 
 ```ts
 interface PersistenceAdapter {
-  connect(): AgentExecutionStore;
-  connectRunStore(): RunStore;
-  connectEventStreamStore(): EventStreamStore;
+  connect(): PersistenceStores | Promise<PersistenceStores>;
   migrate?(): void | Promise<void>;
   close?(): void | Promise<void>;
 }
+
+interface PersistenceStores {
+  readonly executionStore: AgentExecutionStore;
+  readonly runStore: RunStore;
+  readonly eventStreamStore: EventStreamStore;
+}
 ```
 
-A persistence adapter provides the database-backed stores used by a generated Node server. Flue calls `migrate()` once at startup when present, then calls `connect()`, `connectRunStore()`, and `connectEventStreamStore()`. On shutdown, Flue calls `close()` when present. Adapters that create schema implicitly may omit `migrate()`, but must still uphold the schema-versioning obligation below in their store-creating paths.
+A persistence adapter provides the database-backed stores used by a generated Node server. Flue calls `migrate()` once at startup when present, then awaits `connect()` once to obtain every store — an unreachable or misconfigured database fails at boot, not inside the first request. On shutdown, Flue calls `close()` when present. Adapters that create schema implicitly may omit `migrate()`, but must still uphold the schema-versioning obligation below in their store-creating paths.
 
 | Method | Contract |
 | --- | --- |
-| `connect()` | Return agent session and submission storage. |
-| `connectRunStore()` | Return workflow-run records, lookup, and listing storage. |
-| `connectEventStreamStore()` | Return durable event-stream storage for agent and workflow events. |
+| `connect()` | Open the database and return all three stores. May return a `Promise`; async pool setup, remote handshakes, and — for adapters without `migrate()` — the schema-version check belong here. |
 | `migrate?()` | Bring the store to the current schema/format version before connecting. |
 | `close?()` | Release connections, pools, or file handles during shutdown. |
 

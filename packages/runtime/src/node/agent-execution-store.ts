@@ -116,13 +116,11 @@ export function sqlite(path?: string): PersistenceAdapter {
 		},
 		connect() {
 			const { sql, runTransaction } = ensureOpen();
-			return createSqlAgentExecutionStoreFromSql(sql, runTransaction);
-		},
-		connectRunStore() {
-			return createSqlRunStore(ensureOpen().sql);
-		},
-		connectEventStreamStore() {
-			return new SqliteEventStreamStore(ensureOpen().sql);
+			return {
+				executionStore: createSqlAgentExecutionStoreFromSql(sql, runTransaction),
+				runStore: createSqlRunStore(sql),
+				eventStreamStore: new SqliteEventStreamStore(sql),
+			};
 		},
 		close() {
 			state?.db.close();

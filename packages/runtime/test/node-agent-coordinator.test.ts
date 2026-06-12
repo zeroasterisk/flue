@@ -61,10 +61,11 @@ function createTempDbPath(): string {
 }
 
 /** Open (or reopen) a file-backed execution store via the sqlite() adapter. */
-function openExecutionStore(dbPath: string): AgentExecutionStore {
+async function openExecutionStore(dbPath: string): Promise<AgentExecutionStore> {
 	const adapter = sqlite(dbPath);
-	adapter.migrate?.();
-	return adapter.connect();
+	await adapter.migrate?.();
+	const { executionStore } = await adapter.connect();
+	return executionStore;
 }
 
 /** Create a context factory that uses a real LLM model. */
@@ -131,10 +132,10 @@ function makeDispatchInput(overrides: Partial<DispatchInput> = {}): DispatchInpu
 }
 
 /** Create a coordinator backed by a real LLM. */
-function createRealCoordinator(
+async function createRealCoordinator(
 	dbPath: string,
-): { coordinator: NodeAgentCoordinator; executionStore: AgentExecutionStore } {
-	const executionStore = openExecutionStore(dbPath);
+): Promise<{ coordinator: NodeAgentCoordinator; executionStore: AgentExecutionStore }> {
+	const executionStore = await openExecutionStore(dbPath);
 	const agent = createAgent(() => ({ model: REAL_MODEL }));
 	const coordinator = createNodeAgentCoordinator({
 		submissions: executionStore.submissions,
@@ -147,12 +148,12 @@ function createRealCoordinator(
 }
 
 /** Create a coordinator backed by a faux (mock) provider. */
-function createFauxCoordinator(
+async function createFauxCoordinator(
 	dbPath: string,
 	provider: FauxProviderRegistration,
 	durability?: { maxAttempts?: number; timeoutMs?: number },
-): { coordinator: NodeAgentCoordinator; executionStore: AgentExecutionStore } {
-	const executionStore = openExecutionStore(dbPath);
+): Promise<{ coordinator: NodeAgentCoordinator; executionStore: AgentExecutionStore }> {
+	const executionStore = await openExecutionStore(dbPath);
 	const agent = createAgent(() => ({
 		model: `${provider.getModel().provider}/${provider.getModel().id}`,
 		durability,
@@ -175,7 +176,7 @@ describe('NodeAgentCoordinator', () => {
 	describe('basic lifecycle', () => {
 		it.skipIf(!hasApiKey)('processes a dispatch through the full submission lifecycle with file persistence', async () => {
 			const dbPath = createTempDbPath();
-			const { coordinator, executionStore } = createRealCoordinator(dbPath);
+			const { coordinator, executionStore } = await createRealCoordinator(dbPath);
 
 			const input = makeDispatchInput();
 			await coordinator.admitDispatch(input);
@@ -188,14 +189,14 @@ describe('NodeAgentCoordinator', () => {
 
 		it.skipIf(!hasApiKey)('persists settled submission across store reopens', async () => {
 			const dbPath = createTempDbPath();
-			const { coordinator } = createRealCoordinator(dbPath);
+			const { coordinator } = await createRealCoordinator(dbPath);
 
 			const input = makeDispatchInput();
 			await coordinator.admitDispatch(input);
 			await coordinator.waitForIdle();
 
 			// "Restart": open the same file with a fresh store.
-			const reopened = openExecutionStore(dbPath);
+			const reopened = await openExecutionStore(dbPath);
 			const submission = await reopened.submissions.getSubmission(input.dispatchId);
 			expect(submission).toMatchObject({ status: 'settled', kind: 'dispatch' });
 			expect(submission?.error).toBeUndefined();
@@ -207,7 +208,7 @@ describe('NodeAgentCoordinator', () => {
 		it.skipIf(!hasApiKey)('reconciles an interrupted submission by requeuing when canonical input is absent', async () => {
 			const dbPath = createTempDbPath();
 			// First process will be "interrupted" — we manually admit+claim without processing.
-			const store1 = openExecutionStore(dbPath);
+			const store1 = await openExecutionStore(dbPath);
 			const input = makeDispatchInput();
 			await store1.submissions.admitDispatch(input);
 		await store1.submissions.claimSubmission({
@@ -219,7 +220,7 @@ leaseExpiresAt: 1,
 			// Submission is now running with no canonical input — simulates crash before input applied.
 
 		// "Restart": new coordinator reconciles with a real LLM.
-			const { coordinator, executionStore } = createRealCoordinator(dbPath);
+			const { coordinator, executionStore } = await createRealCoordinator(dbPath);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission(input.dispatchId);
@@ -233,7 +234,7 @@ leaseExpiresAt: 1,
 			provider.setResponses([fauxAssistantMessage('Complete response.')]);
 
 			// Process fully, then simulate an interrupted second dispatch to same session.
-			const { coordinator: coord1, executionStore: store1 } = createFauxCoordinator(dbPath, provider);
+			const { coordinator: coord1, executionStore: store1 } = await createFauxCoordinator(dbPath, provider);
 			const input1 = makeDispatchInput({ dispatchId: 'dispatch-first' });
 			await coord1.admitDispatch(input1);
 			await coord1.waitForIdle();
@@ -255,7 +256,7 @@ leaseExpiresAt: 1,
 
 			// "Restart": the second submission's input is applied but no completed response.
 			// It should be terminalized (not replayed).
-			const { coordinator: coord2, executionStore: store2 } = createFauxCoordinator(dbPath, provider);
+			const { coordinator: coord2, executionStore: store2 } = await createFauxCoordinator(dbPath, provider);
 			await coord2.reconcileSubmissions();
 
 			const submission = await store2.submissions.getSubmission(input2.dispatchId);
@@ -270,7 +271,7 @@ leaseExpiresAt: 1,
 		it('terminalizes a submission after exceeding the retry budget', async () => {
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			const input = makeDispatchInput();
 			await store.submissions.admitDispatch(input);
@@ -327,7 +328,7 @@ leaseExpiresAt: 1,
 
 			// "Restart": reconciliation should terminalize.
 			provider.setResponses([fauxAssistantMessage('Should not be called.')]);
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission(input.dispatchId);
@@ -341,7 +342,7 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Done.')]);
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider, {
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider, {
 				maxAttempts: 3,
 				timeoutMs: 7_200_000,
 			});
@@ -358,7 +359,7 @@ leaseExpiresAt: 1,
 		it('terminalizes a submission after the configured timeout expires', async () => {
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			const input = makeDispatchInput();
 			await store.submissions.admitDispatch(input);
@@ -373,7 +374,7 @@ leaseExpiresAt: 1,
 
 			// "Restart": reconciliation should terminalize due to timeout.
 			provider.setResponses([fauxAssistantMessage('Should not be called.')]);
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission(input.dispatchId);
@@ -387,7 +388,7 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Completed after preserved tool result.')]);
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 			const input = makeDispatchInput();
 			await store.submissions.admitDispatch(input);
 		const claimed = await store.submissions.claimSubmission({
@@ -477,7 +478,7 @@ leaseExpiresAt: 1,
 				updatedAt: now,
 			});
 
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission(input.dispatchId);
@@ -496,7 +497,7 @@ leaseExpiresAt: 1,
 			];
 
 			// Manually build the interrupted session state in the store.
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 			const input = makeDispatchInput();
 			await store.submissions.admitDispatch(input);
 		const claimed = await store.submissions.claimSubmission({
@@ -582,7 +583,7 @@ leaseExpiresAt: 1,
 			// "Restart": The new coordinator should repair the interrupted tools and re-process.
 			// After repair, the provider will be called again with the repaired context.
 			provider.setResponses([fauxAssistantMessage('Completed after tool repair.')]);
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission(input.dispatchId);
@@ -594,7 +595,7 @@ leaseExpiresAt: 1,
 	describe('queue ordering across restart', () => {
 		it.skipIf(!hasApiKey)('reconciles the interrupted submission before processing queued work in the same session', async () => {
 			const dbPath = createTempDbPath();
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			// Admit two dispatches to the same session.
 			const inputA = makeDispatchInput({ dispatchId: 'dispatch-A' });
@@ -613,7 +614,7 @@ leaseExpiresAt: 1,
 
 			// "Restart": reconcile should handle A (requeue since no input applied),
 			// then process A, then drain B. Both use a real LLM.
-			const { coordinator, executionStore } = createRealCoordinator(dbPath);
+			const { coordinator, executionStore } = await createRealCoordinator(dbPath);
 			await coordinator.reconcileSubmissions();
 			await coordinator.waitForIdle();
 
@@ -628,7 +629,7 @@ leaseExpiresAt: 1,
 
 		it.skipIf(!hasApiKey)('processes multiple queued submissions to the same instance', async () => {
 			const dbPath = createTempDbPath();
-			const { coordinator, executionStore } = createRealCoordinator(dbPath);
+			const { coordinator, executionStore } = await createRealCoordinator(dbPath);
 
 			const inputA = makeDispatchInput({ dispatchId: 'dispatch-sessA' });
 			const inputB = makeDispatchInput({ dispatchId: 'dispatch-sessB' });
@@ -649,14 +650,14 @@ leaseExpiresAt: 1,
 	describe('queue drain after dispatch', () => {
 		it.skipIf(!hasApiKey)('drains queued submissions after processing a new dispatch', async () => {
 			const dbPath = createTempDbPath();
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			// Pre-queue a submission from a "previous process" that was never claimed.
 			const inputOld = makeDispatchInput({ dispatchId: 'dispatch-old' });
 			await store.submissions.admitDispatch(inputOld);
 
 			// Now create a fresh coordinator and dispatch a new submission.
-			const { coordinator, executionStore } = createRealCoordinator(dbPath);
+			const { coordinator, executionStore } = await createRealCoordinator(dbPath);
 
 			const inputNew = makeDispatchInput({ dispatchId: 'dispatch-new' });
 			await coordinator.admitDispatch(inputNew);
@@ -675,7 +676,7 @@ leaseExpiresAt: 1,
 	describe('session deletion resume across restart', () => {
 		it('completes a crash-interrupted session deletion during reconciliation and unblocks admissions', async () => {
 			const dbPath = createTempDbPath();
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 			const sessionKey = createSessionStorageKey('instance-1', 'default', 'default');
 			await store.sessions.save(sessionKey, {
 				version: 6,
@@ -700,7 +701,7 @@ leaseExpiresAt: 1,
 
 			// "Restart": a fresh coordinator resumes the deletion on reconcile.
 			const provider = createFauxProvider();
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			expect(await executionStore.submissions.listPendingSessionDeletions()).toEqual([]);
@@ -719,7 +720,7 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Direct reply.')]);
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 
 			const admit = coordinator.createAdmission('assistant', 'instance-1');
 			const result = await admit({ message: 'Hello from direct prompt' });
@@ -733,13 +734,13 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Persisted direct reply.')]);
-			const { coordinator } = createFauxCoordinator(dbPath, provider);
+			const { coordinator } = await createFauxCoordinator(dbPath, provider);
 
 			const admit = coordinator.createAdmission('assistant', 'instance-1');
 			await admit({ message: 'Hello persisted' });
 
 			// "Restart": open the same file with a fresh store and verify settled.
-			const reopened = openExecutionStore(dbPath);
+			const reopened = await openExecutionStore(dbPath);
 			expect(await reopened.submissions.hasUnsettledSubmissions()).toBe(false);
 		});
 
@@ -747,7 +748,7 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Event test reply.')]);
-			const { coordinator } = createFauxCoordinator(dbPath, provider);
+			const { coordinator } = await createFauxCoordinator(dbPath, provider);
 
 			const events: unknown[] = [];
 			const admit = coordinator.createAdmission('assistant', 'instance-1');
@@ -771,7 +772,7 @@ leaseExpiresAt: 1,
 				fauxAssistantMessage('First reply.'),
 				fauxAssistantMessage('Second reply.'),
 			]);
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 
 			const admit = coordinator.createAdmission('assistant', 'instance-1');
 			// Fire both concurrently to the same session.
@@ -792,7 +793,7 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Recovered direct reply.')]);
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			// Manually admit a direct submission and claim it without processing.
 			await store.submissions.admitDirect({
@@ -812,7 +813,7 @@ leaseExpiresAt: 1,
 		// Submission is running with no canonical input — simulates crash before input applied.
 
 			// "Restart": new coordinator reconciles.
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission('direct-interrupted');
@@ -824,7 +825,7 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Should not run.')]);
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			// Admit, claim, and mark input applied — then "crash."
 			await store.submissions.admitDirect({
@@ -847,7 +848,7 @@ leaseExpiresAt: 1,
 		});
 
 			// "Restart": should terminalize because input was applied but no completed response.
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission('direct-terminalized');
@@ -859,7 +860,7 @@ leaseExpiresAt: 1,
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
 			provider.setResponses([fauxAssistantMessage('Recovered without observer.')]);
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			// Admit and claim without processing — simulates crash.
 			await store.submissions.admitDirect({
@@ -878,7 +879,7 @@ leaseExpiresAt: 1,
 		});
 
 			// "Restart": no observer attached. Should still reconcile and settle.
-			const { coordinator, executionStore } = createFauxCoordinator(dbPath, provider);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
 			await coordinator.reconcileSubmissions();
 
 			const submission = await executionStore.submissions.getSubmission('direct-no-observer');
@@ -890,7 +891,7 @@ leaseExpiresAt: 1,
 	describe('direct and dispatch same-session ordering', () => {
 		it('queues a dispatch behind a same-session direct prompt until the direct settles', async () => {
 			const dbPath = createTempDbPath();
-			const store = openExecutionStore(dbPath);
+			const store = await openExecutionStore(dbPath);
 
 			// Manually admit a direct submission and claim it to simulate an in-progress direct prompt.
 			await store.submissions.admitDirect({

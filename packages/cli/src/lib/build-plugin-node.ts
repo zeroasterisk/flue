@@ -111,7 +111,9 @@ async function createDefaultEnv() {
 
 ${
 			dbEntry
-				? `// Custom persistence from db.ts.
+				? `// Custom persistence from db.ts. connect() is awaited once at startup so
+// an unreachable or misconfigured database fails at boot, not inside the
+// first request.
 if (!userPersistenceAdapter || typeof userPersistenceAdapter.connect !== 'function') {
   throw new Error('[flue] db.ts must default-export a PersistenceAdapter with a connect() method.');
 }
@@ -120,27 +122,27 @@ let runStore;
 let eventStreamStore;
 try {
   if (userPersistenceAdapter.migrate) await userPersistenceAdapter.migrate();
-  executionStore = userPersistenceAdapter.connect();
+  const stores = await userPersistenceAdapter.connect();
+  if (!stores || typeof stores !== 'object') {
+    throw new Error('connect() must return { executionStore, runStore, eventStreamStore }.');
+  }
+  ({ executionStore, runStore, eventStreamStore } = stores);
   if (!executionStore || typeof executionStore.sessions?.save !== 'function' || typeof executionStore.submissions?.getSubmission !== 'function') {
-    throw new Error('connect() must return an AgentExecutionStore with sessions and submissions.');
+    throw new Error('connect() must return an executionStore with sessions and submissions.');
   }
-  runStore = userPersistenceAdapter.connectRunStore();
-  if (typeof userPersistenceAdapter.connectEventStreamStore !== 'function') {
-    throw new Error('connectEventStreamStore() must be defined on the PersistenceAdapter.');
+  if (!runStore || typeof runStore.createRun !== 'function' || typeof runStore.listRuns !== 'function') {
+    throw new Error('connect() must return a runStore.');
   }
-  eventStreamStore = userPersistenceAdapter.connectEventStreamStore();
   if (!eventStreamStore || typeof eventStreamStore.appendEvent !== 'function' || typeof eventStreamStore.readEvents !== 'function') {
-    throw new Error('connectEventStreamStore() must return an EventStreamStore.');
+    throw new Error('connect() must return an eventStreamStore.');
   }
 } catch (error) {
   throw new Error('[flue] Failed to initialize persistence from db.ts: ' + (error instanceof Error ? error.message : error), { cause: error });
 }`
 				: `// Default persistence for Node — in-memory SQLite, process lifetime.
 const defaultAdapter = sqlite();
-if (defaultAdapter.migrate) defaultAdapter.migrate();
-const executionStore = defaultAdapter.connect();
-const runStore = defaultAdapter.connectRunStore();
-const eventStreamStore = defaultAdapter.connectEventStreamStore();`
+if (defaultAdapter.migrate) await defaultAdapter.migrate();
+const { executionStore, runStore, eventStreamStore } = await defaultAdapter.connect();`
 		}
 const persistenceAdapter = ${dbEntry ? `userPersistenceAdapter` : `defaultAdapter`};
 const agentCoordinator = createNodeAgentCoordinator({

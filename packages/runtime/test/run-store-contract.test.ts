@@ -51,10 +51,11 @@ defineRunStoreContractTests('InMemoryRunStore', {
 {
 	let adapter: ReturnType<typeof sqlite> | undefined;
 	defineRunStoreContractTests('sqlite() RunStore', {
-		create() {
+		async create() {
 			adapter = sqlite();
-			adapter.migrate?.();
-			return adapter.connectRunStore();
+			await adapter.migrate?.();
+			const { runStore } = await adapter.connect();
+			return runStore;
 		},
 		async cleanup() {
 			await adapter?.close?.();

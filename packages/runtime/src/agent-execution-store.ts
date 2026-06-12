@@ -9,6 +9,7 @@
 
 import type { AgentSubmissionInput, DirectAgentSubmissionInput } from './runtime/agent-submissions.ts';
 import type { DispatchInput } from './runtime/dispatch-queue.ts';
+import type { EventStreamStore } from './runtime/event-stream-store.ts';
 import type { RunStore } from './runtime/run-store.ts';
 import type { SessionStore } from './types.ts';
 
@@ -199,18 +200,29 @@ export interface AgentExecutionStore {
 
 // ─── Persistence adapter ────────────────────────────────────────────────────
 
+/** The complete set of stores a {@link PersistenceAdapter} provides. */
+export interface PersistenceStores {
+	/** Agent session snapshots and durable submission lifecycle storage. */
+	readonly executionStore: AgentExecutionStore;
+	/** Workflow run records, lookup, and listing. */
+	readonly runStore: RunStore;
+	/** Durable append-only event streams for agents and workflow runs. */
+	readonly eventStreamStore: EventStreamStore;
+}
+
 /**
- * A persistence adapter provides an {@link AgentExecutionStore} backed by a
- * specific database. Users configure persistence by creating a `db.ts` file
- * in their source root and default-exporting an adapter.
+ * A persistence adapter provides the {@link PersistenceStores} bundle backed
+ * by a specific database. Users configure persistence by creating a `db.ts`
+ * file in their source root and default-exporting an adapter.
  *
  * Adapter packages export a factory function that returns this interface.
  * The built-in `sqlite()` adapter is available from `@flue/runtime/node`.
  *
  * Lifecycle: the framework calls `migrate()` (if present) once at startup
- * to bring the store to the current schema/format version, then calls
- * `connect()` to obtain the store. On shutdown, `close()` is called to
- * release resources.
+ * to bring the store to the current schema/format version, then awaits
+ * `connect()` once to obtain every store — an unreachable or misconfigured
+ * database fails at boot, not inside the first request. On shutdown,
+ * `close()` is called to release resources.
  *
  * Versioning obligation (storage-agnostic): an adapter durably records its
  * schema/format version when it first creates the store, and fails loudly —
@@ -222,12 +234,12 @@ export interface AgentExecutionStore {
  * same obligation natively (a key, a meta document, etc.).
  */
 export interface PersistenceAdapter {
-	/** Open the database connection and return the execution store. */
-	connect(): AgentExecutionStore;
-	/** Return a {@link RunStore} for workflow run records, lookup, and listing. */
-	connectRunStore(): RunStore;
-	/** Return an {@link EventStreamStore} for durable event stream persistence. */
-	connectEventStreamStore(): import('./runtime/event-stream-store.ts').EventStreamStore;
+	/**
+	 * Open the database and return every store. Awaited once at startup, so
+	 * async pool setup, remote handshakes, and — for adapters without
+	 * {@link migrate} — the schema-version check belong here.
+	 */
+	connect(): PersistenceStores | Promise<PersistenceStores>;
 	/**
 	 * Bring the store to the current schema/format version.
 	 * Called once at startup before {@link connect}. Creates any missing

@@ -116,15 +116,13 @@ export function postgres(urlOrOptions?: string | PostgresOptions): PersistenceAd
 		connect() {
 			const r = getRunner();
 			return {
-				sessions: new PgSessionStore(r),
-				submissions: new PgSubmissionStore(r),
+				executionStore: {
+					sessions: new PgSessionStore(r),
+					submissions: new PgSubmissionStore(r),
+				},
+				runStore: new PgRunStore(r),
+				eventStreamStore: new PgEventStreamStore(r),
 			};
-		},
-		connectRunStore() {
-			return new PgRunStore(getRunner());
-		},
-		connectEventStreamStore() {
-			return new PgEventStreamStore(getRunner());
 		},
 		async close() {
 			await runner?.close();
@@ -147,15 +145,13 @@ export function postgresFromRunner(runner: PgRunner): PersistenceAdapter {
 		},
 		connect() {
 			return {
-				sessions: new PgSessionStore(runner),
-				submissions: new PgSubmissionStore(runner),
+				executionStore: {
+					sessions: new PgSessionStore(runner),
+					submissions: new PgSubmissionStore(runner),
+				},
+				runStore: new PgRunStore(runner),
+				eventStreamStore: new PgEventStreamStore(runner),
 			};
-		},
-		connectRunStore() {
-			return new PgRunStore(runner);
-		},
-		connectEventStreamStore() {
-			return new PgEventStreamStore(runner);
 		},
 		async close() {
 			if (closed) return;

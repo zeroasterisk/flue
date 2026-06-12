@@ -61,10 +61,11 @@ function createCloudflareSqlBackend(): AgentExecutionStore {
 	return createSqlAgentExecutionStoreFromSql(sql, runTransaction);
 }
 
-function createNodeBackend(): AgentExecutionStore {
+async function createNodeBackend(): Promise<AgentExecutionStore> {
 	const adapter = sqlite();
-	adapter.migrate?.();
-	return adapter.connect();
+	await adapter.migrate?.();
+	const { executionStore } = await adapter.connect();
+	return executionStore;
 }
 
 // ─── Contract tests (shared) ────────────────────────────────────────────────
@@ -121,27 +122,27 @@ describe('sqlite() PersistenceAdapter', () => {
 		return dir;
 	}
 
-	it('creates the parent directory when it does not exist', () => {
+	it('creates the parent directory when it does not exist', async () => {
 		const dir = createTempDir();
 		const nested = join(dir, 'nested', 'deep', 'flue.db');
 		const adapter = sqlite(nested);
-		adapter.migrate?.();
-		adapter.connect();
+		await adapter.migrate?.();
+		await adapter.connect();
 		expect(existsSync(join(dir, 'nested', 'deep'))).toBe(true);
-		adapter.close?.();
+		await adapter.close?.();
 	});
 
-	it('enables WAL mode for file-backed databases', () => {
+	it('enables WAL mode for file-backed databases', async () => {
 		const dir = createTempDir();
 		const dbPath = join(dir, 'wal-test.db');
 		const adapter = sqlite(dbPath);
-		adapter.migrate?.();
-		adapter.connect();
+		await adapter.migrate?.();
+		await adapter.connect();
 		const db = new DatabaseSync(dbPath);
 		const result = db.prepare('PRAGMA journal_mode').all() as { journal_mode: string }[];
 		expect(result[0]?.journal_mode).toBe('wal');
 		db.close();
-		adapter.close?.();
+		await adapter.close?.();
 	});
 
 	it('preserves sessions across close() and connect() cycles', async () => {
@@ -149,21 +150,21 @@ describe('sqlite() PersistenceAdapter', () => {
 		const dbPath = join(dir, 'restart-test.db');
 		const adapter = sqlite(dbPath);
 
-		adapter.migrate?.();
-		const store1 = adapter.connect() as AgentExecutionStore;
+		await adapter.migrate?.();
+		const { executionStore: store1 } = await adapter.connect();
 		await store1.sessions.save('s1', sessionData());
 		await store1.submissions.admitDispatch(dispatchInput());
 		await store1.submissions.claimSubmission({ ...attempt('dispatch-1', 'attempt-1'), ownerId: 'test-owner', leaseExpiresAt: Date.now() + 30_000 });
 		await store1.submissions.completeSubmission(attempt('dispatch-1', 'attempt-1'));
-		adapter.close?.();
+		await adapter.close?.();
 
-		adapter.migrate?.();
-		const store2 = adapter.connect() as AgentExecutionStore;
+		await adapter.migrate?.();
+		const { executionStore: store2 } = await adapter.connect();
 		expect(await store2.sessions.load('s1')).toEqual(sessionData());
 		const submission = await store2.submissions.getSubmission('dispatch-1');
 		expect(submission).toMatchObject({ status: 'settled', kind: 'dispatch' });
 		expect(await store2.submissions.hasUnsettledSubmissions()).toBe(false);
-		adapter.close?.();
+		await adapter.close?.();
 	});
 
 	it('preserves workflow run records and run listing across close() and reconnect cycles', async () => {
@@ -171,8 +172,8 @@ describe('sqlite() PersistenceAdapter', () => {
 		const dbPath = join(dir, 'run-restart-test.db');
 		const adapter = sqlite(dbPath);
 
-		adapter.migrate?.();
-		const runStore1 = adapter.connectRunStore();
+		await adapter.migrate?.();
+		const { runStore: runStore1 } = await adapter.connect();
 		await runStore1.createRun({
 			runId: 'run_01DAILYREPORT',
 			workflowName: 'daily-report',
@@ -186,10 +187,10 @@ describe('sqlite() PersistenceAdapter', () => {
 			durationMs: 1000,
 			result: { report: 'done' },
 		});
-		adapter.close?.();
+		await adapter.close?.();
 
-		adapter.migrate?.();
-		const runStore2 = adapter.connectRunStore();
+		await adapter.migrate?.();
+		const { runStore: runStore2 } = await adapter.connect();
 		expect(await runStore2.getRun('run_01DAILYREPORT')).toMatchObject({
 			runId: 'run_01DAILYREPORT',
 			workflowName: 'daily-report',
@@ -209,16 +210,16 @@ describe('sqlite() PersistenceAdapter', () => {
 			workflowName: 'daily-report',
 			status: 'completed',
 		});
-		adapter.close?.();
+		await adapter.close?.();
 	});
 
 	it('returns an in-memory store when no path is provided', async () => {
 		const adapter = sqlite();
-		adapter.migrate?.();
-		const store = adapter.connect() as AgentExecutionStore;
+		await adapter.migrate?.();
+		const { executionStore: store } = await adapter.connect();
 		await store.sessions.save('s1', sessionData());
 		expect(await store.sessions.load('s1')).toEqual(sessionData());
-		adapter.close?.();
+		await adapter.close?.();
 	});
 
 	it('throws on empty string path', () => {
@@ -229,20 +230,20 @@ describe('sqlite() PersistenceAdapter', () => {
 		expect(() => sqlite('   ')).toThrow('non-empty file path');
 	});
 
-	it('close() is idempotent', () => {
+	it('close() is idempotent', async () => {
 		const adapter = sqlite();
-		adapter.migrate?.();
-		adapter.connect();
-		adapter.close?.();
-		adapter.close?.();
+		await adapter.migrate?.();
+		await adapter.connect();
+		await adapter.close?.();
+		await adapter.close?.();
 	});
 
-	it('stamps a fresh database with the current schema version', () => {
+	it('stamps a fresh database with the current schema version', async () => {
 		const dir = createTempDir();
 		const dbPath = join(dir, 'stamp-test.db');
 		const adapter = sqlite(dbPath);
-		adapter.migrate?.();
-		adapter.close?.();
+		await adapter.migrate?.();
+		await adapter.close?.();
 
 		const db = new DatabaseSync(dbPath);
 		const rows = db.prepare(`SELECT value FROM flue_meta WHERE key = 'schema_version'`).all() as { value: string }[];
@@ -250,12 +251,12 @@ describe('sqlite() PersistenceAdapter', () => {
 		db.close();
 	});
 
-	it('rejects opening a database stamped with a newer schema version', () => {
+	it('rejects opening a database stamped with a newer schema version', async () => {
 		const dir = createTempDir();
 		const dbPath = join(dir, 'newer-version-test.db');
 		const adapter = sqlite(dbPath);
-		adapter.migrate?.();
-		adapter.close?.();
+		await adapter.migrate?.();
+		await adapter.close?.();
 
 		const db = new DatabaseSync(dbPath);
 		db.prepare(`UPDATE flue_meta SET value = '999' WHERE key = 'schema_version'`).run();
@@ -265,7 +266,7 @@ describe('sqlite() PersistenceAdapter', () => {
 		try {
 			expect(() => reopened.migrate?.()).toThrowError(PersistedSchemaVersionError);
 		} finally {
-			reopened.close?.();
+			await reopened.close?.();
 		}
 	});
 });

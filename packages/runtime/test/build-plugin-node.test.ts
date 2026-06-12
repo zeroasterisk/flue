@@ -25,7 +25,9 @@ describe('NodePlugin', () => {
 		);
 
 		expect(entry).toContain('sqlite()');
-		expect(entry).toContain('defaultAdapter.connect()');
+		expect(entry).toContain(
+			'const { executionStore, runStore, eventStreamStore } = await defaultAdapter.connect()',
+		);
 		expect(entry).not.toContain('userPersistenceAdapter');
 	});
 
@@ -40,7 +42,7 @@ describe('NodePlugin', () => {
 		expect(entry).toContain('import userPersistenceAdapter from "/fixture/db.ts";');
 		expect(entry).toContain("typeof userPersistenceAdapter.connect !== 'function'");
 		expect(entry).toContain('userPersistenceAdapter.migrate');
-		expect(entry).toContain('userPersistenceAdapter.connect()');
+		expect(entry).toContain('await userPersistenceAdapter.connect()');
 		expect(entry).not.toContain('defaultAdapter');
 	});
 

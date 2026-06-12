@@ -671,8 +671,8 @@ describe('repairInterruptedToolCalls()', () => {
 	it('appends synthetic interrupted results for all unresolved tool calls', async () => {
 		const { sqlite } = await import('../src/node/agent-execution-store.ts');
 		const adapter = sqlite();
-		adapter.migrate?.();
-		const store = adapter.connect();
+		await adapter.migrate?.();
+		const { executionStore: store } = await adapter.connect();
 		const provider = createProvider();
 		const tc1 = { id: `tc:a-${crypto.randomUUID()}`, name: 'lookup' };
 		const tc2 = { id: `tc:b-${crypto.randomUUID()}`, name: 'search' };
@@ -740,8 +740,8 @@ describe('repairInterruptedToolCalls()', () => {
 	it('preserves already-settled results and only repairs missing ones', async () => {
 		const { sqlite } = await import('../src/node/agent-execution-store.ts');
 		const adapter = sqlite();
-		adapter.migrate?.();
-		const store = adapter.connect();
+		await adapter.migrate?.();
+		const { executionStore: store } = await adapter.connect();
 		const provider = createProvider();
 		const tc1 = { id: `tc:settled-${crypto.randomUUID()}`, name: 'fast_tool' };
 		const tc2 = { id: `tc:missing-${crypto.randomUUID()}`, name: 'slow_tool' };
@@ -807,8 +807,8 @@ describe('repairInterruptedToolCalls()', () => {
 	it('produces correctly ordered results when a non-first tool is the only settled one', async () => {
 		const { sqlite } = await import('../src/node/agent-execution-store.ts');
 		const adapter = sqlite();
-		adapter.migrate?.();
-		const store = adapter.connect();
+		await adapter.migrate?.();
+		const { executionStore: store } = await adapter.connect();
 		const provider = createProvider();
 		const tc1 = { id: `tc:first-${crypto.randomUUID()}`, name: 'tool_a' };
 		const tc2 = { id: `tc:second-${crypto.randomUUID()}`, name: 'tool_b' };
@@ -879,8 +879,8 @@ describe('repairInterruptedToolCalls()', () => {
 	it('returns undefined when all tool calls already have results', async () => {
 		const { sqlite } = await import('../src/node/agent-execution-store.ts');
 		const adapter = sqlite();
-		adapter.migrate?.();
-		const store = adapter.connect();
+		await adapter.migrate?.();
+		const { executionStore: store } = await adapter.connect();
 		const provider = createProvider();
 		const tc1 = { id: `tc:done-${crypto.randomUUID()}`, name: 'lookup' };
 
@@ -921,8 +921,8 @@ describe('repairInterruptedToolCalls()', () => {
 	it('persists assistant tool request before recording tool_request_recorded when a turn invokes a tool', async () => {
 		const { sqlite } = await import('../src/node/agent-execution-store.ts');
 		const adapter = sqlite();
-		adapter.migrate?.();
-		const executionStore = adapter.connect();
+		await adapter.migrate?.();
+		const { executionStore } = await adapter.connect();
 		const provider = createProvider();
 		const toolCallId = `tool:journal-order-${crypto.randomUUID()}`;
 		provider.setResponses([
@@ -1000,8 +1000,8 @@ describe('repairInterruptedToolCalls()', () => {
 	it('records journal phase transitions through tool_request_recorded during a tool-use turn', async () => {
 		const { sqlite } = await import('../src/node/agent-execution-store.ts');
 		const adapter = sqlite();
-		adapter.migrate?.();
-		const executionStore = adapter.connect();
+		await adapter.migrate?.();
+		const { executionStore } = await adapter.connect();
 		const provider = createProvider();
 		const toolCallId = `tool:journal-${crypto.randomUUID()}`;
 		provider.setResponses([

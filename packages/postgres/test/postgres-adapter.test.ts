@@ -54,7 +54,8 @@ defineStoreContractTests('Postgres AgentExecutionStore', {
 		const runner = createPgliteRunner();
 		const adapter = postgresFromRunner(runner);
 		await adapter.migrate?.();
-		return adapter.connect();
+		const { executionStore } = await adapter.connect();
+		return executionStore;
 	},
 });
 
@@ -63,7 +64,8 @@ defineEventStreamStoreContractTests('Postgres EventStreamStore', {
 		const runner = createPgliteRunner();
 		const adapter = postgresFromRunner(runner);
 		await adapter.migrate?.();
-		return adapter.connectEventStreamStore();
+		const { eventStreamStore } = await adapter.connect();
+		return eventStreamStore;
 	},
 });
 
@@ -72,7 +74,8 @@ defineRunStoreContractTests('Postgres RunStore', {
 		const runner = createPgliteRunner();
 		const adapter = postgresFromRunner(runner);
 		await adapter.migrate?.();
-		return adapter.connectRunStore();
+		const { runStore } = await adapter.connect();
+		return runStore;
 	},
 });
 
@@ -96,7 +99,7 @@ describe('postgres() PersistenceAdapter', () => {
 		const runner = createPgliteRunner();
 		const adapter = postgresFromRunner(runner);
 		await adapter.migrate?.();
-		const store = adapter.connect();
+		const { executionStore: store } = await adapter.connect();
 		await store.sessions.save('s1', sessionData());
 		expect(await store.sessions.load('s1')).toEqual(sessionData());
 		if (!adapter.close) throw new Error('Expected adapter.close to be defined.');
@@ -107,7 +110,7 @@ describe('postgres() PersistenceAdapter', () => {
 		const runner = createPgliteRunner();
 		const adapter = postgresFromRunner(runner);
 		await adapter.migrate?.();
-		adapter.connect();
+		await adapter.connect();
 		if (!adapter.close) throw new Error('Expected adapter.close to be defined.');
 		await adapter.close();
 		await adapter.close();

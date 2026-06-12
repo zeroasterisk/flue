@@ -28,6 +28,7 @@ export type {
 	AgentTurnJournalPhase,
 	CreateTurnJournalInput,
 	PersistenceAdapter,
+	PersistenceStores,
 	SubmissionAttemptRef,
 	SubmissionClaimRef,
 	SubmissionDurability,
