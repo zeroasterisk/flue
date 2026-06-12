@@ -141,6 +141,54 @@ describe('observe()', () => {
 		}
 	});
 
+	it('delivers only the declared event types when registered with { types }', () => {
+		const events: string[] = [];
+		const stopObserving = observe(
+			(event, ctx) => {
+				if (ctx.id === 'observe-types-filter') events.push(event.type);
+			},
+			{ types: ['log'] },
+		);
+		const ctx = createContext('observe-types-filter');
+
+		try {
+			ctx.emitEvent({ type: 'idle' });
+			ctx.emitEvent({ type: 'log', level: 'info', message: 'kept' });
+			ctx.emitEvent({ type: 'idle' });
+
+			expect(events).toEqual(['log']);
+		} finally {
+			stopObserving();
+		}
+	});
+
+	it('skips event snapshot serialization when every subscriber filters out the event type', () => {
+		const failure = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		const events: string[] = [];
+		const stopObserving = observe(
+			(event, ctx) => {
+				if (ctx.id === 'observe-types-lazy-snapshot') events.push(event.type);
+			},
+			{ types: ['idle'] },
+		);
+		const ctx = createContext('observe-types-lazy-snapshot');
+		const circular: { self?: unknown } = {};
+		circular.self = circular;
+
+		try {
+			// A circular payload would fail JSON snapshotting; with no subscriber
+			// listening for 'log', the snapshot must never be attempted.
+			ctx.emitEvent({ type: 'log', level: 'info', message: 'skipped', attributes: { circular } });
+			ctx.emitEvent({ type: 'idle' });
+
+			expect(events).toEqual(['idle']);
+			expect(failure).not.toHaveBeenCalled();
+		} finally {
+			stopObserving();
+			failure.mockRestore();
+		}
+	});
+
 	it('stops delivery when the unsubscribe callback is invoked', () => {
 		const events: string[] = [];
 		const stopObserving = observe((event, ctx) => {

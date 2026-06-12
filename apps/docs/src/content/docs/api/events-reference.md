@@ -129,12 +129,18 @@ type AttachedAgentEvent = Exclude<
 ### `observe(...)`
 
 ```ts
-function observe(subscriber: FlueEventSubscriber): () => void;
+function observe(subscriber: FlueEventSubscriber, options?: ObserveOptions): () => void;
+
+interface ObserveOptions {
+  types?: readonly FlueEvent['type'][];
+}
 ```
 
 Subscribes to live workflow-run and agent-interaction activity emitted in the current isolate. The returned function unsubscribes the listener. Subscribers run synchronously from the event emission path with isolated JSON snapshots. Keep callbacks lightweight and queue substantial asynchronous work instead of blocking emission. Returned promises are observed for rejection but are not awaited.
 
 `observe()` receives every emitted event, including `turn_request` — the full model-visible request is available to in-process observability without being persisted to the primary database.
+
+Pass `options.types` to restrict delivery to the event types the subscriber handles. When no registered subscriber listens for an event's type, the event's snapshot is never serialized — declare `types` for subscribers that ignore per-chunk streaming events (`message_update`, `text_delta`, `thinking_*`), since `message_update` re-serializes the full accumulated assistant message on every streamed chunk.
 
 See [Observability](/docs/guide/observability/) for application setup and exporter guidance.
 

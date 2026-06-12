@@ -7,17 +7,19 @@
 Configure your OpenTelemetry SDK and exporter in your application, then register the observer in `.flue/app.ts`:
 
 ```ts
-import { createOpenTelemetryObserver } from '@flue/opentelemetry';
+import { createOpenTelemetryObserver, observedEventTypes } from '@flue/opentelemetry';
 import { observe } from '@flue/runtime';
 import { flue } from '@flue/runtime/routing';
 import { Hono } from 'hono';
 
-observe(createOpenTelemetryObserver());
+observe(createOpenTelemetryObserver(), { types: observedEventTypes });
 
 const app = new Hono();
 app.route('/', flue());
 export default app;
 ```
+
+`observedEventTypes` lists every event type the observer acts on. Registering with `{ types: observedEventTypes }` lets the runtime skip snapshot serialization for high-frequency streaming events (such as `message_update`) that the observer ignores.
 
 Pass a tracer when the application already owns a configured tracer instance:
 

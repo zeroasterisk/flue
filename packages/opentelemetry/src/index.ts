@@ -17,6 +17,32 @@ export interface OpenTelemetryObserverOptions {
 	resolveRootContext?: (event: FlueEvent, ctx: FlueContext) => Context | undefined;
 }
 
+/**
+ * Every event type the observer returned by {@link createOpenTelemetryObserver}
+ * acts on. Pass as `observe(createOpenTelemetryObserver(), { types: observedEventTypes })`
+ * so the runtime skips snapshot serialization for high-frequency streaming
+ * events (such as `message_update`) that the observer ignores.
+ *
+ * Must stay in sync with the `event.type` dispatch chain inside
+ * {@link createOpenTelemetryObserver}.
+ */
+export const observedEventTypes: readonly FlueEvent['type'][] = [
+	'run_start',
+	'run_resume',
+	'run_end',
+	'operation_start',
+	'operation',
+	'task_start',
+	'task',
+	'compaction_start',
+	'compaction',
+	'turn_request',
+	'turn',
+	'tool_start',
+	'tool',
+	'log',
+];
+
 export function createOpenTelemetryObserver(
 	options: OpenTelemetryObserverOptions = {},
 ): FlueEventSubscriber {

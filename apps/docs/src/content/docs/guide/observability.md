@@ -83,17 +83,19 @@ When an operation is slow or unexpectedly expensive, its nested activity can pro
 
 Callbacks registered with `observe(...)` are invoked while Flue emits activity and receive isolated JSON snapshots. These runtime events are content-bearing: depending on the event, they can include payloads, prompts, model messages, image bytes, logs, tool values, and errors. Workflow history persists events in the event stream store when event persistence succeeds. Keep callbacks lightweight and apply an exporter-local sanitization policy before forwarding events externally. Returned promises are observed for rejection but are not awaited. In a distributed deployment, each running application context observes the activity it handles; send telemetry to an external backend if it needs to be aggregated across instances.
 
+Pass `observe(subscriber, { types: [...] })` to restrict delivery to the event types your subscriber handles. This is a cost control, not just a filter: each delivered event is serialized into an isolated snapshot on the emit path, and streaming events such as `message_update` carry the full accumulated assistant message on every streamed chunk. Listing only lifecycle event types keeps observers off that per-chunk path.
+
 ## Export telemetry safely
 
 If your application already uses OpenTelemetry, register Flue's observer adapter in `src/app.ts`:
 
 ```ts title="src/app.ts"
-import { createOpenTelemetryObserver } from '@flue/opentelemetry';
+import { createOpenTelemetryObserver, observedEventTypes } from '@flue/opentelemetry';
 import { observe } from '@flue/runtime';
 import { flue } from '@flue/runtime/routing';
 import { Hono } from 'hono';
 
-observe(createOpenTelemetryObserver());
+observe(createOpenTelemetryObserver(), { types: observedEventTypes });
 
 const app = new Hono();
 app.route('/', flue());
@@ -111,7 +113,7 @@ For an ordinary inbound HTTP request, extract its carrier in application code:
 
 ```ts title="src/app.ts"
 import { context, propagation } from '@opentelemetry/api';
-import { createOpenTelemetryObserver } from '@flue/opentelemetry';
+import { createOpenTelemetryObserver, observedEventTypes } from '@flue/opentelemetry';
 import { observe } from '@flue/runtime';
 
 observe(
@@ -122,6 +124,7 @@ observe(
       return propagation.extract(context.active(), Object.fromEntries(ctx.req.headers));
     },
   }),
+  { types: observedEventTypes },
 );
 ```
 

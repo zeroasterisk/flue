@@ -11,7 +11,20 @@ import type { FlueContext, FlueEvent } from '../types.ts';
  */
 export type FlueEventSubscriber = (event: FlueEvent, ctx: FlueContext) => void | Promise<void>;
 
-const subscribers = new Set<FlueEventSubscriber>();
+export interface ObserveOptions {
+	/**
+	 * Restrict delivery to these event types. Subscribers without `types`
+	 * receive every event. Declaring `types` matters for cost, not just
+	 * filtering: each delivered event is serialized to an isolated JSON
+	 * snapshot on the emit path, and high-frequency streaming events such as
+	 * `message_update` carry the full accumulated assistant message on every
+	 * streamed chunk. When no subscriber listens for an event's type, the
+	 * snapshot is never serialized.
+	 */
+	types?: readonly FlueEvent['type'][];
+}
+
+const subscribers = new Map<FlueEventSubscriber, ReadonlySet<FlueEvent['type']> | undefined>();
 
 /**
  * Subscribe to live workflow-run or agent-interaction activity emitted in this isolate.
@@ -38,9 +51,13 @@ const subscribers = new Set<FlueEventSubscriber>();
  * isolated JSON snapshot. They should be cheap and side-effect-only; returned
  * promises are observed for rejection but are not awaited. Queue substantial
  * work outside the callback rather than blocking emission.
+ *
+ * Pass `options.types` to restrict delivery to the event types the
+ * subscriber handles; this also skips snapshot serialization for events no
+ * subscriber listens for (see {@link ObserveOptions.types}).
  */
-export function observe(subscriber: FlueEventSubscriber): () => void {
-	subscribers.add(subscriber);
+export function observe(subscriber: FlueEventSubscriber, options?: ObserveOptions): () => void {
+	subscribers.set(subscriber, options?.types ? new Set(options.types) : undefined);
 	return () => {
 		subscribers.delete(subscriber);
 	};
@@ -53,6 +70,14 @@ export function observe(subscriber: FlueEventSubscriber): () => void {
  */
 export function dispatchGlobalEvent(event: FlueEvent, ctx: FlueContext): void {
 	if (subscribers.size === 0) return;
+	// Snapshot recipients to a local array so subscribers that unsubscribe
+	// themselves mid-dispatch don't perturb the iteration. Serialization is
+	// skipped entirely when every subscriber filters out this event's type.
+	const recipients: FlueEventSubscriber[] = [];
+	for (const [subscriber, types] of subscribers) {
+		if (types === undefined || types.has(event.type)) recipients.push(subscriber);
+	}
+	if (recipients.length === 0) return;
 	let serializedEvent: string | undefined;
 	try {
 		serializedEvent = JSON.stringify(event);
@@ -62,9 +87,7 @@ export function dispatchGlobalEvent(event: FlueEvent, ctx: FlueContext): void {
 		reportSubscriberFailure(error);
 		return;
 	}
-	// Snapshot to a local array so subscribers that unsubscribe
-	// themselves mid-dispatch don't perturb the iteration.
-	for (const subscriber of [...subscribers]) {
+	for (const subscriber of recipients) {
 		try {
 			Promise.resolve(subscriber(JSON.parse(serializedEvent) as FlueEvent, ctx)).catch(
 				reportSubscriberFailure,

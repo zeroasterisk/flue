@@ -23,7 +23,7 @@ export { IMAGE_DATA_OMITTED } from './event-redaction.ts';
 export type { McpServerConnection, McpServerOptions, McpTransport } from './mcp.ts';
 export { connectMcpServer } from './mcp.ts';
 export { ResultUnavailableError } from './result.ts';
-export { type FlueEventSubscriber, observe } from './runtime/events.ts';
+export { type FlueEventSubscriber, type ObserveOptions, observe } from './runtime/events.ts';
 export type { AgentManifestEntry } from './runtime/flue-app.ts';
 export { dispatch } from './runtime/flue-app.ts';
 export { getRun, listAgents, listRuns } from './runtime/inspect.ts';
