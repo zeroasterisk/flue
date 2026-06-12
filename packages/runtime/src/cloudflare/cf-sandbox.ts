@@ -46,14 +46,14 @@ export function cloudflareSandbox(
 	options?: CloudflareSandboxOptions,
 ): SandboxFactory {
 	return {
-		createSessionEnv: () => cfSandboxToSessionEnv(sandbox, options?.cwd),
+		createSessionEnv: async () => cfSandboxToSessionEnv(sandbox, options?.cwd),
 	};
 }
 
-export async function cfSandboxToSessionEnv(
+export function cfSandboxToSessionEnv(
 	sandbox: CloudflareSandboxStub,
 	cwd: string = '/workspace',
-): Promise<SessionEnv> {
+): SessionEnv {
 	const api: SandboxApi = {
 		async readFile(path: string): Promise<string> {
 			const file = await sandbox.readFile(path);
