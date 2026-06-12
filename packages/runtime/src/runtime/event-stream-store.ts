@@ -37,17 +37,15 @@ export function formatOffset(seq: number): string {
 /**
  * Parse a DS offset string back to an integer sequence number.
  * Accepts the `<readSeq>_<seq>` format and extracts the second component.
- * Returns -1 for the sentinel `"-1"`.
+ * Returns -1 for the sentinel `"-1"`. Throws on any other format.
  */
 export function parseOffset(offset: string): number {
 	if (offset === '-1') return -1;
-	const underscore = offset.indexOf('_');
-	const raw = underscore >= 0 ? offset.slice(underscore + 1) : offset;
-	const n = parseInt(raw, 10);
-	if (!Number.isFinite(n) || n < 0) {
+	const match = /^\d+_(\d+)$/.exec(offset);
+	if (!match) {
 		throw new Error(`[flue] Invalid stream offset: "${offset}".`);
 	}
-	return n;
+	return parseInt(match[1]!, 10);
 }
 
 export function agentStreamPath(agentName: string, instanceId: string): string {
