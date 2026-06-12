@@ -30,6 +30,10 @@
 			"types": "./dist/cloudflare/index.d.mts",
 			"import": "./dist/cloudflare/index.mjs"
 		},
+		"./cloudflare/internal": {
+			"types": "./dist/cloudflare/internal.d.mts",
+			"import": "./dist/cloudflare/internal.mjs"
+		},
 		"./node": {
 			"types": "./dist/node/index.d.mts",
 			"import": "./dist/node/index.mjs"

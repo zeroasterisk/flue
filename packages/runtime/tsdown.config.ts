@@ -7,6 +7,7 @@ export default defineConfig({
 		'src/routing.ts',
 		'src/internal.ts',
 		'src/cloudflare/index.ts',
+		'src/cloudflare/internal.ts',
 		'src/node/index.ts',
 		'src/test-utils/define-store-contract-tests.ts',
 		'src/test-utils/define-event-stream-store-contract-tests.ts',

@@ -173,7 +173,7 @@ import {
   createCloudflareRunIndex,
   createCloudflareRunStore,
   resolveCloudflareExtension,
-} from '@flue/runtime/cloudflare';
+} from '@flue/runtime/cloudflare/internal';
 import { registerApiProvider, registerProvider } from '@flue/runtime';
 
 ${agentImports}

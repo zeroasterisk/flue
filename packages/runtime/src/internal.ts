@@ -18,9 +18,10 @@ import type { ModelConfig } from './types.ts';
 export type { FlueContextConfig, FlueContextInternal } from './client.ts';
 export { createFlueContext } from './client.ts';
 // `FlueRegistry` (Durable Object class) and the composite Cloudflare run
-// store/index factories live in the `@flue/runtime/cloudflare` subpath
-// because that subpath pulls in `cloudflare:workers`, a virtual module Node
-// can't resolve. The generated CF entry imports them from there directly.
+// store/index factories live in the `@flue/runtime/cloudflare/internal`
+// subpath because that entry pulls in `cloudflare:workers`, a virtual module
+// Node can't resolve. The generated CF entry imports them from there
+// directly; nothing here may import `cloudflare:workers`.
 export {
 	CLOUDFLARE_AGENT_INTERNAL_DISPATCH_PATH,
 	createCloudflareAgentRuntime,

@@ -2,7 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-// Node-based export-map smoke tests cannot load the Cloudflare virtual module; real Cloudflare runtime behavior is covered by explicit boundary and integration suites.
+// Node-based export-map smoke tests cannot load the Cloudflare virtual module
+// pulled in by @flue/runtime/cloudflare/internal (the FlueRegistry Durable
+// Object); real Cloudflare runtime behavior is covered by explicit boundary
+// and integration suites.
 vi.mock('cloudflare:workers', () => ({
 	DurableObject: class {},
 }));
@@ -59,16 +62,30 @@ describe('package entrypoints', () => {
 		expect(node.local).toEqual(expect.any(Function));
 	});
 
-	it('exposes generated Worker adapters when generated code imports @flue/runtime/cloudflare', async () => {
+	it('exposes Cloudflare authoring APIs when a consumer imports @flue/runtime/cloudflare', async () => {
 		const cloudflare = await import('@flue/runtime/cloudflare');
 
 		expect(cloudflare).toMatchObject({
+			cloudflareSandbox: expect.any(Function),
+			extend: expect.any(Function),
+			getCloudflareContext: expect.any(Function),
+			getDurableObjectIdentity: expect.any(Function),
+		});
+		expect(cloudflare).not.toHaveProperty('FlueRegistry');
+		expect(cloudflare).not.toHaveProperty('cfSandboxToSessionEnv');
+		expect(cloudflare).not.toHaveProperty('resolveCloudflareExtension');
+	});
+
+	it('exposes generated Worker plumbing when generated code imports @flue/runtime/cloudflare/internal', async () => {
+		const internal = await import('@flue/runtime/cloudflare/internal');
+
+		expect(internal).toMatchObject({
 			cfSandboxToSessionEnv: expect.any(Function),
 			createCloudflareRunIndex: expect.any(Function),
 			createCloudflareRunStore: expect.any(Function),
-			extend: expect.any(Function),
 			FlueRegistry: expect.any(Function),
 			getCloudflareAIBindingApiProvider: expect.any(Function),
+			resolveCloudflareExtension: expect.any(Function),
 			runWithCloudflareContext: expect.any(Function),
 		});
 	});
