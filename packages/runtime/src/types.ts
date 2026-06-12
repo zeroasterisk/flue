@@ -782,8 +782,8 @@ export interface SessionStore {
 
 // ─── Options ────────────────────────────────────────────────────────────────
 
-/** All option fields are scoped to the duration of the `session.prompt()` call. */
-export interface PromptOptions<S extends v.GenericSchema | undefined = undefined> {
+/** Option fields shared by `session.prompt()`, `session.skill()`, and `session.task()`. */
+interface OperationOptions<S extends v.GenericSchema | undefined = undefined> {
 	/** Require validated structured data and resolve with `response.data`. */
 	result?: S;
 	/** Additional custom model-callable tools for this operation. */
@@ -794,44 +794,33 @@ export interface PromptOptions<S extends v.GenericSchema | undefined = undefined
 	thinkingLevel?: ThinkingLevel;
 	/** Cancel this call. See `CallHandle`. */
 	signal?: AbortSignal;
+	/** Images attached to the operation's user message. Requires a vision-capable model. */
+	images?: PromptImage[];
+}
+
+/** All option fields are scoped to the duration of the `session.prompt()` call. */
+export interface PromptOptions<S extends v.GenericSchema | undefined = undefined>
+	extends OperationOptions<S> {
 	/** Images attached to this user message. Requires a vision-capable model. */
 	images?: PromptImage[];
 }
 
 /** All option fields are scoped to the duration of the `session.skill()` call. */
-export interface SkillOptions<S extends v.GenericSchema | undefined = undefined> {
+export interface SkillOptions<S extends v.GenericSchema | undefined = undefined>
+	extends OperationOptions<S> {
 	/** Arguments included with the skill instruction. */
 	args?: Record<string, unknown>;
-	/** Require validated structured data and resolve with `response.data`. */
-	result?: S;
-	/** Additional custom model-callable tools for this operation. */
-	tools?: ToolDefinition[];
-	/** Model specifier override for this operation. */
-	model?: string;
-	/** Override reasoning effort for this call. See `AgentRuntimeConfig.thinkingLevel`. */
-	thinkingLevel?: ThinkingLevel;
-	/** Cancel this call. See `CallHandle`. */
-	signal?: AbortSignal;
 	/** Images attached to the skill's user message. Requires a vision-capable model. */
 	images?: PromptImage[];
 }
 
 /** All option fields are scoped to the duration of the `session.task()` call. */
-export interface TaskOptions<S extends v.GenericSchema | undefined = undefined> {
-	/** Require validated structured data and resolve with `response.data`. */
-	result?: S;
+export interface TaskOptions<S extends v.GenericSchema | undefined = undefined>
+	extends OperationOptions<S> {
 	/** Named subagent profile selected for this delegated task. */
 	agent?: string;
-	/** Additional custom model-callable tools for this operation. */
-	tools?: ToolDefinition[];
-	/** Model specifier override for this operation. */
-	model?: string;
-	/** Override reasoning effort for this call. See `AgentRuntimeConfig.thinkingLevel`. */
-	thinkingLevel?: ThinkingLevel;
 	/** Working directory for the detached task session. Defaults to the parent session cwd. */
 	cwd?: string;
-	/** Cancel this task. See `CallHandle`. */
-	signal?: AbortSignal;
 	/** Images attached to the task's initial user message. Requires a vision-capable model. */
 	images?: PromptImage[];
 }
