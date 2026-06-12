@@ -23,20 +23,27 @@ Sends one prompt to a persistent agent instance and waits for the terminal resul
 ### `AgentPromptResult`
 
 ```ts
-interface AgentPromptResult {
+interface AgentPromptResult extends AgentSendResult {
   result: unknown;
-  streamUrl: string;
-  offset: string;
 }
 ```
 
 ## `client.agents.send(...)`
 
 ```ts
-send(name: string, id: string, options: AgentPromptOptions): Promise<{ streamUrl: string; offset: string }>;
+send(name: string, id: string, options: AgentPromptOptions): Promise<AgentSendResult>;
 ```
 
 Starts one prompt without waiting for completion. This uses the default `POST /agents/:name/:id` response, which returns `202`. Use the returned `offset` with `agents.stream()` to read exactly that prompt's events.
+
+### `AgentSendResult`
+
+```ts
+interface AgentSendResult {
+  streamUrl: string;
+  offset: string;
+}
+```
 
 ## `client.agents.stream(...)`
 

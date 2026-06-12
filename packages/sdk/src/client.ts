@@ -6,6 +6,7 @@ import {
 	promptAgent,
 	sendAgent,
 	type AgentPromptResult,
+	type AgentSendResult,
 } from './public/invoke.ts';
 import {
 	createFlueEventStream,
@@ -36,6 +37,9 @@ export interface WorkflowInvokeResult {
 	offset: string;
 }
 
+/** Options for one catch-up read of workflow-run events (no live tailing). */
+export type RunEventsOptions = Omit<FlueStreamOptions, 'live'>;
+
 /** Options for creating a client for deployed Flue application routes. */
 export type CreateFlueClientOptions = HttpClientOptions;
 
@@ -45,7 +49,8 @@ export interface FlueClient {
 	agents: {
 		/** Resolves the terminal result for one agent prompt. */
 		prompt(name: string, id: string, options: AgentPromptOptions): Promise<AgentPromptResult>;
-		send(name: string, id: string, options: AgentPromptOptions): Promise<{ streamUrl: string; offset: string }>;
+		/** Starts one prompt without waiting for completion. */
+		send(name: string, id: string, options: AgentPromptOptions): Promise<AgentSendResult>;
 		/** Stream events from an agent instance via the Durable Streams protocol. */
 		stream(name: string, id: string, options?: FlueStreamOptions): FlueEventStream<AttachedAgentEvent>;
 	};
@@ -56,7 +61,7 @@ export interface FlueClient {
 		/** Stream events from a workflow run via the Durable Streams protocol. */
 		stream(runId: string, options?: FlueStreamOptions): FlueEventStream<FlueEvent>;
 		/** Get all events from a workflow run as an array (catch-up read, no live tailing). */
-		events(runId: string, options?: { offset?: string; signal?: AbortSignal; backoffOptions?: import('@durable-streams/client').BackoffOptions }): Promise<FlueEvent[]>;
+		events(runId: string, options?: RunEventsOptions): Promise<FlueEvent[]>;
 	};
 	/** Start workflow runs. */
 	workflows: {

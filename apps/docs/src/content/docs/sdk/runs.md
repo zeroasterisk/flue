@@ -16,10 +16,18 @@ Retrieves one workflow-run record via the public `GET /runs/:runId?meta` view. T
 ## `client.runs.events(...)`
 
 ```ts
-events(runId: string, options?: { offset?: string; signal?: AbortSignal; backoffOptions?: BackoffOptions }): Promise<FlueEvent[]>;
+events(runId: string, options?: RunEventsOptions): Promise<FlueEvent[]>;
 ```
 
 Retrieves events from a workflow run as an array. This is a Durable Streams catch-up read with no live tailing. Omit `offset` for full history, or provide an offset to resume strictly after that point.
+
+### `RunEventsOptions`
+
+```ts
+type RunEventsOptions = Omit<FlueStreamOptions, 'live'>;
+```
+
+The same options as [`FlueStreamOptions`](#fluestreamoptions) minus `live`, which `events()` never uses.
 
 ## `client.runs.stream(...)`
 

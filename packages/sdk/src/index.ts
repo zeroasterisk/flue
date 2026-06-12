@@ -3,6 +3,7 @@ export type {
 	FlueClient,
 	HttpClientOptions,
 	RequestHeaders,
+	RunEventsOptions,
 	WorkflowInvokeOptions,
 	WorkflowInvokeResult,
 } from './client.ts';
@@ -12,6 +13,7 @@ export type {
 	AgentPromptImage,
 	AgentPromptOptions,
 	AgentPromptResult,
+	AgentSendResult,
 } from './public/invoke.ts';
 export {
 	DurableStreamError,

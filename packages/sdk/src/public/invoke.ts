@@ -13,7 +13,22 @@ export interface AgentPromptOptions {
 	signal?: AbortSignal;
 }
 
-export type AgentPromptResult = { result: unknown; streamUrl: string; offset: string };
+/** Result of admitting one agent prompt. All fields are server-provided. */
+export interface AgentSendResult {
+	/** Fully resolved DS-compatible stream URL for observing the agent instance's events. */
+	streamUrl: string;
+	/**
+	 * Opaque DS stream offset captured at admission. Reading `streamUrl` from
+	 * this offset yields exactly this prompt's events.
+	 */
+	offset: string;
+}
+
+/** Result of one agent prompt that waited for the terminal result. */
+export interface AgentPromptResult extends AgentSendResult {
+	/** Terminal result of the prompt. */
+	result: unknown;
+}
 
 export async function promptAgent(
 	http: HttpClient,
@@ -35,8 +50,8 @@ export async function sendAgent(
 	name: string,
 	id: string,
 	options: AgentPromptOptions,
-): Promise<{ streamUrl: string; offset: string }> {
-	return http.json({
+): Promise<AgentSendResult> {
+	return http.json<AgentSendResult>({
 		method: 'POST',
 		path: `/agents/${encodeURIComponent(name)}/${encodeURIComponent(id)}`,
 		body: { message: options.message, ...(options.images ? { images: options.images } : {}) },
