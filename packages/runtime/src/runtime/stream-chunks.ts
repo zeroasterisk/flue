@@ -105,6 +105,13 @@ export function reconstructInterruptedStream(
 			} else {
 				blocks[update.contentIndex] = { type: 'text', text: update.delta };
 			}
+		} else if (update.type === 'text_end') {
+			const existing = blocks[update.contentIndex];
+			if (existing?.type === 'text') {
+				existing.text = update.content;
+			} else {
+				blocks[update.contentIndex] = { type: 'text', text: update.content };
+			}
 		} else if (update.type === 'thinking_start') {
 			blocks[update.contentIndex] = { type: 'thinking', thinking: '' };
 		} else if (update.type === 'thinking_delta') {

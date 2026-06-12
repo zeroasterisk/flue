@@ -21,6 +21,10 @@ function textDelta(contentIndex: number, delta: string): AssistantMessageEvent {
 	return { type: 'text_delta', contentIndex, delta, partial: fakePartial() };
 }
 
+function textEnd(contentIndex: number, content: string): AssistantMessageEvent {
+	return { type: 'text_end', contentIndex, content, partial: fakePartial() };
+}
+
 function thinkingStart(contentIndex: number): AssistantMessageEvent {
 	return { type: 'thinking_start', contentIndex, partial: fakePartial() };
 }
@@ -55,6 +59,16 @@ describe('reconstructInterruptedStream()', () => {
 		expect(result.partial.stopReason).toBe('aborted');
 		expect(result.interrupted.type).toBe('stream_interrupted');
 		expect(result.continued.type).toBe('stream_continued');
+	});
+
+	it('uses authoritative text_end content over accumulated deltas', () => {
+		const result = reconstructInterruptedStream(
+			[segment([textDelta(0, 'Hello '), textEnd(0, 'Hello world')])],
+			'key-1b',
+		);
+		expect(result).not.toBeNull();
+		if (!result) throw new Error('Expected interrupted stream result.');
+		expect(result.partial.content).toEqual([{ type: 'text', text: 'Hello world' }]);
 	});
 
 	it('reconstructs thinking blocks', () => {
