@@ -1455,6 +1455,10 @@ async function logsCommand(args: LogsArgs): Promise<void> {
 			);
 			process.exit(1);
 		}
+		// Run ids are opaque; surface the owning workflow from the run record.
+		if (args.format === 'pretty') {
+			console.error(`[flue] run          ${args.runId}  workflow=${run.workflowName}  status=${run.status}`);
+		}
 		shouldFollow = args.follow ?? run.status === 'active';
 	}
 
