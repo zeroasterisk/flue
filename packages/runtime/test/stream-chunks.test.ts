@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AssistantMessage, AssistantMessageEvent } from '@earendil-works/pi-ai';
 import { reconstructInterruptedStream, StreamChunkWriter } from '../src/runtime/stream-chunks.ts';
 
@@ -181,21 +181,48 @@ describe('StreamChunkWriter', () => {
 		expect(callCount).toBe(1);
 	});
 
-	it('cancel() stops the timer without flushing', async () => {
-		const stored: string[] = [];
-		const store = {
-			appendStreamChunkSegment: async (_k: string, _i: number, body: string) => {
-				stored.push(body);
-				return true;
-			},
-		};
-		const writer = new StreamChunkWriter(store, 'cancel-key');
-		writer.write(textDelta(0, 'pending'));
-		writer.cancel();
+	it('flushes buffered events on its own after the throttle interval', async () => {
+		vi.useFakeTimers();
+		try {
+			const stored: string[] = [];
+			const store = {
+				appendStreamChunkSegment: async (_k: string, _i: number, body: string) => {
+					stored.push(body);
+					return true;
+				},
+			};
+			const writer = new StreamChunkWriter(store, 'throttle-key');
+			writer.write(textDelta(0, 'buffered'));
+			expect(stored).toHaveLength(0);
 
-		// Wait past the throttle interval
-		await new Promise((r) => setTimeout(r, 50));
-		expect(stored).toHaveLength(0);
+			// Advance past the 3s throttle interval; no explicit flush() call.
+			await vi.advanceTimersByTimeAsync(3_100);
+			expect(stored).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('cancel() stops the timer without flushing', async () => {
+		vi.useFakeTimers();
+		try {
+			const stored: string[] = [];
+			const store = {
+				appendStreamChunkSegment: async (_k: string, _i: number, body: string) => {
+					stored.push(body);
+					return true;
+				},
+			};
+			const writer = new StreamChunkWriter(store, 'cancel-key');
+			writer.write(textDelta(0, 'pending'));
+			writer.cancel();
+
+			// Advance past the 3s throttle interval; a leaked timer would flush here.
+			await vi.advanceTimersByTimeAsync(3_100);
+			expect(stored).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('close() flushes remaining events then stops accepting writes', async () => {
