@@ -1467,6 +1467,209 @@ Final reference gap audit:
   and token-source concerns outside the fixed-tenant HTTP ingress package.
 - No justified authenticated HTTP ingress gap remains.
 
+### Google Chat — 2026-06-13
+
+Status:
+
+- Complete.
+
+Reference capability brief:
+
+- The high-level adapter documentation describes direct Google Chat
+  interactions, optional Pub/Sub delivery for broader space events,
+  service-account authentication, messages and mentions, card actions,
+  direct messages, reactions, and broad outbound messaging and history
+  operations.
+- No reference implementation, architecture, types, package declarations,
+  fixtures, payloads, snapshots, sample messages, or tests were consulted.
+
+Primary sources:
+
+- Google Chat request-verification documentation for endpoint-URL and
+  project-number token modes.
+- Google Chat interaction-event, event-type, and synchronous-response
+  documentation.
+- Google Workspace Events documentation for Chat event types, CloudEvent
+  attributes, lifecycle events, and Pub/Sub delivery.
+- Google Cloud Pub/Sub authenticated-push token verification documentation.
+- Google service-account OAuth JWT assertion and token-exchange documentation.
+- Google Chat API application-authentication and `spaces.messages.create`
+  documentation.
+- Current `google-auth-library` package metadata and dependency declarations.
+- `jose` package Web API exports and workerd execution.
+
+Clean-room affirmation:
+
+- All public types, normalized event families, synthetic direct interactions,
+  Pub/Sub envelopes, generated RSA keys and tokens, certificate fixtures, fake
+  ids, assertions, and tests were designed from Google primary sources and
+  Flue's existing channel contract. Nothing was copied or translated from Chat
+  SDK source, architecture, types, fixtures, payloads, snapshots, sample
+  messages, or tests.
+
+Decisions:
+
+- Add `@flue/google-chat` and `flue add google-chat`.
+- Publish `POST /channels/<file>/interactions` when a direct interaction
+  handler is configured and `POST /channels/<file>/events` only when a
+  Workspace Events handler is configured.
+- Support both documented direct authentication modes:
+  Google OIDC tokens addressed to the exact HTTPS endpoint URL and Google Chat
+  service tokens addressed to the numeric project number.
+- Verify direct endpoint tokens against Google's `RS256` JWKS, issuer,
+  audience, expiration, verified email, and
+  `chat@system.gserviceaccount.com` identity. Verify project-number tokens
+  against the Chat service-account issuer, numeric audience, and X509
+  certificates.
+- Verify Pub/Sub OIDC tokens independently against the configured audience and
+  push service-account identity. Also require the exact Pub/Sub subscription
+  resource in the push body before forwarding a Workspace Event.
+- Cache imported JWKS and X509 keys with provider cache metadata, refresh once
+  for an unknown key id, and apply a cooldown only to repeated unknown-key
+  refreshes rather than initial discovery.
+- Normalize direct messages, app space membership, card clicks, app commands,
+  app-home requests, and form submissions. Preserve other authenticated direct
+  types as explicit unknown variants.
+- Normalize message, membership, reaction, space, and subscription-lifecycle
+  Workspace Event families while retaining CloudEvent attributes, Pub/Sub
+  message identity, decoded event data, and explicit unknown variants.
+- Validate Workspace Event source, subject, Chat resource relationship, and
+  lifecycle source/subject identity before application behavior.
+- Use canonical conversation keys based only on stable space and optional
+  thread resource names. `spaceType` remains descriptive metadata and cannot
+  split one destination into different agent instances.
+- Keep normal Hono and Fetch response behavior. `undefined` becomes an empty
+  `200`, JSON-compatible values become JSON responses, and `Response` values
+  pass through. Bound direct interaction handlers to a default 25-second and
+  maximum 30-second deadline.
+- Do not use `google-auth-library` in the canonical cross-platform recipe. Its
+  current package declares Node support and depends on Node-oriented
+  authentication and HTTP packages.
+- Provide a project-owned `jose` and Fetch client that signs a service-account
+  JWT assertion, exchanges it for a `chat.bot` access token, caches the token,
+  and posts to the trusted space and optional thread through Chat REST.
+
+Tests:
+
+- Added original direct interaction values with distinct app URLs, project
+  numbers, spaces, threads, users, commands, actions, forms, and unknown
+  variants.
+- Generated OIDC RSA keys and tokens locally for valid, wrong-identity, cached,
+  and rotated-key coverage. Added an original locally generated X509
+  certificate and private key for project-number verification.
+- Covered every normalized direct family, explicit unknown interactions,
+  provider action-parameter arrays, Hono status control, JSON responses,
+  handler failure, media type, body limits, route omission, and canonical-key
+  behavior.
+- Added original authenticated Pub/Sub push envelopes for message, membership,
+  reaction, space, lifecycle, and unknown Workspace Event families.
+- Covered Pub/Sub audience and identity verification, exact subscription
+  identity, CloudEvent source and subject relationships, decoded data,
+  resource destinations, and lifecycle events without invented Chat
+  destinations.
+- Added permanent workerd execution of direct and Pub/Sub Google OIDC
+  verification through both public routes.
+- Added permanent workerd execution of the project-owned service-account JWT,
+  OAuth exchange, token verification, and threaded Chat REST request against
+  an injected local transport.
+
+Validation:
+
+- Package build, strict typecheck, 15 Node protocol tests, and workerd ingress
+  tests pass.
+- Example strict typecheck, workerd outbound-client test, Node build, and
+  Cloudflare build pass. Both builds discover exactly one `google-chat`
+  channel.
+- A built Node server returned empty `200` for an original locally signed
+  authenticated direct interaction and `401` for an invalid bearer token while
+  using a local HTTPS JWKS server.
+- Documentation check and production build pass.
+- The real `flue add` CLI test suite passes and verifies both Google Chat route
+  comments and the Workers-compatible service-account Fetch path.
+- Knip and scoped Biome lint pass. The repository-wide `check:lint` command
+  still reports the pre-existing Biome warning backlog in runtime, PostgreSQL,
+  and CLI files outside this provider change.
+- Prepared publish docs were generated for all public packages.
+- The packed package contains the intended runtime declarations, JavaScript,
+  README, license metadata, and prepared docs without an outbound client or
+  model tool.
+- A clean strict TypeScript consumer compiles against the packed tarball and
+  narrows direct and Workspace Event variants, configures both authentication
+  surfaces, and round-trips conversation keys.
+
+Focused review:
+
+- Reviewed the complete provider diff for token mode separation, issuer,
+  audience, verified identity, key discovery and rotation, Pub/Sub
+  subscription identity, CloudEvent trust boundaries, event normalization,
+  canonical identity, response behavior, outbound assertion signing,
+  Cloudflare execution, declarations, and documentation.
+- Corrected action normalization after primary-source review showed that
+  Google card action parameters are an array of `{ key, value }` entries rather
+  than a JSON object.
+- Corrected the unknown-key cooldown so initial discovery does not delay
+  legitimate key rotation.
+- Removed `spaceType` from canonical keys after finding that optional event
+  metadata could otherwise split one stable space or thread identity.
+- Required the exact Pub/Sub subscription resource after reviewing the
+  difference between authenticated push-caller identity and fixed integration
+  identity.
+- No unresolved correctness findings remain.
+
+Deviations:
+
+- The initial brief preferred a maintained cross-runtime Google authentication
+  implementation when available. The edge-focused packages found during
+  research had not been maintained since 2023, while Google's official Node
+  client remained Node-oriented. The canonical recipe therefore implements
+  the small documented service-account JWT and OAuth exchange directly with
+  the same actively maintained cross-runtime `jose` dependency already used
+  for verified ingress.
+- The high-level reference used one endpoint for direct and Pub/Sub-shaped
+  requests. Flue uses separate `/interactions` and optional `/events` suffixes
+  so each authentication, payload, retry, and response contract remains
+  explicit and independently mountable.
+
+Deferrals:
+
+- Creating, renewing, suspending, and storing Google Workspace Events
+  subscriptions remains application-owned lifecycle behavior.
+- Domain-wide delegation, delegated-user authentication, impersonation, and
+  multi-domain installation state remain outside the fixed-application
+  ingress package.
+- Editing and deleting messages, reactions, direct-message creation, message
+  history, thread and space listing, cards, streaming fallbacks, and broader
+  Chat API behavior remain additions to the project-owned client rather than
+  `@flue/google-chat`.
+- The canonical client uses app authentication and `chat.bot`. Operations that
+  require user authorization must use an independently designed
+  application-owned user credential path.
+- No live Chat app, Google Cloud project, Pub/Sub subscription, Workspace
+  Events subscription, service-account credential, or provider request was
+  used in automated or manual validation.
+
+Final reference gap audit:
+
+- Reopened only the pinned high-level Google Chat adapter README and root
+  capability statement after implementation; no reference source,
+  declarations, fixtures, payloads, sample messages, or tests were used.
+- Direct messages to the app, mentions, app membership changes, card actions,
+  app commands, app-home requests, and form submissions are represented as
+  authenticated direct interaction ingress.
+- Broader messages, memberships, reactions, space changes, and subscription
+  lifecycle events are represented as authenticated Workspace Events delivered
+  through Pub/Sub push.
+- Buttons, selects, forms, dialogs, cards, and other rich interaction details
+  remain provider payload and response policy over normalized direct events
+  rather than separate Flue routes or abstractions.
+- Posting is demonstrated by the project-owned service-account Fetch client.
+  Editing, deleting, reactions, history, direct-message creation, rich card
+  construction, and other broad outbound operations remain application
+  behavior.
+- Domain-wide delegation and user-authenticated operations remain application
+  credential and authorization concerns.
+- No justified authenticated HTTP ingress gap remains.
+
 ## Implementation log template
 
 Append one section per provider while implementing:

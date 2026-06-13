@@ -6,12 +6,13 @@ description: Receive verified provider events and connect them to Flue agents.
 A channel receives provider HTTP events, verifies and normalizes them, and lets
 your application decide what happens next. Flue provides ingress packages for:
 
-| Provider | Package         | Discovered routes                                          |
-| -------- | --------------- | ---------------------------------------------------------- |
-| GitHub   | `@flue/github`  | `/channels/<file>/webhook`                                 |
-| Slack    | `@flue/slack`   | `/channels/<file>/events`, `/channels/<file>/interactions` |
-| Discord  | `@flue/discord` | `/channels/<file>/interactions`                            |
-| Teams    | `@flue/teams`   | `/channels/<file>/activities`                              |
+| Provider    | Package             | Discovered routes                                          |
+| ----------- | ------------------- | ---------------------------------------------------------- |
+| GitHub      | `@flue/github`      | `/channels/<file>/webhook`                                 |
+| Slack       | `@flue/slack`       | `/channels/<file>/events`, `/channels/<file>/interactions` |
+| Discord     | `@flue/discord`     | `/channels/<file>/interactions`                            |
+| Teams       | `@flue/teams`       | `/channels/<file>/activities`                              |
+| Google Chat | `@flue/google-chat` | `/channels/<file>/interactions`, `/channels/<file>/events` |
 
 The packages own signature verification, body limits, provider handshakes,
 identity checks, typed event normalization, and acknowledgement behavior. They
@@ -26,6 +27,7 @@ flue add github --print | codex
 flue add slack --print | codex
 flue add discord --print | codex
 flue add teams --print | codex
+flue add google-chat --print | codex
 ```
 
 The recipe installs the ingress package and an established provider SDK or
@@ -43,9 +45,10 @@ flue add https://provider.example/webhooks --category channel --print | codex
 ```
 
 See the provider guides for [GitHub](/docs/guide/channels/github/),
-[Slack](/docs/guide/channels/slack/), and
+[Slack](/docs/guide/channels/slack/),
 [Discord](/docs/guide/channels/discord/),
-[Microsoft Teams](/docs/guide/channels/teams/), or
+[Microsoft Teams](/docs/guide/channels/teams/), and
+[Google Chat](/docs/guide/channels/google-chat/), or
 [build a custom channel](/docs/guide/build-your-own-channel/).
 
 ## File-based routing
@@ -57,6 +60,9 @@ src/channels/github.ts  -> /channels/github/webhook
 src/channels/slack.ts   -> /channels/slack/events
                           /channels/slack/interactions
 src/channels/teams.ts   -> /channels/teams/activities
+src/channels/google-chat.ts
+                        -> /channels/google-chat/interactions
+                           /channels/google-chat/events
 ```
 
 The filename defines the channel namespace. Provider packages define fixed,
@@ -163,13 +169,15 @@ identify destinations; they do not authorize caller-selected agent ids.
 
 Channel packages are stateless and do not deduplicate deliveries.
 
-| Provider             | Failure behavior                                                       |
-| -------------------- | ---------------------------------------------------------------------- |
-| GitHub               | Failed deliveries can be inspected and manually redelivered.           |
-| Slack Events API     | Slack may retry and supplies retry metadata.                           |
-| Slack interactivity  | Requires a prompt acknowledgement and is not a dependable retry queue. |
-| Discord interactions | Failures are user-visible and do not provide dependable redelivery.    |
-| Teams activities     | Use `activityId` when the application needs duplicate protection.      |
+| Provider                | Failure behavior                                                        |
+| ----------------------- | ----------------------------------------------------------------------- |
+| GitHub                  | Failed deliveries can be inspected and manually redelivered.            |
+| Slack Events API        | Slack may retry and supplies retry metadata.                            |
+| Slack interactivity     | Requires a prompt acknowledgement and is not a dependable retry queue.  |
+| Discord interactions    | Failures are user-visible and do not provide dependable redelivery.     |
+| Teams activities        | Use `activityId` when the application needs duplicate protection.       |
+| Google Chat direct      | Failed callbacks can be retried; use provider event identity as needed. |
+| Google Workspace Events | Pub/Sub retries unacknowledged push messages.                           |
 
 Handlers wait for application work such as `dispatch(...)` admission before
 acknowledging. Deadlines cannot forcibly stop arbitrary callback code. Claim a

@@ -134,5 +134,4 @@ restarts or multiple application instances.
 
 See the [Chat SDK documentation](https://chat-sdk.dev/docs) for supported
 adapters and state backends. See [Channels](/docs/guide/channels/) for
-first-party GitHub, Slack, and Discord integrations or a custom Fetch-based
-channel.
+first-party provider integrations or a custom Fetch-based channel.

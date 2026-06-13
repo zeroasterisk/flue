@@ -48,6 +48,7 @@ before(async () => {
 			slack: 'channel--slack.md',
 			discord: 'channel--discord.md',
 			teams: 'channel--teams.md',
+			'google-chat': 'channel--google-chat.md',
 		};
 		const file = slug ? files[slug] : undefined;
 		if (!file) {
@@ -80,6 +81,10 @@ describe('flue add', () => {
 			result.stderr,
 			/flue add teams\s+channel\s+https:\/\/www\.microsoft\.com\/microsoft-teams/,
 		);
+		assert.match(
+			result.stderr,
+			/flue add google-chat\s+channel\s+https:\/\/developers\.google\.com\/workspace\/chat/,
+		);
 		assert.ok(result.stderr.includes('flue add <url> --category sandbox'));
 		assert.ok(result.stderr.includes('flue add <url> --category channel'));
 	});
@@ -92,6 +97,17 @@ describe('flue add', () => {
 		assert.ok(result.stdout.includes('export const client'));
 		assert.ok(result.stdout.includes('/channels/teams/activities'));
 		assert.ok(result.stdout.includes('https://api.botframework.com/.default'));
+	});
+
+	it('prints the Google Chat recipe with both verified HTTP surfaces', async () => {
+		const result = await runCli(['add', 'google-chat', '--print']);
+		assert.equal(result.code, 0);
+		assert.ok(result.stdout.startsWith('# Add a Google Chat Channel to Flue'));
+		assert.ok(result.stdout.includes('export const channel'));
+		assert.ok(result.stdout.includes('export const client'));
+		assert.ok(result.stdout.includes('/channels/google-chat/interactions'));
+		assert.ok(result.stdout.includes('/channels/google-chat/events'));
+		assert.ok(result.stdout.includes('https://www.googleapis.com/auth/chat.bot'));
 	});
 
 	it('prints a named channel recipe without registry frontmatter', async () => {
