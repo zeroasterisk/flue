@@ -9,6 +9,7 @@ your application decide what happens next. Flue provides ingress packages for:
 | Provider    | Package             | Discovered routes                                                                       |
 | ----------- | ------------------- | --------------------------------------------------------------------------------------- |
 | GitHub      | `@flue/github`      | `/channels/<file>/webhook`                                                              |
+| Stripe      | `@flue/stripe`      | `/channels/<file>/webhook`                                                              |
 | Slack       | `@flue/slack`       | `/channels/<file>/events`, `/channels/<file>/interactions`, `/channels/<file>/commands` |
 | Discord     | `@flue/discord`     | `/channels/<file>/interactions`                                                         |
 | Teams       | `@flue/teams`       | `/channels/<file>/activities`                                                           |
@@ -29,6 +30,7 @@ Use `flue add` to give your coding agent the complete integration recipe:
 
 ```sh
 flue add github --print | codex
+flue add stripe --print | codex
 flue add slack --print | codex
 flue add discord --print | codex
 flue add teams --print | codex
@@ -55,6 +57,7 @@ flue add https://provider.example/webhooks --category channel --print | codex
 ```
 
 See the provider guides for [GitHub](/docs/guide/channels/github/),
+[Stripe](/docs/guide/channels/stripe/),
 [Slack](/docs/guide/channels/slack/),
 [Discord](/docs/guide/channels/discord/),
 [Microsoft Teams](/docs/guide/channels/teams/),
@@ -72,6 +75,7 @@ Each immediate file beneath `channels/` exports one named `channel` binding:
 
 ```txt
 src/channels/github.ts  -> /channels/github/webhook
+src/channels/stripe.ts  -> /channels/stripe/webhook
 src/channels/slack.ts   -> /channels/slack/events
                           /channels/slack/interactions
                           /channels/slack/commands
@@ -193,20 +197,21 @@ identify destinations; they do not authorize caller-selected agent ids.
 
 Channel packages are stateless and do not deduplicate deliveries.
 
-| Provider                | Failure behavior                                                        |
-| ----------------------- | ----------------------------------------------------------------------- |
-| GitHub                  | Failed deliveries can be inspected and manually redelivered.            |
-| Slack Events API        | Slack may retry and supplies retry metadata.                            |
-| Slack interactivity     | Requires a prompt acknowledgement and is not a dependable retry queue.  |
-| Discord interactions    | Failures are user-visible and do not provide dependable redelivery.     |
-| Teams activities        | Use `activityId` when the application needs duplicate protection.       |
-| Google Chat direct      | Failed callbacks can be retried; use provider event identity as needed. |
-| Google Workspace Events | Pub/Sub retries unacknowledged push messages.                           |
-| Linear                  | Failed or late acknowledgements can be retried.                         |
-| Telegram                | Telegram retries unsuccessful webhook requests.                         |
-| WhatsApp                | Meta retries failed signed deliveries for up to seven days.             |
-| Twilio Messaging        | Webhooks and status callbacks can be retried and expose stable ids.     |
-| Facebook Messenger      | Meta retries failed Page deliveries and may change ordering.            |
+| Provider                | Failure behavior                                                               |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| GitHub                  | Failed deliveries can be inspected and manually redelivered.                   |
+| Stripe                  | Failed live deliveries retry for up to three days; ordering is not guaranteed. |
+| Slack Events API        | Slack may retry and supplies retry metadata.                                   |
+| Slack interactivity     | Requires a prompt acknowledgement and is not a dependable retry queue.         |
+| Discord interactions    | Failures are user-visible and do not provide dependable redelivery.            |
+| Teams activities        | Use `activityId` when the application needs duplicate protection.              |
+| Google Chat direct      | Failed callbacks can be retried; use provider event identity as needed.        |
+| Google Workspace Events | Pub/Sub retries unacknowledged push messages.                                  |
+| Linear                  | Failed or late acknowledgements can be retried.                                |
+| Telegram                | Telegram retries unsuccessful webhook requests.                                |
+| WhatsApp                | Meta retries failed signed deliveries for up to seven days.                    |
+| Twilio Messaging        | Webhooks and status callbacks can be retried and expose stable ids.            |
+| Facebook Messenger      | Meta retries failed Page deliveries and may change ordering.                   |
 
 Handlers wait for application work such as `dispatch(...)` admission before
 acknowledging. Deadlines cannot forcibly stop arbitrary callback code. Claim a

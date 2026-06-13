@@ -139,7 +139,7 @@ function printUsage(log: (message: string) => void = console.error) {
 			'  flue add daytona | claude\n' +
 			'  flue add slack | codex\n' +
 			'  flue add https://e2b.dev --category sandbox | claude\n' +
-			'  flue add https://docs.stripe.com/webhooks --category channel | codex\n' +
+			'  flue add https://developers.notion.com/reference/webhooks --category channel | codex\n' +
 			'  flue docs\n' +
 			'  flue docs read guide/sandboxes\n' +
 			'  flue docs search "durable execution"\n' +

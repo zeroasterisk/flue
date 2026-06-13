@@ -45,6 +45,7 @@ before(async () => {
 		const files = {
 			channel: 'channel.md',
 			github: 'channel--github.md',
+			stripe: 'channel--stripe.md',
 			slack: 'channel--slack.md',
 			discord: 'channel--discord.md',
 			teams: 'channel--teams.md',
@@ -81,6 +82,7 @@ describe('flue add', () => {
 		const result = await runCli(['add']);
 		assert.equal(result.code, 0);
 		assert.match(result.stderr, /flue add github\s+channel\s+https:\/\/github\.com/);
+		assert.match(result.stderr, /flue add stripe\s+channel\s+https:\/\/stripe\.com/);
 		assert.match(result.stderr, /flue add slack\s+channel\s+https:\/\/slack\.com/);
 		assert.match(
 			result.stderr,
@@ -119,6 +121,18 @@ describe('flue add', () => {
 		assert.ok(result.stdout.includes('@kapso/whatsapp-cloud-api@^0.2.1'));
 		assert.ok(result.stdout.includes('/channels/whatsapp/webhook'));
 		assert.ok(result.stdout.includes('X-Hub-Signature-256'));
+	});
+
+	it('prints the Stripe recipe with snapshot and thin event support', async () => {
+		const result = await runCli(['add', 'stripe', '--print']);
+
+		assert.equal(result.code, 0);
+		assert.ok(result.stdout.includes('@flue/stripe'));
+		assert.ok(result.stdout.includes('stripe@^22.2.0'));
+		assert.ok(result.stdout.includes('/channels/stripe/webhook'));
+		assert.ok(result.stdout.includes('Stripe.createFetchHttpClient()'));
+		assert.ok(result.stdout.includes("eventPayload: 'thin'"));
+		assert.ok(result.stdout.includes('without `nodejs_compat`'));
 	});
 
 	it('prints the Twilio recipe with the Workers-compatible Fetch path', async () => {

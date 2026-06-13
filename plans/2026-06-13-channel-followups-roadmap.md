@@ -181,6 +181,209 @@ directory highlights inbound email through Resend as a useful platform class.
 Research these one at a time. A provider being popular is not enough to relax
 the HTTP, clean-room, or Cloudflare gates.
 
+### Stripe implementation — 2026-06-13
+
+Status:
+
+- Complete.
+
+Primary sources:
+
+- Stripe webhook, signature, retry, event-destination, Connect, context,
+  Checkout fulfillment, Billing webhook, and Issuing authorization docs.
+- Official `stripe-node` v22.2.1 research plus the v22.2.0 package metadata,
+  source, declarations, and
+  Worker exports.
+- Current Cloudflare Workers Fetch, Web Crypto, package-condition, and
+  workerd-testing documentation.
+
+Clean-room affirmation:
+
+- The design and future fixtures derive from Stripe's primary specifications
+  and original synthetic payloads. No third-party adapter implementation,
+  types, fixtures, payloads, snapshots, or tests are being copied or
+  translated.
+
+Eligibility:
+
+- Eligible for ordinary stateless HTTPS event destinations.
+- The official Stripe SDK has explicit `workerd` exports, uses Fetch and Web
+  Crypto there, and has no runtime dependencies. Actual workerd execution
+  remains required before completion.
+- EventBridge, Azure Event Grid, and long-lived transports are outside this
+  package.
+
+Design:
+
+- Add `@flue/stripe`, `examples/stripe-channel`, `flue add stripe`, a setup
+  guide, and an API reference.
+- Publish one fixed `POST /webhook` route.
+- Accept the project-owned Stripe SDK `client` because the provider SDK owns
+  exact-byte verification, timestamp tolerance, payload-mode validation, and
+  native event types.
+- Default to snapshot events for the ordinary
+  `createStripeChannel({ client, webhookSecret, webhook })` experience.
+- Support explicit `eventPayload: 'thin'` for API v2 event notifications.
+  Both modes preserve the callback shape `webhook({ c, event })`; their option
+  types discriminate `Stripe.Event` from
+  `Stripe.V2.Core.EventNotification`.
+- Use `constructEventAsync()` and `parseEventNotificationAsync()` so the same
+  path executes under Node and Web Crypto runtimes.
+- Expose optional signature tolerance and body-limit controls. Do not invent a
+  general Stripe handler deadline because Stripe documents no universal
+  numeric deadline.
+- Preserve normal channel response behavior: no value becomes empty `200`,
+  JSON-compatible values become JSON, and ordinary Hono or Fetch responses
+  pass through.
+- Do not add conversation-key helpers. Stripe has stable event and resource
+  identifiers but no universal conversation identity; applications choose a
+  customer, subscription, account, checkout session, or other resource key
+  appropriate to their workflow.
+- Do not add configured account/context restrictions. A destination may
+  intentionally aggregate Connect accounts or organization contexts, and the
+  signing secret already authenticates the configured destination. Application
+  code owns narrower routing policy.
+
+Dependencies and example:
+
+- `@flue/stripe` depends directly on Hono and peers on both `stripe` and
+  `@types/node`; Stripe's public declarations reference the latter even on its
+  Worker entry. It does not depend on `@flue/runtime`.
+- The implementation and example pin aged `stripe@22.2.0` for reproducible
+  workspace installs. The newer v22.2.1 patch was less than 24 hours old during
+  implementation and changed generated API resources rather than the webhook,
+  event-notification, Fetch, Web Crypto, or Worker-export paths used here, so
+  the repository's `minimumReleaseAge` policy was preserved.
+- The editable example constructs and exports the official Stripe client with
+  `Stripe.createFetchHttpClient()`, dispatches completed Checkout events, and
+  defines a narrow tool bound to the already-selected customer.
+- Workerd tests must execute snapshot and thin verification plus a real
+  outbound SDK request against fake Fetch without `nodejs_compat`.
+
+Non-goals:
+
+- Event-destination registration, secret rotation, OAuth, API-key storage,
+  deduplication, ordering, replay recovery, and broad outbound tools.
+- A universal schema combining snapshot and thin payloads.
+- A generic guarantee for synchronous event workflows such as real-time
+  Issuing authorization. Applications may return provider responses through
+  the normal handler API, but the package and example do not claim that
+  specialized latency-sensitive workflow.
+
+Foundation reflection to revisit after implementation:
+
+- Whether accepting a provider SDK for verified ingress remains a clean
+  exception to otherwise SDK-free channel packages.
+- Whether snapshot and thin modes expose any weakness in the shared callback,
+  response, package, example, or workerd conventions.
+
+Implementation:
+
+- Added `@flue/stripe` with one fixed `POST /webhook` route, default snapshot
+  events, explicit thin event notifications, exact-byte official SDK
+  verification, configurable signature tolerance and body limit, and the
+  established Hono-compatible result contract.
+- Added original Node and workerd protocol suites. They cover valid and
+  tampered bytes, missing, malformed, rotated, and stale signatures, malformed
+  JSON and event envelopes, payload-mode mismatches, media type, declared and
+  streamed body limits, future snapshot event types, thin notifications with
+  and without related objects, handler results, failures, constructor
+  validation, and route publication.
+- Added `examples/stripe-channel` with a project-owned official Fetch client,
+  grouped Checkout completion cases, customer-scoped dispatch, a narrow
+  customer-summary tool, trusted Connect or organization context binding,
+  Node fake-Fetch coverage, and workerd fake-Fetch coverage.
+- Added `flue add stripe`, the Stripe connector recipe, setup and API docs,
+  navigation and channel overview entries, README, changelog, and publish
+  wiring.
+
+Validation:
+
+- Package build, strict typecheck, 13 Node tests, and two workerd ingress tests
+  pass. Workerd executes the official Stripe Worker export, Web Crypto snapshot
+  and thin verification, context parsing, and SDK-provided fetch methods
+  without `nodejs_compat`.
+- Example strict typecheck, Node fake-client test, workerd fake-client test,
+  Node build, and Cloudflare target build pass. The workerd test executes a
+  real official SDK customer request against fake Fetch and confirms the Node
+  HTTP client is unavailable in that runtime.
+- A built Node application returned an empty `200` for an original locally
+  signed event and `400` for the same exact payload with an invalid signature.
+- The focused CLI suite passes, and the real built CLI returned the Stripe
+  recipe through the locally built connector registry.
+- Documentation typecheck and production build pass; the connector site build
+  serves `/cli/connectors/stripe.md`.
+- Publish preparation and package packing pass. The tarball contains only the
+  intended distribution files, prepared docs, README, license, and manifest.
+- A clean strict TypeScript consumer installed only the packed
+  `@flue/stripe` package and `stripe`, compiled snapshot and thin handlers with
+  a custom Hono environment, and imported the constructor at runtime.
+- Credential-pattern and whitespace checks found no leaked provider secret or
+  authentication logging. No verification contacted Stripe.
+
+Corrections and deviations:
+
+- Official Stripe declarations showed that valid thin notification families
+  can omit `related_object`. The initial runtime guard rejected those
+  deliveries, so it now accepts the absent field and coverage protects the
+  provider-native behavior.
+- The first packed-consumer check exposed that Stripe's Worker declarations
+  still reference `@types/node` while Stripe declares that peer optional.
+  `@flue/stripe` now declares it as a required peer, and the recipe explains
+  the fallback for package managers that do not install peers automatically.
+  Keeping it as a peer preserves one consumer-owned Stripe type graph and adds
+  no Node runtime code to the Worker bundle.
+- One early parallel command raced the example typecheck against a package
+  build while `tsdown` replaced `dist`. Ordered package-then-example checks
+  pass; this was verification ordering rather than an implementation defect.
+- Workerd reports missing upstream Stripe source-map files, and Cloudflare
+  builds repeat the existing example Durable Object migration warning. Both
+  are non-failing upstream or repository-wide warnings, not Stripe channel
+  runtime failures.
+
+Foundation reflection:
+
+- Accepting the provider SDK is a justified local exception: Stripe's official
+  implementation owns signature compatibility, Web Crypto selection, native
+  event construction, thin context parsing, and fetch helpers, and it executes
+  in both required runtimes.
+- Snapshot and thin payload modes fit the existing single-object callback,
+  fixed-route discovery, and response contract without shared channel changes.
+  Their differences remain explicit in one provider-specific discriminated
+  constructor option.
+- The only repeated machinery was ordinary body limiting and result
+  serialization. No new failure scenario justifies extracting another shared
+  channel runtime abstraction.
+- No Stripe capability is deferred within ordinary stateless HTTPS event
+  destinations. EventBridge, Azure Event Grid, registration, secret lifecycle,
+  synchronous Issuing policy, deduplication, and outbound API breadth remain
+  intentionally outside this channel.
+
+Focused review:
+
+- Independent review found the duplicate Stripe type graph caused by making
+  `@types/node` a direct dependency. The final design uses a required
+  compatible peer plus repository-only dev pins, and both the example and
+  clean packed consumer now resolve one Stripe type instance.
+- Review also confirmed that Stripe's generated snapshot and thin unions are
+  closed even though the SDK forwards future verified event types. Widening
+  the callback would destroy native known-event payload narrowing, so the API,
+  guide, recipe, and README document the explicit `event.type as string`
+  fallback until the project upgrades Stripe.
+- Review found that Stripe rejects requests containing both `stripeAccount`
+  and `stripeContext`. The example now prefers the richer verified context and
+  falls back to the Connect account only when no context is present. Review
+  also found that the initial `@types/node` peer range rejected newer
+  compatible declarations; it now matches Stripe's `>=18` compatibility while
+  retaining the repository's pinned development version.
+- The built Node route has a valid and invalid signed smoke test. Workerd
+  separately executes the same Hono ingress route and official verifier, and
+  the complete example Worker artifact builds. A second provider assertion
+  layer over generated Worker output would duplicate package protocol coverage
+  without protecting a distinct contract.
+- No unresolved correctness, security, packaging, Cloudflare, or developer
+  experience findings remain.
+
 ## 6. Keep These As Separate Product Decisions
 
 ### Generic HTTP or webhook adapter
