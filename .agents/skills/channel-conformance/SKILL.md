@@ -163,6 +163,10 @@ reference, navigation, package preparation mapping, and changelog entry as one
 provider workstream. Inspect current repository patterns because the package
 set and build wiring may have changed.
 
+When authoring the ecosystem guide, follow the shared editorial pattern in
+[`../documentation-writer/references/ecosystem-channel-guides.md`](../documentation-writer/references/ecosystem-channel-guides.md).
+Adapt it to provider semantics rather than forcing identical sections.
+
 Keep package runtime dependencies minimal:
 
 - use Hono directly for public context and handler types;

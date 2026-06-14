@@ -9,6 +9,13 @@ export const collections = {
 		schema: docsSchema({
 			extend: z.object({
 				lastReviewedAt: z.coerce.date().optional(),
+				subtitle: z.string().optional(),
+				package: z
+					.object({
+						name: z.string(),
+						href: z.url(),
+					})
+					.optional(),
 			}),
 		}),
 	}),

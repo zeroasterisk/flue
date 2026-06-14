@@ -139,8 +139,11 @@ equivalent. Follow the repository's dependency build order.
 - It instructs local synthetic verification and fake-transport client tests.
 - It never tells the coding agent to contact the provider.
 - `flue add <provider> --print` returns the intended recipe.
-- The channel guide teaches setup, route URL, callback, client, tool binding,
-  retries, and Cloudflare caveats without claiming turnkey deployment.
+- The channel guide teaches setup, route URLs, callbacks, client composition,
+  useful outbound examples where applicable, retries, and runtime support
+  without claiming turnkey deployment.
+- The channel guide follows the shared ecosystem channel guide pattern while
+  preserving provider-specific surfaces, terminology, and response behavior.
 - The API page matches package-visible exports and response behavior.
 - Navigation, channel overview tables, CLI docs, package README, publish-doc
   mapping, and changelog include the provider where applicable.

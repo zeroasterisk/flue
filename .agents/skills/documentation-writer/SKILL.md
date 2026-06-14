@@ -41,6 +41,10 @@ A page may contain supporting material from another mode, but it should have one
 
 Read the page being edited, its navigation placement, nearby pages that own overlapping topics, and the implementation sources required to verify technical claims.
 
+When editing an ecosystem channel guide, also read
+[`references/ecosystem-channel-guides.md`](references/ecosystem-channel-guides.md)
+and adapt its shared pattern to the provider.
+
 Determine:
 
 - what job the page should perform;

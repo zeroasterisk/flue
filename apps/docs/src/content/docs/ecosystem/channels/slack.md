@@ -1,19 +1,28 @@
 ---
 title: Slack
 description: Receive verified Slack events and use the Slack Web API from application code.
+subtitle: Receive Slack events, interactions, and commands, then reply, show status, and stream responses with the Slack Web API.
+package:
+  name: '@flue/slack'
+  href: https://www.npmjs.com/package/@flue/slack
+lastReviewedAt: 2026-06-13
 ---
 
 ## Add Slack
 
-Run the Slack recipe through your coding agent:
+Add Slack as an inbound channel to any existing Flue project by running the
+following command in your terminal, or your coding agent of choice.
 
 ```sh
-flue add slack --print | codex
+flue add slack
 ```
 
-It installs `@flue/slack` for verified ingress and Slack's official
-`@slack/web-api@^8.0.0-rc.1` SDK for outbound API calls. The recipe creates
-`src/channels/slack.ts` with named `channel` and `client` exports.
+The recipe installs and configures `@flue/slack` for inbound requests, along
+with Slack's official `@slack/web-api` SDK for making outbound API calls. After
+running the command, you will have a new `src/channels/slack.ts` channel with
+new `/channels/slack/*` webhook routes set up and ready to receive events.
+
+## Configure Slack
 
 Set these application secrets:
 
@@ -22,34 +31,25 @@ Set these application secrets:
 | `SLACK_SIGNING_SECRET` | Verifies inbound request bytes.             |
 | `SLACK_BOT_TOKEN`      | Authenticates outbound Slack Web API calls. |
 
-## Configure Slack
+## Supported Webhooks
 
-Add only the Slack surfaces your application handles:
+| Slack surface                                                                       | Webhook path                   |
+| ----------------------------------------------------------------------------------- | ------------------------------ |
+| [Event Subscriptions](https://docs.slack.dev/apis/events-api/)                      | `/channels/slack/events`       |
+| [Interactivity](https://docs.slack.dev/interactivity/handling-user-interaction/)    | `/channels/slack/interactions` |
+| [Slash commands](https://docs.slack.dev/interactivity/implementing-slash-commands/) | `/channels/slack/commands`     |
 
-```txt
-Events API:    https://example.com/channels/slack/events
-Interactivity: https://example.com/channels/slack/interactions
-Commands:      https://example.com/channels/slack/commands
-```
-
-Use `/events` as the Event Subscriptions request URL and subscribe to the
-minimum bot events the application needs. Use `/interactions` as the
-Interactivity request URL for Block Kit actions, shortcuts, modals, and
-external select suggestions. Use `/commands` as the request URL for each slash
-command handled by this channel.
+Add only the Slack surfaces your application handles.
 
 Omitting a callback from `createSlackChannel()` omits its route. Slack URL
 verification is answered internally after signature verification.
 
-## Receive Events API payloads
+### Events
 
 ```ts title="src/channels/slack.ts"
-import { defineTool, dispatch } from '@flue/runtime';
+import { dispatch } from '@flue/runtime';
 import { createSlackChannel } from '@flue/slack';
-import { WebClient } from '@slack/web-api';
 import assistant from '../agents/assistant.ts';
-
-export const client = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 export const channel = createSlackChannel({
   signingSecret: process.env.SLACK_SIGNING_SECRET!,
@@ -98,9 +98,9 @@ identity remain in the provider payload so applications can enforce an
 allowlist when they need one. The channel does not impose a single-workspace
 installation model.
 
-## Handle interactions and commands
+### Interactions
 
-Enable a surface only when the application handles it:
+Enable this surface only when the application handles interactions:
 
 ```ts
 export const channel = createSlackChannel({
@@ -121,6 +121,21 @@ export const channel = createSlackChannel({
         return;
     }
   },
+});
+```
+
+Interaction payloads preserve Slack's snake_case wire fields. `trigger_id`,
+`response_url`, and view `response_urls` are short-lived capabilities. Keep
+them in immediate trusted request handling, not dispatch input, model context,
+logs, or durable session history.
+
+### Commands
+
+Enable this surface only when the application handles slash commands:
+
+```ts
+export const channel = createSlackChannel({
+  signingSecret: process.env.SLACK_SIGNING_SECRET!,
 
   // Path: /channels/slack/commands
   async commands({ c, payload }) {
@@ -129,16 +144,15 @@ export const channel = createSlackChannel({
         await startTriage(payload.text);
         return c.json({ response_type: 'ephemeral', text: 'Triage started.' });
       default:
-        return c.text('Unknown command.', 404);
+        return c.json({ response_type: 'ephemeral', text: 'Unknown command.' });
     }
   },
 });
 ```
 
-Interaction and command payloads preserve Slack's snake_case wire fields.
-`trigger_id`, `response_url`, and view `response_urls` are short-lived
-capabilities. Keep them in immediate trusted request handling, not dispatch
-input, model context, logs, or durable session history.
+Command payloads preserve Slack's snake_case wire fields. `trigger_id` and
+`response_url` are also short-lived capabilities and should remain in
+immediate trusted request handling.
 
 Returning nothing produces an empty `200`. Return JSON-compatible data for a
 JSON response, or use the Hono context for explicit status, headers, and body.
@@ -146,11 +160,23 @@ Thrown errors flow through normal Hono error handling. Slack expects prompt
 acknowledgements, so admit durable work quickly instead of performing slow
 operations before returning.
 
-## Reply with `WebClient`
+## Outbound
 
 Outbound Slack behavior belongs to the exported SDK client:
 
-```ts
+```ts title="src/channels/slack.ts"
+import { WebClient } from '@slack/web-api';
+
+export const client = new WebClient(process.env.SLACK_BOT_TOKEN);
+```
+
+## Slack Tools
+
+Use the client to define application-owned tools:
+
+```ts title="src/channels/slack.ts"
+import { defineTool } from '@flue/runtime';
+
 export function replyInThread(ref: { channelId: string; threadTs: string }) {
   return defineTool({
     name: 'reply_in_slack_thread',
@@ -236,5 +262,3 @@ rotation remain application concerns.
 
 The Fetch-based Slack Web API v8 release candidate runs in Node and in
 Cloudflare Workers with Flue's required `nodejs_compat` setting.
-
-See the [`@flue/slack` API reference](/docs/api/slack-channel/).
