@@ -5,7 +5,7 @@ import { createTwilioChannel } from '../src/index.ts';
 const encoder = new TextEncoder();
 
 describe('@flue/twilio workerd ingress', () => {
-	it('validates HMAC-SHA1 forms and normalizes SMS in workerd', async () => {
+	it('validates HMAC-SHA1 forms and forwards native SMS fields in workerd', async () => {
 		const webhook = vi.fn();
 		const channel = createTwilioChannel({
 			accountSid: 'AC10101010101010101010101010101010',
@@ -60,14 +60,17 @@ describe('@flue/twilio workerd ingress', () => {
 		expect(await accepted.text()).toContain('<Response/>');
 		expect(rejected.status).toBe(401);
 		expect(webhook).toHaveBeenCalledOnce();
-		expect(webhook.mock.calls[0]?.[0].message).toMatchObject({
-			sid: 'SM20202020202020202020202020202020',
-			body: 'Worker SMS',
-			conversation: {
-				type: 'address',
-				address: '+15557014014',
-				participant: '+15557015015',
-			},
+		const input = webhook.mock.calls[0]?.[0];
+		expect(input.body).toMatchObject({
+			MessageSid: 'SM20202020202020202020202020202020',
+			Body: 'Worker SMS',
+			From: '+15557015015',
+			To: '+15557014014',
+		});
+		expect(input.conversation).toMatchObject({
+			type: 'address',
+			address: '+15557014014',
+			participant: '+15557015015',
 		});
 	});
 });

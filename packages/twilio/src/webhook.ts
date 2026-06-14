@@ -2,16 +2,9 @@ import type { Env, Handler } from 'hono';
 import type {
 	TwilioChannelOptions,
 	TwilioConversationRef,
-	TwilioDestination,
-	TwilioFormParameters,
-	TwilioHandlerResult,
-	TwilioIncomingMessage,
-	TwilioLocation,
-	TwilioMedia,
-	TwilioMessageState,
-	TwilioMessageStatus,
-	TwilioOptOut,
-	TwilioRichMessageMetadata,
+	TwilioIncomingMessageBody,
+	TwilioStatusCallbackBody,
+	TwilioWebhookBody,
 } from './index.ts';
 
 const DEFAULT_BODY_LIMIT = 1024 * 1024;
@@ -21,13 +14,16 @@ const decoder = new TextDecoder('utf-8', { fatal: true });
 
 interface ConfiguredUrl {
 	signatureUrl: string;
-	query: string;
 }
 
 interface ParsedForm {
 	values: ReadonlyMap<string, readonly string[]>;
-	raw: TwilioFormParameters;
-	entryCount: number;
+	body: TwilioWebhookBody;
+}
+
+interface AcceptedRequest {
+	form: ParsedForm;
+	idempotencyToken?: string;
 }
 
 export function createTwilioWebhookHandler<E extends Env>(
@@ -45,17 +41,31 @@ export function createTwilioWebhookHandler<E extends Env>(
 			key,
 		);
 		if (accepted instanceof Response) return accepted;
-		const message = normalizeIncomingMessage(
-			accepted.form,
-			accepted.idempotencyToken,
-			options.destination,
-		);
-		if (!message) return response(400);
-		if (!matchesIncomingIdentity(options, message)) return response(403);
 
-		let result: TwilioHandlerResult;
+		const body = accepted.form.body as TwilioIncomingMessageBody;
+		if (
+			!isRequired(body.MessageSid) ||
+			!isRequired(body.AccountSid) ||
+			!isRequired(body.From) ||
+			!isRequired(body.To)
+		) {
+			return response(400);
+		}
+		if (body.AccountSid !== options.accountSid) return response(403);
+
+		const conversation = incomingConversation(options, body);
+		if (!conversation) return response(403);
+
+		let result: unknown;
 		try {
-			result = await options.webhook({ c, message });
+			result = await options.webhook({
+				c,
+				body,
+				conversation,
+				...(accepted.idempotencyToken === undefined
+					? {}
+					: { idempotencyToken: accepted.idempotencyToken }),
+			});
 		} catch {
 			return response(500);
 		}
@@ -81,17 +91,29 @@ export function createTwilioStatusCallbackHandler<E extends Env>(
 			key,
 		);
 		if (accepted instanceof Response) return accepted;
-		const status = normalizeMessageStatus(
-			accepted.form,
-			accepted.idempotencyToken,
-			options,
-		);
-		if (!status) return response(400);
-		if (!matchesStatusIdentity(options, status)) return response(403);
 
-		let result: TwilioHandlerResult;
+		const body = accepted.form.body as TwilioStatusCallbackBody;
+		if (
+			!isRequired(body.MessageSid) ||
+			!isRequired(body.AccountSid) ||
+			!isRequired(body.MessageStatus)
+		) {
+			return response(400);
+		}
+		if (body.AccountSid !== options.accountSid) return response(403);
+
+		const conversation = statusConversation(options, body);
+
+		let result: unknown;
 		try {
-			result = await callback({ c, status });
+			result = await callback({
+				c,
+				body,
+				...(conversation === undefined ? {} : { conversation }),
+				...(accepted.idempotencyToken === undefined
+					? {}
+					: { idempotencyToken: accepted.idempotencyToken }),
+			});
 		} catch {
 			return response(500);
 		}
@@ -104,17 +126,8 @@ async function acceptSignedForm(
 	configuredUrl: ConfiguredUrl,
 	bodyLimit: number,
 	key: Promise<CryptoKey>,
-): Promise<
-	| {
-			form: ParsedForm;
-			idempotencyToken?: string;
-	  }
-	| Response
-> {
+): Promise<AcceptedRequest | Response> {
 	if (!isFormRequest(request)) return response(415);
-	if (!matchesConfiguredQuery(request.url, configuredUrl.query)) {
-		return response(400);
-	}
 
 	const body = await readBody(request, bodyLimit);
 	if (body.type === 'too-large') return response(413);
@@ -144,421 +157,58 @@ async function acceptSignedForm(
 	};
 }
 
-function normalizeIncomingMessage(
-	form: ParsedForm,
-	idempotencyToken: string | undefined,
-	destination: TwilioDestination,
-): TwilioIncomingMessage | undefined {
-	const sid = single(form.values, 'MessageSid');
-	const accountSid = single(form.values, 'AccountSid');
-	const from = single(form.values, 'From');
-	const to = single(form.values, 'To');
-	const body = single(form.values, 'Body');
-	const numMediaValue = single(form.values, 'NumMedia');
-	const numSegmentsValue = single(form.values, 'NumSegments');
-	if (
-		!isRequired(sid) ||
-		!isRequired(accountSid) ||
-		!isRequired(from) ||
-		!isRequired(to) ||
-		body === undefined ||
-		body === null ||
-		!isRequired(numMediaValue) ||
-		!isRequired(numSegmentsValue)
-	) {
-		return undefined;
-	}
-
-	const numMedia = parseNonNegativeInteger(numMediaValue);
-	const numSegments = parsePositiveInteger(numSegmentsValue);
-	if (
-		numMedia === undefined ||
-		numSegments === undefined ||
-		numMedia > form.entryCount
-	) {
-		return undefined;
-	}
-
-	const messagingServiceSid = optionalNonEmpty(form.values, 'MessagingServiceSid');
-	if (messagingServiceSid === null) return undefined;
-	const media = normalizeMedia(form.values, numMedia);
-	if (!media) return undefined;
-	const optOut = normalizeOptOut(form.values);
-	if (optOut === null) return undefined;
-	const location = normalizeLocation(form.values);
-	if (location === null) return undefined;
-	const rich = normalizeRichMetadata(form.values);
-	if (rich === null) return undefined;
-
-	const conversation: TwilioConversationRef =
-		destination.type === 'address'
-			? {
-					type: 'address',
-					accountSid,
-					address: to,
-					participant: from,
-				}
-			: {
-					type: 'messaging-service',
-					accountSid,
-					messagingServiceSid: destination.messagingServiceSid,
-					address: to,
-					participant: from,
-				};
-
-	return {
-		sid,
-		accountSid,
-		from,
-		to,
-		body,
-		numSegments,
-		...(messagingServiceSid === undefined ? {} : { messagingServiceSid }),
-		media,
-		...(optOut === undefined ? {} : { optOut }),
-		...(location === undefined ? {} : { location }),
-		...(rich === undefined ? {} : { rich }),
-		...(idempotencyToken === undefined ? {} : { idempotencyToken }),
-		conversation,
-		raw: form.raw,
-	};
-}
-
-function normalizeMessageStatus<E extends Env>(
-	form: ParsedForm,
-	idempotencyToken: string | undefined,
+function incomingConversation<E extends Env>(
 	options: TwilioChannelOptions<E>,
-): TwilioMessageStatus | undefined {
-	const messageSid = single(form.values, 'MessageSid');
-	const accountSid = single(form.values, 'AccountSid');
-	const providerState = single(form.values, 'MessageStatus');
-	if (
-		!isRequired(messageSid) ||
-		!isRequired(accountSid) ||
-		!isRequired(providerState)
-	) {
+	body: TwilioIncomingMessageBody,
+): TwilioConversationRef | undefined {
+	if (options.destination.type === 'address') {
+		if (body.To !== options.destination.address) return undefined;
+		return {
+			type: 'address',
+			accountSid: body.AccountSid,
+			address: body.To,
+			participant: body.From,
+		};
+	}
+	if (body.MessagingServiceSid !== options.destination.messagingServiceSid) {
 		return undefined;
 	}
-
-	const from = optionalNonEmpty(form.values, 'From');
-	const to = optionalNonEmpty(form.values, 'To');
-	const messagingServiceSid = optionalNonEmpty(
-		form.values,
-		'MessagingServiceSid',
-	);
-	const errorMessage = optionalNonEmpty(form.values, 'ErrorMessage');
-	const channelStatusMessage = optionalNonEmpty(
-		form.values,
-		'ChannelStatusMessage',
-	);
-	const rawDlrDoneDate = optionalNonEmpty(form.values, 'RawDlrDoneDate');
-	if (
-		from === null ||
-		to === null ||
-		messagingServiceSid === null ||
-		errorMessage === null ||
-		channelStatusMessage === null ||
-		rawDlrDoneDate === null
-	) {
-		return undefined;
-	}
-
-	const errorCodeValue = optionalNonEmpty(form.values, 'ErrorCode');
-	if (errorCodeValue === null) return undefined;
-	const errorCode =
-		errorCodeValue === undefined
-			? undefined
-			: parseNonNegativeInteger(errorCodeValue);
-	if (errorCodeValue !== undefined && errorCode === undefined) return undefined;
-
-	const conversation = statusConversation(
-		options,
-		accountSid,
-		from,
-		to,
-	);
 	return {
-		messageSid,
-		accountSid,
-		state: normalizeMessageState(providerState),
-		providerState,
-		...(from === undefined ? {} : { from }),
-		...(to === undefined ? {} : { to }),
-		...(messagingServiceSid === undefined ? {} : { messagingServiceSid }),
-		...(errorCode === undefined ? {} : { errorCode }),
-		...(errorMessage === undefined ? {} : { errorMessage }),
-		...(channelStatusMessage === undefined ? {} : { channelStatusMessage }),
-		...(rawDlrDoneDate === undefined ? {} : { rawDlrDoneDate }),
-		...(idempotencyToken === undefined ? {} : { idempotencyToken }),
-		...(conversation === undefined ? {} : { conversation }),
-		raw: form.raw,
+		type: 'messaging-service',
+		accountSid: body.AccountSid,
+		messagingServiceSid: options.destination.messagingServiceSid,
+		address: body.To,
+		participant: body.From,
 	};
-}
-
-function normalizeMedia(
-	form: ReadonlyMap<string, readonly string[]>,
-	count: number,
-): readonly TwilioMedia[] | undefined {
-	const media: TwilioMedia[] = [];
-	for (let index = 0; index < count; index += 1) {
-		const url = single(form, `MediaUrl${index}`);
-		const contentType = single(form, `MediaContentType${index}`);
-		if (!isRequired(url) || !isRequired(contentType)) return undefined;
-		media.push({ index, url, contentType });
-	}
-	return media;
-}
-
-function normalizeOptOut(
-	form: ReadonlyMap<string, readonly string[]>,
-): TwilioOptOut | undefined | null {
-	const providerType = optionalNonEmpty(form, 'OptOutType');
-	if (providerType === null || providerType === undefined) return providerType;
-	const normalized = providerType.toUpperCase();
-	return {
-		type:
-			normalized === 'START'
-				? 'start'
-				: normalized === 'STOP'
-					? 'stop'
-					: normalized === 'HELP'
-						? 'help'
-						: 'unknown',
-		providerType,
-	};
-}
-
-function normalizeLocation(
-	form: ReadonlyMap<string, readonly string[]>,
-): TwilioLocation | undefined | null {
-	const latitudeValue = optionalNonEmpty(form, 'Latitude');
-	const longitudeValue = optionalNonEmpty(form, 'Longitude');
-	const fromCity = optionalNonEmpty(form, 'FromCity');
-	const fromState = optionalNonEmpty(form, 'FromState');
-	const fromZip = optionalNonEmpty(form, 'FromZip');
-	const fromCountry = optionalNonEmpty(form, 'FromCountry');
-	const toCity = optionalNonEmpty(form, 'ToCity');
-	const toState = optionalNonEmpty(form, 'ToState');
-	const toZip = optionalNonEmpty(form, 'ToZip');
-	const toCountry = optionalNonEmpty(form, 'ToCountry');
-	if (
-		latitudeValue === null ||
-		longitudeValue === null ||
-		fromCity === null ||
-		fromState === null ||
-		fromZip === null ||
-		fromCountry === null ||
-		toCity === null ||
-		toState === null ||
-		toZip === null ||
-		toCountry === null
-	) {
-		return null;
-	}
-	const values = [
-		latitudeValue,
-		longitudeValue,
-		fromCity,
-		fromState,
-		fromZip,
-		fromCountry,
-		toCity,
-		toState,
-		toZip,
-		toCountry,
-	];
-	const latitude =
-		latitudeValue === undefined ? undefined : parseFiniteNumber(latitudeValue);
-	const longitude =
-		longitudeValue === undefined
-			? undefined
-			: parseFiniteNumber(longitudeValue);
-	if (
-		(latitudeValue !== undefined && latitude === undefined) ||
-		(longitudeValue !== undefined && longitude === undefined)
-	) {
-		return null;
-	}
-	if (values.every((value) => value === undefined)) return undefined;
-	return {
-		...(latitude === undefined ? {} : { latitude }),
-		...(longitude === undefined ? {} : { longitude }),
-		...(fromCity === undefined ? {} : { fromCity }),
-		...(fromState === undefined ? {} : { fromState }),
-		...(fromZip === undefined ? {} : { fromZip }),
-		...(fromCountry === undefined ? {} : { fromCountry }),
-		...(toCity === undefined ? {} : { toCity }),
-		...(toState === undefined ? {} : { toState }),
-		...(toZip === undefined ? {} : { toZip }),
-		...(toCountry === undefined ? {} : { toCountry }),
-	};
-}
-
-function normalizeRichMetadata(
-	form: ReadonlyMap<string, readonly string[]>,
-): TwilioRichMessageMetadata | undefined | null {
-	const buttonPayload = optionalString(form, 'ButtonPayload');
-	const buttonText = optionalString(form, 'ButtonText');
-	const originalRepliedMessageSender = optionalString(
-		form,
-		'OriginalRepliedMessageSender',
-	);
-	const originalRepliedMessageSid = optionalString(
-		form,
-		'OriginalRepliedMessageSid',
-	);
-	const referralNumMediaValue = optionalNonEmpty(form, 'ReferralNumMedia');
-	const referralMediaContentType = optionalString(
-		form,
-		'ReferralMediaContentType0',
-	);
-	const referralMediaUrl = optionalString(form, 'ReferralMediaUrl0');
-	const referralBody = optionalString(form, 'ReferralBody');
-	const referralHeadline = optionalString(form, 'ReferralHeadline');
-	const channelMetadata = optionalString(form, 'ChannelMetadata');
-	const interactiveData = optionalString(form, 'InteractiveData');
-	const flowData = optionalString(form, 'FlowData');
-	if (
-		buttonPayload === null ||
-		buttonText === null ||
-		originalRepliedMessageSender === null ||
-		originalRepliedMessageSid === null ||
-		referralNumMediaValue === null ||
-		referralMediaContentType === null ||
-		referralMediaUrl === null ||
-		referralBody === null ||
-		referralHeadline === null ||
-		channelMetadata === null ||
-		interactiveData === null ||
-		flowData === null
-	) {
-		return null;
-	}
-	const values = [
-		buttonPayload,
-		buttonText,
-		originalRepliedMessageSender,
-		originalRepliedMessageSid,
-		referralNumMediaValue,
-		referralMediaContentType,
-		referralMediaUrl,
-		referralBody,
-		referralHeadline,
-		channelMetadata,
-		interactiveData,
-		flowData,
-	];
-	const referralNumMedia =
-		referralNumMediaValue === undefined
-			? undefined
-			: parseNonNegativeInteger(referralNumMediaValue);
-	if (
-		referralNumMediaValue !== undefined &&
-		referralNumMedia === undefined
-	) {
-		return null;
-	}
-	if (values.every((value) => value === undefined)) return undefined;
-	return {
-		...(buttonPayload === undefined ? {} : { buttonPayload }),
-		...(buttonText === undefined ? {} : { buttonText }),
-		...(originalRepliedMessageSender === undefined
-			? {}
-			: { originalRepliedMessageSender }),
-		...(originalRepliedMessageSid === undefined
-			? {}
-			: { originalRepliedMessageSid }),
-		...(referralNumMedia === undefined ? {} : { referralNumMedia }),
-		...(referralMediaContentType === undefined
-			? {}
-			: { referralMediaContentType }),
-		...(referralMediaUrl === undefined ? {} : { referralMediaUrl }),
-		...(referralBody === undefined ? {} : { referralBody }),
-		...(referralHeadline === undefined ? {} : { referralHeadline }),
-		...(channelMetadata === undefined ? {} : { channelMetadata }),
-		...(interactiveData === undefined ? {} : { interactiveData }),
-		...(flowData === undefined ? {} : { flowData }),
-	};
-}
-
-function matchesIncomingIdentity<E extends Env>(
-	options: TwilioChannelOptions<E>,
-	message: TwilioIncomingMessage,
-): boolean {
-	if (message.accountSid !== options.accountSid) return false;
-	return options.destination.type === 'address'
-		? message.to === options.destination.address
-		: message.messagingServiceSid === options.destination.messagingServiceSid;
-}
-
-function matchesStatusIdentity<E extends Env>(
-	options: TwilioChannelOptions<E>,
-	status: TwilioMessageStatus,
-): boolean {
-	if (status.accountSid !== options.accountSid) return false;
-	return options.destination.type === 'address'
-		? status.from === options.destination.address
-		: status.messagingServiceSid === undefined ||
-				status.messagingServiceSid === options.destination.messagingServiceSid;
 }
 
 function statusConversation<E extends Env>(
 	options: TwilioChannelOptions<E>,
-	accountSid: string,
-	from: string | undefined,
-	to: string | undefined,
+	body: TwilioStatusCallbackBody,
 ): TwilioConversationRef | undefined {
-	if (!from || !to) return undefined;
+	const { From, To } = body;
+	if (!isRequired(From) || !isRequired(To)) return undefined;
 	return options.destination.type === 'address'
 		? {
 				type: 'address',
-				accountSid,
-				address: from,
-				participant: to,
+				accountSid: body.AccountSid,
+				address: From,
+				participant: To,
 			}
 		: {
 				type: 'messaging-service',
-				accountSid,
+				accountSid: body.AccountSid,
 				messagingServiceSid: options.destination.messagingServiceSid,
-				address: from,
-				participant: to,
+				address: From,
+				participant: To,
 			};
-}
-
-function normalizeMessageState(value: string): TwilioMessageState {
-	switch (value.toLowerCase()) {
-		case 'accepted':
-		case 'scheduled':
-		case 'queued':
-		case 'sending':
-		case 'sent':
-		case 'delivered':
-		case 'undelivered':
-		case 'failed':
-		case 'read':
-		case 'canceled':
-		case 'receiving':
-		case 'received':
-			return value.toLowerCase() as TwilioMessageState;
-		default:
-			return 'unknown';
-	}
 }
 
 function parseConfiguredUrl(value: string): ConfiguredUrl {
 	const fragmentIndex = value.indexOf('#');
 	const signatureUrl =
 		fragmentIndex === -1 ? value : value.slice(0, fragmentIndex);
-	const parsed = new URL(signatureUrl);
-	return {
-		signatureUrl,
-		query: parsed.search,
-	};
-}
-
-function matchesConfiguredQuery(requestUrl: string, query: string): boolean {
-	const parsed = new URL(requestUrl);
-	return parsed.search === query;
+	return { signatureUrl };
 }
 
 function resolveBodyLimit(value: number | undefined): number {
@@ -586,22 +236,20 @@ function parseForm(body: string): ParsedForm | undefined {
 	} catch {
 		return undefined;
 	}
-	const mutable = new Map<string, string[]>();
-	let entryCount = 0;
+	const values = new Map<string, string[]>();
 	for (const [name, value] of params) {
-		entryCount += 1;
-		const values = mutable.get(name);
-		if (values) values.push(value);
-		else mutable.set(name, [value]);
+		const existing = values.get(name);
+		if (existing) existing.push(value);
+		else values.set(name, [value]);
 	}
-	const raw: Record<string, string | readonly string[]> = {};
-	for (const [name, values] of mutable) {
-		Object.defineProperty(raw, name, {
-			value: values.length === 1 ? values[0] : Object.freeze([...values]),
+	const native: Record<string, string | readonly string[]> = {};
+	for (const [name, list] of values) {
+		Object.defineProperty(native, name, {
+			value: list.length === 1 ? list[0] : Object.freeze([...list]),
 			enumerable: true,
 		});
 	}
-	return { values: mutable, raw: Object.freeze(raw), entryCount };
+	return { values, body: Object.freeze(native) as TwilioWebhookBody };
 }
 
 async function importSigningKey(authToken: string): Promise<CryptoKey> {
@@ -653,50 +301,8 @@ function decodeBase64(value: string): Uint8Array | undefined {
 	}
 }
 
-function single(
-	form: ReadonlyMap<string, readonly string[]>,
-	name: string,
-): string | undefined | null {
-	const values = form.get(name);
-	if (!values) return undefined;
-	return values.length === 1 ? (values[0] as string) : null;
-}
-
-function optionalString(
-	form: ReadonlyMap<string, readonly string[]>,
-	name: string,
-): string | undefined | null {
-	return single(form, name);
-}
-
-function optionalNonEmpty(
-	form: ReadonlyMap<string, readonly string[]>,
-	name: string,
-): string | undefined | null {
-	const value = single(form, name);
-	if (value === undefined || value === null) return value;
-	return value.length === 0 ? undefined : value;
-}
-
-function isRequired(value: string | undefined | null): value is string {
+function isRequired(value: string | readonly string[] | undefined): value is string {
 	return typeof value === 'string' && value.length > 0;
-}
-
-function parseNonNegativeInteger(value: string): number | undefined {
-	if (!/^\d+$/.test(value)) return undefined;
-	const parsed = Number(value);
-	return Number.isSafeInteger(parsed) ? parsed : undefined;
-}
-
-function parsePositiveInteger(value: string): number | undefined {
-	const parsed = parseNonNegativeInteger(value);
-	return parsed !== undefined && parsed > 0 ? parsed : undefined;
-}
-
-function parseFiniteNumber(value: string): number | undefined {
-	if (value.trim() !== value || value.length === 0) return undefined;
-	const parsed = Number(value);
-	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function optionalHeader(value: string | null): string | undefined {

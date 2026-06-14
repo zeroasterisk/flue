@@ -48,7 +48,7 @@ export interface TwilioChannelOptions<E extends Env = Env> {
 	destination: TwilioDestination;
 	/** Maximum form body size in bytes. Defaults to 1 MiB. */
 	bodyLimit?: number;
-	/** Receives one verified inbound SMS or MMS message. */
+	/** Receives one verified inbound message webhook. */
 	webhook(input: TwilioWebhookHandlerInput<E>): TwilioHandlerResult;
 	/**
 	 * Exact externally configured delivery-status callback URL.
@@ -64,10 +64,50 @@ export interface TwilioChannelOptions<E extends Env = Env> {
 	statusCallback?(input: TwilioStatusHandlerInput<E>): TwilioHandlerResult;
 }
 
-/** Provider form fields preserved after signature verification. */
-export type TwilioFormParameters = Readonly<
-	Record<string, string | readonly string[]>
->;
+/**
+ * Provider-native Twilio webhook form fields, parsed from the signed
+ * `application/x-www-form-urlencoded` body.
+ *
+ * Twilio transmits every value as a string and repeats a name to express a
+ * multi-valued field. Names use Twilio's PascalCase wire spelling. Twilio adds
+ * new parameters without advance notice, so the index signature forwards any
+ * authenticated field the current types do not yet model. The shape is the
+ * exact verified wire object; the channel does not rename, narrow, or coerce it.
+ */
+export interface TwilioWebhookBody {
+	readonly [field: string]: string | readonly string[] | undefined;
+}
+
+/**
+ * Provider-native inbound message webhook fields.
+ *
+ * Only the identity fields the channel verifies are modeled; every value is a
+ * string. All other Twilio parameters — `Body`, `NumMedia`, numbered media
+ * (`MediaUrl0`, `MediaContentType0`, …), geographic, rich-message, and any
+ * unannounced future field — are forwarded verbatim through the index
+ * signature and read directly with Twilio's PascalCase wire names.
+ */
+export interface TwilioIncomingMessageBody extends TwilioWebhookBody {
+	readonly MessageSid: string;
+	readonly AccountSid: string;
+	readonly From: string;
+	readonly To: string;
+	readonly Body: string;
+}
+
+/**
+ * Provider-native delivery status callback fields.
+ *
+ * Only the identity fields the channel verifies are modeled. `MessageStatus`
+ * carries Twilio's exact lifecycle value verbatim. Every other parameter
+ * (sender, recipient, error, channel, and delivery-receipt fields) is
+ * forwarded through the index signature.
+ */
+export interface TwilioStatusCallbackBody extends TwilioWebhookBody {
+	readonly MessageSid: string;
+	readonly AccountSid: string;
+	readonly MessageStatus: string;
+}
 
 /** Stable Twilio destination suitable for a Flue agent-instance id. */
 export type TwilioConversationRef =
@@ -85,115 +125,32 @@ export type TwilioConversationRef =
 			participant: string;
 	  };
 
-export interface TwilioMedia {
-	index: number;
-	/** Authenticated Twilio media URL. Credentials are not embedded in it. */
-	url: string;
-	contentType: string;
-}
-
-export interface TwilioOptOut {
-	type: 'start' | 'stop' | 'help' | 'unknown';
-	providerType: string;
-}
-
-export interface TwilioLocation {
-	latitude?: number;
-	longitude?: number;
-	fromCity?: string;
-	fromState?: string;
-	fromZip?: string;
-	fromCountry?: string;
-	toCity?: string;
-	toState?: string;
-	toZip?: string;
-	toCountry?: string;
-}
-
-export interface TwilioRichMessageMetadata {
-	buttonPayload?: string;
-	buttonText?: string;
-	originalRepliedMessageSender?: string;
-	originalRepliedMessageSid?: string;
-	referralNumMedia?: number;
-	referralMediaContentType?: string;
-	referralMediaUrl?: string;
-	referralBody?: string;
-	referralHeadline?: string;
-	channelMetadata?: string;
-	interactiveData?: string;
-	flowData?: string;
-}
-
-export interface TwilioIncomingMessage {
-	sid: string;
-	accountSid: string;
-	from: string;
-	to: string;
-	body: string;
-	numSegments: number;
-	messagingServiceSid?: string;
-	media: readonly TwilioMedia[];
-	optOut?: TwilioOptOut;
-	location?: TwilioLocation;
-	rich?: TwilioRichMessageMetadata;
-	/** Retry identity supplied by Twilio's webhook transport when present. */
-	idempotencyToken?: string;
-	conversation: TwilioConversationRef;
-	/** Complete signed form fields. */
-	raw: TwilioFormParameters;
-}
-
-export type TwilioMessageState =
-	| 'accepted'
-	| 'scheduled'
-	| 'queued'
-	| 'sending'
-	| 'sent'
-	| 'delivered'
-	| 'undelivered'
-	| 'failed'
-	| 'read'
-	| 'canceled'
-	| 'receiving'
-	| 'received'
-	| 'unknown';
-
-export interface TwilioMessageStatus {
-	messageSid: string;
-	accountSid: string;
-	state: TwilioMessageState;
-	/** Exact `MessageStatus` value from Twilio. */
-	providerState: string;
-	from?: string;
-	to?: string;
-	messagingServiceSid?: string;
-	errorCode?: number;
-	errorMessage?: string;
-	channelStatusMessage?: string;
-	rawDlrDoneDate?: string;
-	/** Retry identity supplied by Twilio's webhook transport when present. */
-	idempotencyToken?: string;
-	/** Present when sender and participant addresses are available. */
-	conversation?: TwilioConversationRef;
-	/** Complete signed form fields. */
-	raw: TwilioFormParameters;
-}
-
 type TwilioHandlerValue = undefined | Response;
 
 export type TwilioHandlerResult =
 	| TwilioHandlerValue
 	| Promise<TwilioHandlerValue>;
 
+/** Input for one verified inbound message webhook. */
 export interface TwilioWebhookHandlerInput<E extends Env = Env> {
 	c: Context<E>;
-	message: TwilioIncomingMessage;
+	/** Provider-native verified form fields with Twilio's wire names. */
+	body: TwilioIncomingMessageBody;
+	/** Canonical conversation identity derived from the verified destination and sender. */
+	conversation: TwilioConversationRef;
+	/** `I-Twilio-Idempotency-Token` retry identity when Twilio supplies it. */
+	idempotencyToken?: string;
 }
 
+/** Input for one verified delivery status callback. */
 export interface TwilioStatusHandlerInput<E extends Env = Env> {
 	c: Context<E>;
-	status: TwilioMessageStatus;
+	/** Provider-native verified form fields with Twilio's wire names. */
+	body: TwilioStatusCallbackBody;
+	/** Canonical conversation identity when both addresses are present. */
+	conversation?: TwilioConversationRef;
+	/** `I-Twilio-Idempotency-Token` retry identity when Twilio supplies it. */
+	idempotencyToken?: string;
 }
 
 /** Verified Twilio Messaging ingress and canonical identity helpers. */
@@ -208,8 +165,10 @@ export interface TwilioChannel<E extends Env = Env> {
 /**
  * Creates verified Twilio Messaging webhook routes for one fixed destination.
  *
- * The channel is stateless and does not deduplicate message SIDs or retry
- * tokens.
+ * Signature validation runs over Twilio's exact configured public URL and
+ * signed form fields before the handler sees them. Verified deliveries are
+ * forwarded with Twilio's native field names and nesting. The channel is
+ * stateless and does not deduplicate message SIDs or retry tokens.
  */
 export function createTwilioChannel<E extends Env = Env>(
 	options: TwilioChannelOptions<E>,

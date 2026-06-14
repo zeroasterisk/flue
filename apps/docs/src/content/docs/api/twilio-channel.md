@@ -79,62 +79,96 @@ The channel does not persist or deduplicate message SIDs, status transitions,
 or retry tokens. Conversation keys are canonical identifiers, not
 authorization capabilities.
 
+## Provider-native form body
+
+Handlers receive the verified Twilio form exactly as Twilio signed it. The
+channel does not rename, narrow, or coerce fields.
+
+```ts
+interface TwilioWebhookBody {
+  readonly [field: string]: string | readonly string[] | undefined;
+}
+```
+
+- Field names use Twilio's PascalCase wire spelling (`MessageSid`, `From`,
+  `Body`, `NumMedia`, `MediaUrl0`, …).
+- Every value is a `string`. A parameter Twilio repeats becomes a
+  `readonly string[]`.
+- The index signature forwards any parameter the modeled types do not name, so
+  fields Twilio adds without advance notice reach the handler unmodified. Read
+  them directly with their wire names.
+
+Two concrete bodies model only the identity fields the channel verifies; the
+index signature carries everything else:
+
+```ts
+interface TwilioIncomingMessageBody extends TwilioWebhookBody {
+  readonly MessageSid: string;
+  readonly AccountSid: string;
+  readonly From: string;
+  readonly To: string;
+  readonly Body: string;
+}
+
+interface TwilioStatusCallbackBody extends TwilioWebhookBody {
+  readonly MessageSid: string;
+  readonly AccountSid: string;
+  readonly MessageStatus: string;
+}
+```
+
+`MessageStatus` is forwarded verbatim — Twilio's exact lifecycle value, never
+narrowed to a frozen union. Parse numbers, media counts (`NumMedia`,
+`MediaUrl{N}`, `MediaContentType{N}`), opt-out values (`OptOutType`), geographic
+and rich-message fields in application code.
+
 ## Incoming messages
 
 ```ts
 interface TwilioWebhookHandlerInput<E extends Env = Env> {
   c: Context<E>;
-  message: TwilioIncomingMessage;
+  body: TwilioIncomingMessageBody;
+  conversation: TwilioConversationRef;
+  idempotencyToken?: string;
 }
 ```
 
-`TwilioIncomingMessage` exposes:
+- `body` is the verified native form (above).
+- `conversation` is the canonical ref derived from the verified destination
+  (`To`) and sender (`From`).
+- `idempotencyToken` carries `I-Twilio-Idempotency-Token` when Twilio supplies
+  it. The channel makes no deduplication claim.
 
-- `sid`, `accountSid`, `from`, `to`, `body`, and `numSegments`;
-- optional `messagingServiceSid`;
-- ordered `TwilioMedia[]` with authenticated URL and content type;
-- optional normalized Advanced Opt-Out, location, and rich-message metadata;
-- optional `idempotencyToken`;
-- canonical `conversation`;
-- signed `raw` form fields.
-
-Repeated form fields are preserved as arrays in `TwilioFormParameters`.
-Provider-known scalar fields must occur exactly once.
+A request missing a required routing field (`MessageSid`, `AccountSid`, `From`,
+`To`) is rejected with `400`. Because a repeated known scalar surfaces as a
+`string[]`, a duplicated `MessageSid` fails the required-string check and is
+rejected the same way. A signed callback for another account or a destination
+that does not match the configured `destination` is rejected with `403`.
 
 ## Status callbacks
 
 ```ts
 interface TwilioStatusHandlerInput<E extends Env = Env> {
   c: Context<E>;
-  status: TwilioMessageStatus;
+  body: TwilioStatusCallbackBody;
+  conversation?: TwilioConversationRef;
+  idempotencyToken?: string;
 }
 ```
 
-`TwilioMessageStatus` exposes message and account SIDs, normalized `state`,
-exact `providerState`, optional sender, recipient, Messaging Service, error,
-channel, raw delivery receipt, retry identity, canonical conversation, and
-signed raw fields.
+- `body` carries the exact `MessageStatus` string and every other signed status
+  parameter (sender, recipient, error, channel, delivery-receipt fields).
+- `conversation` is present only when both addresses are signed (status
+  callbacks swap the sender/recipient roles: `address` is `From`, `participant`
+  is `To`).
+- `idempotencyToken` is exposed as above.
 
-Twilio does not guarantee `MessagingServiceSid` in every status callback. A
-Messaging Service channel is scoped by the configured account and exact signed
-callback URL; a mismatched service SID is rejected when present.
-
-Known states are:
-
-- `accepted`
-- `scheduled`
-- `queued`
-- `sending`
-- `sent`
-- `delivered`
-- `undelivered`
-- `failed`
-- `read`
-- `canceled`
-- `receiving`
-- `received`
-
-Other signed values use `unknown` while preserving `providerState`.
+A request missing `MessageSid`, `AccountSid`, or `MessageStatus` is rejected with
+`400`; a wrong account SID is rejected with `403`. Twilio does not guarantee
+`MessagingServiceSid` on every status callback, and the channel does **not** gate
+status callbacks on it — the signed account SID and the exact signed callback
+URL scope the route. Read `body.MessagingServiceSid` in application code when a
+present value matters.
 
 ## Conversation identity
 
@@ -157,6 +191,25 @@ type TwilioConversationRef =
 
 `address` is the concrete Twilio phone number or channel address.
 `participant` is the external destination used for an outbound reply.
+
+## Deadlines and retries
+
+Twilio applies a 15-second read timeout to webhook responses and recommends
+acknowledging fast (an empty `200`/`202`) and processing asynchronously. The
+channel does not enforce a deadline of its own; it awaits the handler and
+serializes the result.
+
+The retry behavior differs by route:
+
+- **Inbound message webhooks are not retried.** On error or timeout Twilio falls
+  back to the number's configured Fallback URL (or returns an error to the
+  sender) rather than re-delivering to this route.
+- **Status callbacks may be retried with backoff**, and may arrive duplicated or
+  out of order.
+
+The channel is stateless and exposes `MessageSid` and `I-Twilio-Idempotency-Token`
+without claiming durable deduplication. When duplicate admission is
+unacceptable, claim `MessageSid` before dispatch.
 
 ## Errors
 

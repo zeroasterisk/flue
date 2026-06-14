@@ -45,18 +45,19 @@ export const channel = createTwilioChannel({
   },
 
   // Path: /channels/twilio/webhook
-  async webhook({ message }) {
-    if (message.optOut?.type === 'stop') return;
+  async webhook({ body, conversation }) {
+    if (body.OptOutType === 'STOP') return;
+    const numMedia = Number(body.NumMedia ?? '0');
     await dispatch(assistant, {
-      id: channel.conversationKey(message.conversation),
+      id: channel.conversationKey(conversation),
       input: {
         type: 'twilio.message',
-        messageSid: message.sid,
-        from: message.from,
-        text: message.body,
-        media: message.media.map(({ index, contentType }) => ({
+        messageSid: body.MessageSid,
+        from: body.From,
+        text: body.Body,
+        media: Array.from({ length: numMedia }, (_, index) => ({
           index,
-          contentType,
+          contentType: body[`MediaContentType${index}`],
         })),
       },
     });
@@ -102,9 +103,10 @@ request, so `webhookUrl` is required and must include any outer mount prefix or
 query string.
 
 A trusted proxy may strip an external path prefix before the request reaches
-Flue. Signature validation still uses `webhookUrl`; the fixed channel route
-owns the internal path, and the package requires the incoming query string to
-match the configured URL.
+Flue. Signature validation still uses `webhookUrl`; the fixed channel route owns
+the internal path. The incoming request's own query string is not re-checked —
+it is already part of the signed bytes, so any tampering fails signature
+(`401`).
 
 Connection-override fragments may remain in the configured URL. They are
 excluded from signature validation because Twilio does not send or sign URL
@@ -123,9 +125,17 @@ The package rejects signed requests for another account or destination.
 
 ## Message behavior
 
-Verified messages expose text, segment count, ordered MMS metadata, Advanced
-Opt-Out state, optional geographic and rich-message fields, retry identity,
-canonical conversation identity, and the complete signed form.
+Verified messages reach the handler as `{ c, body, conversation, idempotencyToken? }`.
+`body` is the provider-native verified form exactly as Twilio signed it: field
+names use Twilio's PascalCase wire spelling (`MessageSid`, `From`, `To`, `Body`,
+`NumMedia`, `MediaUrl0`, `OptOutType`, …), every value is a `string`, and a
+parameter Twilio repeats becomes a `readonly string[]`. The channel does not
+rename, narrow, or coerce fields; new parameters Twilio adds reach the handler
+through an index signature, so read them directly with their wire names. Parse
+segment counts, MMS metadata, opt-out state, geographic, and rich-message fields
+in application code. `conversation` is the canonical ref derived from the
+verified destination and sender; `idempotencyToken` carries Twilio's
+`I-Twilio-Idempotency-Token` when present.
 
 Treat `STOP` as control input rather than dispatching it to an agent or sending
 an application reply.
@@ -145,17 +155,31 @@ Add `statusCallbackUrl` and `statusCallback` together to publish:
 https://example.com/channels/twilio/status
 ```
 
-Set the same URL as `StatusCallback` on outbound messages. Status callbacks
-preserve Twilio's exact provider state and normalize known lifecycle values,
-errors, sender and recipient addresses, Messaging Service identity, retry
-identity, and canonical conversation identity when enough data is available.
+Set the same URL as `StatusCallback` on outbound messages. The status handler
+input mirrors the inbound shape: `body` carries the exact `MessageStatus` string
+forwarded verbatim — never narrowed to a frozen union — alongside every other
+signed status parameter (sender, recipient, error, channel, and delivery-receipt
+fields), with the same string / `string[]` rules and index-signature forwarding.
+`conversation` is present only when both addresses are signed.
 
-Twilio may duplicate callbacks or deliver statuses out of order. Persist
-transitions idempotently by message SID.
+Twilio may retry status callbacks with backoff, and may deliver them duplicated
+or out of order. Persist transitions idempotently by message SID; the channel is
+stateless and exposes `MessageSid` and `I-Twilio-Idempotency-Token` without
+claiming durable deduplication.
 
-Twilio does not guarantee `MessagingServiceSid` in every status callback. For
-a Messaging Service channel, the configured account and exact signed callback
-URL scope the route. A different service SID is rejected when Twilio includes
-one, and canonical identity continues to use the authored service.
+Twilio does not guarantee `MessagingServiceSid` in every status callback, and
+the channel does **not** gate status callbacks on it. For a Messaging Service
+channel, the signed account SID and the exact signed callback URL scope the
+route. Read `body.MessagingServiceSid` in application code when a present value
+matters.
+
+## Deadlines
+
+Twilio applies a 15-second read timeout to webhook responses and recommends
+acknowledging fast and processing asynchronously. The channel does not enforce a
+deadline of its own. Inbound message webhooks are **not** retried — on error or
+timeout Twilio falls back to the number's configured Fallback URL rather than
+re-delivering to this route — so acknowledge before slow work when a missed
+inbound matters.
 
 See the [`@flue/twilio` API reference](/docs/api/twilio-channel/).

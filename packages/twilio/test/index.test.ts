@@ -10,7 +10,7 @@ import {
 } from '../src/index.ts';
 
 describe('createTwilioChannel()', () => {
-	it('verifies and normalizes an MMS message when Twilio signs the configured URL', async () => {
+	it('verifies and forwards native MMS form fields when Twilio signs the configured URL', async () => {
 		const webhook = vi.fn();
 		const channel = createTwilioChannel({
 			accountSid: 'AC11111111111111111111111111111111',
@@ -65,56 +65,44 @@ describe('createTwilioChannel()', () => {
 			'<?xml version="1.0" encoding="UTF-8"?><Response/>',
 		);
 		expect(webhook).toHaveBeenCalledOnce();
-		expect(webhook.mock.calls[0]?.[0]).toMatchObject({
-			c: expect.any(Object),
-			message: {
-				sid: 'MM33333333333333333333333333333333',
-				accountSid: 'AC11111111111111111111111111111111',
-				from: '+15557001001',
-				to: '+15557002002',
-				body: 'Inspect the loading dock.',
-				numSegments: 1,
-				messagingServiceSid: 'MG22222222222222222222222222222222',
-				media: [
-					{
-						index: 0,
-						url: 'https://api.twilio.test/media/ME-cobalt-0',
-						contentType: 'image/webp',
-					},
-					{
-						index: 1,
-						url: 'https://api.twilio.test/media/ME-cobalt-1',
-						contentType: 'application/pdf',
-					},
-				],
-				optOut: { type: 'stop', providerType: 'STOP' },
-				location: {
-					latitude: 45.5231,
-					longitude: -122.6765,
-					fromCity: 'PORTLAND',
-					fromState: 'OR',
-				},
-				rich: {
-					buttonPayload: 'dock_north',
-					buttonText: 'North dock',
-					interactiveData: '{"type":"list-reply","id":"north"}',
-				},
-				idempotencyToken: 'retry-token-cobalt',
-				conversation: {
-					type: 'messaging-service',
-					accountSid: 'AC11111111111111111111111111111111',
-					messagingServiceSid: 'MG22222222222222222222222222222222',
-					address: '+15557002002',
-					participant: '+15557001001',
-				},
-				raw: {
-					CustomTag: ['amber', 'violet'],
-				},
-			},
+		const input = webhook.mock.calls[0]?.[0];
+		expect(input.c).toEqual(expect.any(Object));
+		expect(input.idempotencyToken).toBe('retry-token-cobalt');
+		expect(input.conversation).toEqual({
+			type: 'messaging-service',
+			accountSid: 'AC11111111111111111111111111111111',
+			messagingServiceSid: 'MG22222222222222222222222222222222',
+			address: '+15557002002',
+			participant: '+15557001001',
+		});
+		// Native Twilio wire fields are forwarded unchanged, including unmodeled
+		// repeated parameters and rich-message fields.
+		expect(input.body).toMatchObject({
+			MessageSid: 'MM33333333333333333333333333333333',
+			AccountSid: 'AC11111111111111111111111111111111',
+			MessagingServiceSid: 'MG22222222222222222222222222222222',
+			From: '+15557001001',
+			To: '+15557002002',
+			Body: 'Inspect the loading dock.',
+			NumMedia: '2',
+			NumSegments: '1',
+			MediaUrl0: 'https://api.twilio.test/media/ME-cobalt-0',
+			MediaContentType0: 'image/webp',
+			MediaUrl1: 'https://api.twilio.test/media/ME-cobalt-1',
+			MediaContentType1: 'application/pdf',
+			OptOutType: 'STOP',
+			Latitude: '45.5231',
+			Longitude: '-122.6765',
+			FromCity: 'PORTLAND',
+			FromState: 'OR',
+			ButtonPayload: 'dock_north',
+			ButtonText: 'North dock',
+			InteractiveData: '{"type":"list-reply","id":"north"}',
+			CustomTag: ['amber', 'violet'],
 		});
 	});
 
-	it('publishes and normalizes the optional status callback when configured', async () => {
+	it('publishes and forwards the optional status callback when configured', async () => {
 		const webhook = vi.fn();
 		const statusCallback = vi.fn();
 		const channel = createTwilioChannel({
@@ -133,6 +121,7 @@ describe('createTwilioChannel()', () => {
 			['MessageSid', 'SM55555555555555555555555555555555'],
 			['AccountSid', 'AC44444444444444444444444444444444'],
 			['MessageStatus', 'carrier-confirmed'],
+			['MessagingServiceSid', 'MG44444444444444444444444444444444'],
 			['From', '+15557003003'],
 			['To', '+15557004004'],
 			['ErrorCode', '30007'],
@@ -159,44 +148,30 @@ describe('createTwilioChannel()', () => {
 		expect(await result.text()).toBe('');
 		expect(webhook).not.toHaveBeenCalled();
 		expect(statusCallback).toHaveBeenCalledOnce();
-		expect(statusCallback.mock.calls[0]?.[0]).toMatchObject({
-			status: {
-				messageSid: 'SM55555555555555555555555555555555',
-				accountSid: 'AC44444444444444444444444444444444',
-				state: 'unknown',
-				providerState: 'carrier-confirmed',
-				from: '+15557003003',
-				to: '+15557004004',
-				errorCode: 30007,
-				errorMessage: 'Synthetic carrier rejection',
-				channelStatusMessage: 'Undelivered by synthetic carrier',
-				rawDlrDoneDate: '2606131836',
-				idempotencyToken: 'retry-token-maple',
-				conversation: {
-					type: 'messaging-service',
-					accountSid: 'AC44444444444444444444444444444444',
-					messagingServiceSid: 'MG44444444444444444444444444444444',
-					address: '+15557003003',
-					participant: '+15557004004',
-				},
-			},
+		const input = statusCallback.mock.calls[0]?.[0];
+		expect(input.idempotencyToken).toBe('retry-token-maple');
+		expect(input.conversation).toEqual({
+			type: 'messaging-service',
+			accountSid: 'AC44444444444444444444444444444444',
+			messagingServiceSid: 'MG44444444444444444444444444444444',
+			address: '+15557003003',
+			participant: '+15557004004',
 		});
-
-		const wrongService = new URLSearchParams(params);
-		wrongService.set(
-			'MessagingServiceSid',
-			'MG99999999999999999999999999999999',
-		);
-		const rejected = await channelApp(channel).request(
-			signedRequest({
-				requestUrl: 'https://edge.example.test/channels/twilio/status',
-				signatureUrl: 'https://hooks.example.test/channels/twilio/status',
-				authToken: 'auth-token-maple',
-				params: wrongService,
-			}),
-		);
-		expect(rejected.status).toBe(403);
-		expect(statusCallback).toHaveBeenCalledOnce();
+		// The exact Twilio lifecycle value is preserved without narrowing, and
+		// a present MessagingServiceSid is forwarded verbatim — the channel no
+		// longer gates status callbacks on a service-SID match.
+		expect(input.body).toMatchObject({
+			MessageSid: 'SM55555555555555555555555555555555',
+			AccountSid: 'AC44444444444444444444444444444444',
+			MessageStatus: 'carrier-confirmed',
+			MessagingServiceSid: 'MG44444444444444444444444444444444',
+			From: '+15557003003',
+			To: '+15557004004',
+			ErrorCode: '30007',
+			ErrorMessage: 'Synthetic carrier rejection',
+			ChannelStatusMessage: 'Undelivered by synthetic carrier',
+			RawDlrDoneDate: '2606131836',
+		});
 	});
 
 	it('passes through an ordinary response from the application handler', async () => {
@@ -238,7 +213,7 @@ describe('createTwilioChannel()', () => {
 		expect(await result.text()).toBe(
 			'<Response><Message>Queued.</Message></Response>',
 		);
-		expect(webhook.mock.calls[0]?.[0].message.conversation).toEqual({
+		expect(webhook.mock.calls[0]?.[0].conversation).toEqual({
 			type: 'address',
 			accountSid: 'AC66666666666666666666666666666666',
 			address: '+15557005005',
@@ -246,7 +221,7 @@ describe('createTwilioChannel()', () => {
 		});
 	});
 
-	it('rejects invalid signatures, changed paths, identities, and known duplicate fields', async () => {
+	it('rejects invalid signatures, identities, and known duplicate fields', async () => {
 		const webhook = vi.fn();
 		const channel = createTwilioChannel({
 			accountSid: 'AC88888888888888888888888888888888',
@@ -264,6 +239,7 @@ describe('createTwilioChannel()', () => {
 		});
 		const changed = new URLSearchParams(valid);
 		changed.set('Body', 'Changed body');
+		const extraQuery = new URLSearchParams(valid);
 		const wrongIdentity = new URLSearchParams(valid);
 		wrongIdentity.set('To', '+15557009999');
 		const duplicated = new URLSearchParams(valid);
@@ -284,13 +260,16 @@ describe('createTwilioChannel()', () => {
 				body: changed,
 			}),
 		);
-		const changedQuery = await app.request(
+		// The incoming request query is no longer gated: the signature covers the
+		// configured public URL, so a proxy-added query reaches the verified
+		// handler instead of being rejected with 400.
+		const extraRequestQuery = await app.request(
 			signedRequest({
 				requestUrl:
 					'https://hooks.example.test/channels/twilio/webhook?added=true',
 				signatureUrl: 'https://hooks.example.test/channels/twilio/webhook',
 				authToken: 'auth-token-elm',
-				params: valid,
+				params: extraQuery,
 			}),
 		);
 		const rejectedIdentity = await app.request(
@@ -311,13 +290,14 @@ describe('createTwilioChannel()', () => {
 		);
 
 		expect(invalidSignature.status).toBe(401);
-		expect(changedQuery.status).toBe(400);
+		expect(extraRequestQuery.status).toBe(200);
 		expect(rejectedIdentity.status).toBe(403);
 		expect(duplicateKnownField.status).toBe(400);
-		expect(webhook).not.toHaveBeenCalled();
+		// Only the accepted extra-query request reaches the handler.
+		expect(webhook).toHaveBeenCalledOnce();
 	});
 
-	it('rejects unsupported content, oversized forms, malformed fields, and handler failures', async () => {
+	it('rejects unsupported content, oversized forms, missing required fields, and handler failures', async () => {
 		const webhook = vi.fn().mockRejectedValue(new Error('synthetic failure'));
 		const channel = createTwilioChannel({
 			accountSid: 'ACbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -334,8 +314,8 @@ describe('createTwilioChannel()', () => {
 			to: '+15557009009',
 			body: 'Fail in the handler.',
 		});
-		const malformed = new URLSearchParams(valid);
-		malformed.set('NumMedia', 'not-a-number');
+		const missingRequired = new URLSearchParams(valid);
+		missingRequired.delete('MessageSid');
 
 		const app = channelApp(channel);
 		const unsupported = await app.request(
@@ -362,7 +342,7 @@ describe('createTwilioChannel()', () => {
 				requestUrl: 'https://hooks.example.test/channels/twilio/webhook',
 				signatureUrl: 'https://hooks.example.test/channels/twilio/webhook',
 				authToken: 'auth-token-fir',
-				params: malformed,
+				params: missingRequired,
 			}),
 		);
 		const failed = await app.request(

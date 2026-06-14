@@ -18,8 +18,8 @@ first existing source root: `<root>/.flue/`, then `<root>/src/`, then
 whether the project uses one Twilio address or a Messaging Service.
 
 Install `@flue/twilio`. Flue owns signed webhook validation, exact public-URL
-handling, fixed account and destination identity, SMS/MMS normalization,
-optional delivery-status callbacks, TwiML acknowledgement, and canonical
+handling, fixed account and destination identity, provider-native verified form
+fields, optional delivery-status callbacks, TwiML acknowledgement, and canonical
 conversation keys. The project owns credentials, outbound REST access, tools,
 dispatch policy, and durable duplicate admission.
 
@@ -79,20 +79,20 @@ export const channel = createTwilioChannel({
   },
 
   // Path: /channels/twilio/webhook
-  async webhook({ message }) {
-    if (message.optOut?.type === 'stop') return;
+  async webhook({ body, conversation }) {
+    if (body.OptOutType === 'STOP') return;
+    const numMedia = Number(body.NumMedia ?? '0');
     await dispatch(assistant, {
-      id: channel.conversationKey(message.conversation),
+      id: channel.conversationKey(conversation),
       input: {
         type: 'twilio.message',
-        messageSid: message.sid,
-        from: message.from,
-        text: message.body,
-        media: message.media.map(({ index, contentType }) => ({
+        messageSid: body.MessageSid,
+        from: body.From,
+        text: body.Body,
+        media: Array.from({ length: numMedia }, (_, index) => ({
           index,
-          contentType,
+          contentType: body[`MediaContentType${index}`],
         })),
-        optOut: message.optOut,
       },
     });
   },
@@ -166,9 +166,10 @@ configured URL and form fields in `X-Twilio-Signature`, so do not derive this
 value from the incoming request behind a proxy.
 
 The external path may differ from the internal request path when a trusted
-proxy strips a prefix. The package validates the configured external URL's
-signature and requires the incoming query string to match, while Flue's fixed
-route owns the internal path.
+proxy strips a prefix. The package validates the signature over the configured
+external URL — query string included — while Flue's fixed route owns the
+internal path. The incoming request's own query string is not re-checked: it is
+already covered by the signed bytes, so any tampering fails signature (`401`).
 
 Twilio connection-override fragments such as `#rc=2&rp=all` may remain in the
 configured value; Twilio does not include the fragment in the signature or
@@ -185,8 +186,8 @@ Status ingress is optional. Add both properties together:
 statusCallbackUrl: process.env.TWILIO_STATUS_CALLBACK_URL!,
 
 // Path: /channels/twilio/status
-async statusCallback({ status }) {
-  // Persist delivery state outside model context.
+async statusCallback({ body }) {
+  // Persist delivery state (body.MessageStatus) outside model context.
 },
 ```
 
@@ -196,21 +197,26 @@ can be duplicated or arrive out of order; persist transitions idempotently by
 message SID.
 
 Twilio does not guarantee `MessagingServiceSid` in every status callback. For
-a Messaging Service channel, the configured account and exact signed callback
-URL scope the route. The package rejects a different service SID when Twilio
-includes one.
+a Messaging Service channel, the signed account SID and the exact signed
+callback URL scope the route; the package does not gate status callbacks on a
+matching `MessagingServiceSid`. Read `body.MessagingServiceSid` in application
+code when a present value matters.
 
 ## Handle inbound messages
 
-The verified message includes:
+The handler input is `{ c, body, conversation, idempotencyToken? }`:
 
-- message, account, sender, recipient, and optional Messaging Service ids;
-- text body, segment count, and ordered MMS media metadata;
-- Advanced Opt-Out state;
-- optional geographic and rich-message fields;
-- Twilio's webhook retry token when present;
-- complete signed form fields under `raw`;
-- a canonical conversation ref.
+- `body` is the provider-native verified form using Twilio's PascalCase wire
+  names (`MessageSid`, `From`, `To`, `Body`, `NumMedia`, `NumSegments`,
+  `MediaUrl0`, `OptOutType`, `Latitude`, geographic, and rich-message fields).
+  Every value is a string; a repeated parameter becomes a `string[]`. New Twilio
+  parameters are forwarded through an index signature, so read fields directly.
+- `conversation` is the canonical conversation ref derived from the verified
+  destination and sender.
+- `idempotencyToken` is Twilio's `I-Twilio-Idempotency-Token` when present.
+
+The channel does not narrow, rename, or coerce Twilio's fields; parse numbers,
+media counts, and opt-out values in application code.
 
 Treat `OptOutType=STOP` as control input and do not dispatch it to an agent or
 attempt an application reply. Twilio handles the configured opt-out response

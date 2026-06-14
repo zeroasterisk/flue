@@ -13,16 +13,18 @@ export const channel = createTwilioChannel({
     type: 'address',
     address: process.env.TWILIO_PHONE_NUMBER!,
   },
-  webhook({ message }) {
-    // Handle one verified SMS or MMS message.
+  webhook({ body, conversation }) {
+    // Handle one verified SMS or MMS message. `body` is the provider-native
+    // verified form with Twilio's PascalCase wire names.
   },
 });
 ```
 
-The package owns signature validation, fixed account and destination checks,
-typed message and status normalization, TwiML acknowledgement, and canonical
-conversation identity. Applications own credentials, outbound Fetch clients,
-tools, dispatch policy, and deduplication.
+The package owns signature validation over the configured public URL, fixed
+account and destination checks, the provider-native verified form body, TwiML
+acknowledgement, and canonical conversation identity. It does not rename,
+narrow, or coerce Twilio's fields. Applications own credentials, outbound Fetch
+clients, tools, dispatch policy, and deduplication.
 
 See the prepared package docs or
 <https://flueframework.com/docs/ecosystem/channels/twilio/>.
