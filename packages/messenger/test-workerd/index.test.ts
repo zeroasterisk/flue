@@ -68,10 +68,13 @@ describe('@flue/messenger workerd ingress', () => {
 		expect(await accepted.text()).toBe('EVENT_RECEIVED');
 		expect(rejected.status).toBe(401);
 		expect(webhook).toHaveBeenCalledOnce();
-		expect(webhook.mock.calls[0]?.[0].delivery.events[0]).toMatchObject({
-			type: 'message',
+		expect(
+			webhook.mock.calls[0]?.[0].payload.entry[0]?.messaging[0],
+		).toMatchObject({
+			sender: { id: 'psid_worker_72' },
+			recipient: { id: 'page_worker_71' },
 			message: {
-				id: 'm_worker_73',
+				mid: 'm_worker_73',
 				text: 'Worker café message',
 			},
 		});

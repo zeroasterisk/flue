@@ -15,7 +15,10 @@ function createMessengerChannel<E extends Env = Env>(
 ```
 
 Creates GET verification and signed POST delivery routes at `/webhook` for one
-fixed Facebook Page.
+fixed Facebook Page. The channel verifies Meta's GET handshake and the
+exact-body `X-Hub-Signature-256` HMAC, confirms each entry targets the
+configured Page, and forwards the provider-native payload unchanged. It is
+stateless and does not deduplicate messages or deliveries.
 
 ## `MessengerChannelOptions`
 
@@ -25,19 +28,17 @@ interface MessengerChannelOptions<E extends Env = Env> {
   verifyToken: string;
   pageId: string;
   bodyLimit?: number;
-  handlerTimeoutMs?: number;
   webhook(input: MessengerWebhookHandlerInput<E>): MessengerHandlerResult;
 }
 ```
 
-| Field              | Description                                                   |
-| ------------------ | ------------------------------------------------------------- |
-| `appSecret`        | Meta app secret for exact-body HMAC-SHA256 validation.        |
-| `verifyToken`      | User-chosen token for Meta's GET verification handshake.      |
-| `pageId`           | Required Page id in every accepted entry and event.           |
-| `bodyLimit`        | Maximum JSON body. Default: 1 MiB.                            |
-| `handlerTimeoutMs` | Handler deadline. Default and maximum: 4500 ms.               |
-| `webhook`          | Callback for one verified, potentially batched HTTP delivery. |
+| Field         | Description                                                   |
+| ------------- | ------------------------------------------------------------- |
+| `appSecret`   | Meta app secret for exact-body HMAC-SHA256 validation.        |
+| `verifyToken` | User-chosen token for Meta's GET verification handshake.      |
+| `pageId`      | Required Page id in every accepted entry.                     |
+| `bodyLimit`   | Maximum JSON body in bytes. Default: 1 MiB.                   |
+| `webhook`     | Callback for one verified, potentially batched HTTP delivery. |
 
 ## `MessengerChannel`
 
@@ -46,6 +47,7 @@ interface MessengerChannel<E extends Env = Env> {
   readonly routes: readonly ChannelRoute<E>[];
   conversationKey(ref: MessengerConversationRef): string;
   parseConversationKey(id: string): MessengerConversationRef;
+  conversationRef(event: MessengerMessagingEvent): MessengerConversationRef | undefined;
 }
 ```
 
@@ -60,59 +62,104 @@ deliveries, reads, or retries.
 ```ts
 interface MessengerWebhookHandlerInput<E extends Env = Env> {
   c: Context<E>;
-  delivery: MessengerWebhookDelivery;
-}
-
-interface MessengerWebhookDelivery {
-  object: 'page';
-  events: readonly MessengerWebhookEvent[];
-  raw: unknown;
+  payload: MessengerWebhookPayload;
 }
 ```
 
-`delivery.events` preserves deterministic entry and provider-collection
-positions. Every event includes:
+`payload` is the provider-native Page webhook payload, passed through after
+exact-body verification and the fixed-Page identity check. One signed POST may
+batch several entries and several events. Events stay in Meta's delivered
+order. The channel does not reshape, filter, or deduplicate them.
 
-- `pageId`, `entryTime`, `entryIndex`, `collection`, and `itemIndex`;
-- optional provider `timestamp`;
-- the verified provider object under `raw`.
+## Webhook payload
 
-## Event types
+```ts
+interface MessengerWebhookPayload {
+  object: 'page';
+  entry: MessengerEntry[];
+  [key: string]: unknown;
+}
 
-`MessengerWebhookEvent` is a union of:
+interface MessengerEntry {
+  id: string;
+  time: number;
+  messaging?: MessengerMessagingEvent[];
+  standby?: MessengerMessagingEvent[];
+  changes?: MessengerChange[];
+  [key: string]: unknown;
+}
+```
 
-| `type`         | Additional fields                                                  |
-| -------------- | ------------------------------------------------------------------ |
-| `message`      | `message`, `conversation`                                          |
-| `message_echo` | `message`, optional `appId` and `metadata`, `conversation`         |
-| `message_edit` | `messageId`, `text`, `editCount`, `conversation`                   |
-| `postback`     | optional `messageId`, `title`, `payload`, `referral`, conversation |
-| `reaction`     | `messageId`, normalized and provider actions, reaction, emoji      |
-| `delivery`     | `messageIds`, `watermark`, `conversation`                          |
-| `read`         | `watermark`, `conversation`                                        |
-| `optin`        | opt-in metadata, optional trusted `capabilities`, `conversation`   |
-| `referral`     | normalized `referral`, `conversation`                              |
-| `unknown`      | `eventType`, optional `conversation`                               |
+Each `entry` corresponds to one Page. `messaging` carries events the Page is
+the active receiver for; `standby` carries the same item shape while another
+app owns the conversation (Handover protocol); `changes` carries Page-field
+change notifications. Field names and nesting match Meta's documented wire
+shapes, and every modeled object carries a `[key: string]: unknown` index
+signature so authenticated but unmodeled fields forward at runtime rather than
+being discarded.
 
-`MessengerMessage` exposes the message id, optional text, attachments, quick
-reply payload, reply target, referral, and command names. Attachment payloads
+## Messaging events
+
+```ts
+interface MessengerMessagingEvent {
+  sender?: MessengerSender;
+  recipient?: MessengerRecipient;
+  timestamp?: number;
+  message?: MessengerMessage;
+  message_edit?: MessengerMessageEdit;
+  postback?: MessengerPostback;
+  reaction?: MessengerReaction;
+  delivery?: MessengerDelivery;
+  read?: MessengerRead;
+  optin?: MessengerOptin;
+  referral?: MessengerReferral;
+  [key: string]: unknown;
+}
+```
+
+The event family is discriminated by **which property is present**, exactly as
+Meta delivers it — there is no synthetic `type` field. A `message` event has
+`event.message`, a postback has `event.postback`, a reaction has
+`event.reaction`, and so on. Unmodeled families still arrive intact through the
+index signature.
+
+`MessengerSender` and `MessengerRecipient` carry an optional `id` (the
+page-scoped id, or PSID) and an optional `user_ref` (a pre-PSID reference set
+by Customer Matching or the checkbox plugin); the Page is identified by its own
+`id`.
+
+`MessengerMessage` exposes the native `mid`, optional `text`, `attachments[]`
+(`type`, `payload.url`, `payload.sticker_id`), `quick_reply.payload`,
+`reply_to.mid`, `referral`, `commands[].name`, and the echo fields `is_echo`,
+`app_id`, and `metadata`. Field names stay snake_case and attachment payloads
 remain provider-native after verification.
 
-`MessengerOptInCapabilities.notificationMessagesToken` is a short-lived
-provider capability. Keep it and complete raw payloads out of model context,
-dispatch input, logs, and durable session data.
+`MessengerOptin.notification_messages_token` is a short-lived marketing-message
+capability. Keep it and complete native payloads out of model context, dispatch
+input, logs, and durable session data.
 
 ## Conversation identity
 
 ```ts
+type MessengerParticipantRef =
+  | { type: 'page-scoped-id'; id: string }
+  | { type: 'user-ref'; id: string };
+
 interface MessengerConversationRef {
   pageId: string;
-  participant: { type: 'page-scoped-id'; id: string } | { type: 'user-ref'; id: string };
+  participant: MessengerParticipantRef;
 }
 ```
 
-Conversation keys are canonical identifiers, not authorization capabilities.
-Page-scoped ids and `user_ref` values use distinct key forms.
+`conversationKey(ref)` serializes a canonical namespaced identifier suitable for
+a Flue agent-instance id; `parseConversationKey(id)` parses only keys it
+produced. These are identifiers, not authorization capabilities, and the
+page-scoped-id and `user_ref` participant types use distinct key forms.
+
+`conversationRef(event)` derives the counterpart participant — the non-Page
+actor — for one native messaging event, returning the same `MessengerConversationRef`
+for both inbound deliveries and Page echoes, or `undefined` when the event
+carries no usable `sender`/`recipient` pair for this Page.
 
 ## Handler results
 
@@ -124,9 +171,9 @@ type MessengerHandlerResult =
   | Promise<undefined | JsonValue | Response>;
 ```
 
-Returning `undefined` produces `EVENT_RECEIVED` with status `200`. A
-JSON-compatible value becomes a JSON response. An ordinary Hono or Fetch
-`Response` passes through.
+Returning `undefined` produces `EVENT_RECEIVED` with status `200`, the response
+body Meta's quick start documents for a webhook. A JSON-compatible value becomes
+a JSON response. An ordinary Hono or Fetch `Response` passes through unchanged.
 
 ## Errors
 

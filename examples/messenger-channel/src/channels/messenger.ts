@@ -18,55 +18,28 @@ export const channel = createMessengerChannel({
 	pageId: requiredEnv('MESSENGER_PAGE_ID'),
 
 	// Paths: GET and POST /channels/messenger/webhook
-	async webhook({ delivery }) {
-		for (const event of delivery.events) {
-			switch (event.type) {
-				case 'message': {
-					if (event.message.text === undefined) continue;
-					await dispatch(assistant, {
-						id: channel.conversationKey(event.conversation),
-						input: {
-							type: 'messenger.message',
-							messageId: event.message.id,
-							text: event.message.text,
-							attachmentTypes: event.message.attachments.map(
-								(attachment) => attachment.type,
-							),
-							quickReplyPayload: event.message.quickReplyPayload,
-						},
-					});
-					break;
+	async webhook({ payload }) {
+		for (const entry of payload.entry) {
+			for (const event of entry.messaging ?? []) {
+				// Echoes of the Page's own sends and other non-message events are
+				// left to application policy.
+				if (event.message === undefined || event.message.is_echo) continue;
+				const conversation = channel.conversationRef(event);
+				if (conversation === undefined || event.message.text === undefined) {
+					continue;
 				}
-				case 'message_edit':
-					await dispatch(assistant, {
-						id: channel.conversationKey(event.conversation),
-						input: {
-							type: 'messenger.message_edit',
-							messageId: event.messageId,
-							text: event.text,
-							editCount: event.editCount,
-						},
-					});
-					break;
-				case 'postback':
-					await dispatch(assistant, {
-						id: channel.conversationKey(event.conversation),
-						input: {
-							type: 'messenger.postback',
-							messageId: event.messageId,
-							title: event.title,
-							payload: event.payload,
-						},
-					});
-					break;
-				case 'message_echo':
-				case 'reaction':
-				case 'delivery':
-				case 'read':
-				case 'optin':
-				case 'referral':
-				case 'unknown':
-					break;
+				await dispatch(assistant, {
+					id: channel.conversationKey(conversation),
+					input: {
+						type: 'messenger.message',
+						messageId: event.message.mid,
+						text: event.message.text,
+						attachmentTypes: (event.message.attachments ?? []).map(
+							(attachment) => attachment.type,
+						),
+						quickReplyPayload: event.message.quick_reply?.payload,
+					},
+				});
 			}
 		}
 	},

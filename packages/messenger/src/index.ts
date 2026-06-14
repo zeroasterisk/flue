@@ -37,14 +37,7 @@ export interface MessengerChannelOptions<E extends Env = Env> {
 	pageId: string;
 	/** Maximum POST body size in bytes. Defaults to 1 MiB. */
 	bodyLimit?: number;
-	/**
-	 * Application handler deadline in milliseconds.
-	 *
-	 * Defaults to and may not exceed 4500, leaving time before Meta's
-	 * five-second acknowledgement deadline.
-	 */
-	handlerTimeoutMs?: number;
-	/** Receives one verified delivery with all batched events preserved. */
+	/** Receives one verified, provider-native delivery payload. */
 	webhook(input: MessengerWebhookHandlerInput<E>): MessengerHandlerResult;
 }
 
@@ -58,169 +51,207 @@ export interface MessengerConversationRef {
 	participant: MessengerParticipantRef;
 }
 
-export interface MessengerReferral {
-	ref?: string;
-	source?: string;
-	type?: string;
-	adId?: string;
-	refererUri?: string;
-	adsContextData?: unknown;
-	productId?: string;
+/**
+ * Provider-native types for the Messenger Platform Page webhook payload.
+ *
+ * Field names, nesting, and discriminant-by-property-presence match Meta's
+ * documented wire shapes. Every modeled object also carries an index signature
+ * so authenticated but unmodeled fields are forwarded at runtime rather than
+ * discarded. See https://developers.facebook.com/docs/messenger-platform/reference/webhook-events/.
+ */
+
+export interface MessengerSender {
+	/** Page-scoped id (PSID). Absent when `user_ref` identifies the person. */
+	id?: string;
+	/** Pre-PSID reference set by Customer Matching / checkbox plugin. */
+	user_ref?: string;
+	[key: string]: unknown;
+}
+
+export interface MessengerRecipient {
+	id?: string;
+	user_ref?: string;
+	[key: string]: unknown;
+}
+
+export interface MessengerAttachmentPayload {
+	url?: string;
+	sticker_id?: number;
+	[key: string]: unknown;
 }
 
 export interface MessengerAttachment {
 	type: string;
-	url?: string;
-	title?: string;
-	stickerId?: number;
-	/** Provider-native attachment payload after exact-body verification. */
-	payload?: unknown;
+	payload?: MessengerAttachmentPayload;
+	[key: string]: unknown;
 }
 
+export interface MessengerQuickReply {
+	payload?: string;
+	[key: string]: unknown;
+}
+
+export interface MessengerReplyTo {
+	mid?: string;
+	is_self_reply?: boolean;
+	[key: string]: unknown;
+}
+
+export interface MessengerMessageCommand {
+	name: string;
+	[key: string]: unknown;
+}
+
+/** `message` object on a `messages` or `message_echoes` event. */
 export interface MessengerMessage {
-	id: string;
+	mid: string;
 	text?: string;
-	attachments: readonly MessengerAttachment[];
-	quickReplyPayload?: string;
-	replyTo?: {
-		messageId: string;
-		isSelfReply?: boolean;
-	};
+	attachments?: MessengerAttachment[];
+	quick_reply?: MessengerQuickReply;
+	reply_to?: MessengerReplyTo;
 	referral?: MessengerReferral;
-	commands: readonly { name: string }[];
-}
-
-export interface MessengerEventPosition {
-	pageId: string;
-	entryTime: number;
-	entryIndex: number;
-	collection: 'messaging' | 'standby' | 'changes';
-	itemIndex: number;
-	timestamp?: number;
-	/** Provider object for this event after exact-body verification. */
-	raw: unknown;
-}
-
-export interface MessengerMessageEvent extends MessengerEventPosition {
-	type: 'message';
-	message: MessengerMessage;
-	conversation: MessengerConversationRef;
-}
-
-export interface MessengerMessageEchoEvent extends MessengerEventPosition {
-	type: 'message_echo';
-	message: MessengerMessage;
-	appId?: string;
+	commands?: MessengerMessageCommand[];
+	/** Present and `true` on echoes of messages the Page sent. */
+	is_echo?: boolean;
+	/** App that sent an echoed message. */
+	app_id?: number | string;
+	/** Free-form metadata supplied on outbound sends, echoed back. */
 	metadata?: string;
-	conversation: MessengerConversationRef;
+	[key: string]: unknown;
 }
 
-export interface MessengerMessageEditEvent extends MessengerEventPosition {
-	type: 'message_edit';
-	messageId: string;
-	text: string;
-	editCount: number;
-	conversation: MessengerConversationRef;
+export interface MessengerMessageEdit {
+	mid: string;
+	text?: string;
+	num_edit?: number;
+	[key: string]: unknown;
 }
 
-export interface MessengerPostbackEvent extends MessengerEventPosition {
-	type: 'postback';
-	messageId?: string;
+export interface MessengerReferral {
+	ref?: string;
+	source?: string;
+	type?: string;
+	ad_id?: number | string;
+	referer_uri?: string;
+	ads_context_data?: unknown;
+	[key: string]: unknown;
+}
+
+export interface MessengerPostback {
+	mid?: string;
 	title?: string;
 	payload?: string;
 	referral?: MessengerReferral;
-	conversation: MessengerConversationRef;
+	[key: string]: unknown;
 }
 
-export interface MessengerReactionEvent extends MessengerEventPosition {
-	type: 'reaction';
-	messageId: string;
-	action: 'react' | 'unreact' | 'unknown';
-	providerAction: string;
+export interface MessengerReaction {
+	mid: string;
+	action: string;
 	reaction?: string;
 	emoji?: string;
-	conversation: MessengerConversationRef;
+	[key: string]: unknown;
 }
 
-export interface MessengerDeliveryEvent extends MessengerEventPosition {
-	type: 'delivery';
-	messageIds: readonly string[];
+export interface MessengerDelivery {
+	mids?: string[];
 	watermark: number;
-	conversation: MessengerConversationRef;
+	[key: string]: unknown;
 }
 
-export interface MessengerReadEvent extends MessengerEventPosition {
-	type: 'read';
+export interface MessengerRead {
 	watermark: number;
-	conversation: MessengerConversationRef;
+	[key: string]: unknown;
 }
 
-/**
- * Short-lived Messenger capabilities for trusted application use.
- *
- * Never place these values in model context, dispatch input, logs, or durable
- * session data.
- */
-export interface MessengerOptInCapabilities {
-	notificationMessagesToken?: string;
-}
-
-export interface MessengerOptInEvent extends MessengerEventPosition {
-	type: 'optin';
-	providerType?: string;
+export interface MessengerOptin {
+	type?: string;
 	ref?: string;
 	payload?: string;
 	title?: string;
-	frequency?: string;
-	timezone?: string;
-	tokenExpiryTimestamp?: number;
-	userTokenStatus?: string;
-	notificationStatus?: string;
-	capabilities?: MessengerOptInCapabilities;
-	conversation: MessengerConversationRef;
+	notification_messages_frequency?: string;
+	notification_messages_timezone?: string;
+	/**
+	 * Short-lived marketing-message capability token.
+	 *
+	 * Never place this value in model context, dispatch input, logs, or durable
+	 * session data.
+	 */
+	notification_messages_token?: string;
+	token_expiry_timestamp?: number;
+	user_token_status?: string;
+	notification_messages_status?: string;
+	[key: string]: unknown;
 }
 
-export interface MessengerReferralEvent extends MessengerEventPosition {
-	type: 'referral';
-	referral: MessengerReferral;
-	conversation: MessengerConversationRef;
+/**
+ * One item from `entry[].messaging` or `entry[].standby`.
+ *
+ * The event family is discriminated by which property is present
+ * (`message`, `postback`, `reaction`, …), exactly as Meta delivers it.
+ * Unmodeled families still arrive intact through the index signature.
+ */
+export interface MessengerMessagingEvent {
+	sender?: MessengerSender;
+	recipient?: MessengerRecipient;
+	timestamp?: number;
+	message?: MessengerMessage;
+	message_edit?: MessengerMessageEdit;
+	postback?: MessengerPostback;
+	reaction?: MessengerReaction;
+	delivery?: MessengerDelivery;
+	read?: MessengerRead;
+	optin?: MessengerOptin;
+	referral?: MessengerReferral;
+	[key: string]: unknown;
 }
 
-export interface MessengerUnknownEvent extends MessengerEventPosition {
-	type: 'unknown';
-	eventType: string;
-	conversation?: MessengerConversationRef;
+/** One `changes` item delivered for Page-field webhook subscriptions. */
+export interface MessengerChange {
+	field: string;
+	value: unknown;
+	[key: string]: unknown;
 }
 
-export type MessengerWebhookEvent =
-	| MessengerMessageEvent
-	| MessengerMessageEchoEvent
-	| MessengerMessageEditEvent
-	| MessengerPostbackEvent
-	| MessengerReactionEvent
-	| MessengerDeliveryEvent
-	| MessengerReadEvent
-	| MessengerOptInEvent
-	| MessengerReferralEvent
-	| MessengerUnknownEvent;
+/** One element of the top-level `entry` array. */
+export interface MessengerEntry {
+	id: string;
+	time: number;
+	/** Events the Page is the active receiver for. */
+	messaging?: MessengerMessagingEvent[];
+	/** Events received while another app owns the conversation (Handover). */
+	standby?: MessengerMessagingEvent[];
+	/** Page-field change notifications. */
+	changes?: MessengerChange[];
+	[key: string]: unknown;
+}
 
-export interface MessengerWebhookDelivery {
+/**
+ * Provider-native Page webhook payload after exact-body verification and the
+ * fixed-Page identity check.
+ *
+ * One signed POST may batch several entries and several events. Events stay in
+ * Meta's delivered order. Flue does not reshape, filter, or deduplicate them.
+ */
+export interface MessengerWebhookPayload {
 	object: 'page';
-	/** Events remain in deterministic entry and provider-collection order. */
-	events: readonly MessengerWebhookEvent[];
-	/** Complete parsed payload after exact-body verification and identity checks. */
-	raw: unknown;
+	entry: MessengerEntry[];
+	[key: string]: unknown;
 }
 
 type MessengerHandlerValue = undefined | JsonValue | Response;
 
+/**
+ * Returning nothing acknowledges with `EVENT_RECEIVED`. JSON-compatible values
+ * become JSON responses, and Hono or Fetch responses pass through unchanged.
+ */
 export type MessengerHandlerResult =
 	| MessengerHandlerValue
 	| Promise<MessengerHandlerValue>;
 
 export interface MessengerWebhookHandlerInput<E extends Env = Env> {
 	c: Context<E>;
-	delivery: MessengerWebhookDelivery;
+	payload: MessengerWebhookPayload;
 }
 
 /** Verified Facebook Messenger Page ingress and canonical identity helpers. */
@@ -230,17 +261,30 @@ export interface MessengerChannel<E extends Env = Env> {
 	conversationKey(ref: MessengerConversationRef): string;
 	/** Parses only canonical keys produced by `conversationKey()`. */
 	parseConversationKey(id: string): MessengerConversationRef;
+	/**
+	 * Derives the counterpart participant for one native messaging event.
+	 *
+	 * Returns the person's identity (the non-Page actor) for both inbound
+	 * deliveries and Page echoes, or `undefined` when the event carries no
+	 * usable `sender`/`recipient` pair for this Page. The result is an
+	 * identifier, not an authorization capability.
+	 */
+	conversationRef(event: MessengerMessagingEvent): MessengerConversationRef | undefined;
 }
 
 /**
  * Creates verified Facebook Messenger webhook routes for one fixed Page.
  *
- * The channel is stateless and does not deduplicate messages or deliveries.
+ * The channel verifies Meta's GET handshake and exact-body
+ * `X-Hub-Signature-256` HMAC, confirms each entry targets the configured Page,
+ * and forwards the provider-native payload unchanged. It is stateless and does
+ * not deduplicate messages or deliveries.
  */
 export function createMessengerChannel<E extends Env = Env>(
 	options: MessengerChannelOptions<E>,
 ): MessengerChannel<E> {
 	validateOptions(options);
+	const pageId = options.pageId;
 	const channel: MessengerChannel<E> = {
 		routes: [
 			{
@@ -272,12 +316,12 @@ export function createMessengerChannel<E extends Env = Env>(
 						id,
 					);
 				if (!match) throw new InvalidMessengerConversationKeyError();
-				const [, pageId, type, participantId] = match;
-				if (!pageId || !type || !participantId) {
+				const [, encodedPageId, type, participantId] = match;
+				if (!encodedPageId || !type || !participantId) {
 					throw new InvalidMessengerConversationKeyError();
 				}
 				const ref: MessengerConversationRef = {
-					pageId: decodeURIComponent(pageId),
+					pageId: decodeURIComponent(encodedPageId),
 					participant: {
 						type: type as MessengerParticipantRef['type'],
 						id: decodeURIComponent(participantId),
@@ -293,8 +337,39 @@ export function createMessengerChannel<E extends Env = Env>(
 				throw new InvalidMessengerConversationKeyError();
 			}
 		},
+		conversationRef(event) {
+			const sender = participantActor(event.sender, pageId);
+			const recipient = participantActor(event.recipient, pageId);
+			if (sender?.type === 'page' && recipient && recipient.type !== 'page') {
+				return { pageId, participant: recipient };
+			}
+			if (recipient?.type === 'page' && sender && sender.type !== 'page') {
+				return { pageId, participant: sender };
+			}
+			return undefined;
+		},
 	};
 	return channel;
+}
+
+type MessengerActor = { type: 'page'; id: string } | MessengerParticipantRef;
+
+function participantActor(
+	actor: { id?: string; user_ref?: string } | undefined,
+	pageId: string,
+): MessengerActor | undefined {
+	if (!actor || typeof actor !== 'object') return undefined;
+	const id = typeof actor.id === 'string' && actor.id.length > 0 ? actor.id : undefined;
+	const userRef =
+		typeof actor.user_ref === 'string' && actor.user_ref.length > 0
+			? actor.user_ref
+			: undefined;
+	if (id !== undefined && userRef !== undefined) return undefined;
+	if (id !== undefined) {
+		return id === pageId ? { type: 'page', id } : { type: 'page-scoped-id', id };
+	}
+	if (userRef !== undefined) return { type: 'user-ref', id: userRef };
+	return undefined;
 }
 
 function validateOptions<E extends Env>(

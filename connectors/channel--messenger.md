@@ -18,10 +18,10 @@ first existing source root: `<root>/.flue/`, then `<root>/src/`, then
 the Facebook Page the application owns.
 
 Install `@flue/messenger`. Flue owns GET verification, exact-body
-`X-Hub-Signature-256` validation, fixed Page identity, batched event
-normalization, acknowledgement deadlines, and canonical conversation keys.
-The project owns Page access tokens, outbound Graph API behavior, tools,
-dispatch policy, and durable duplicate admission.
+`X-Hub-Signature-256` validation, fixed Page identity, the provider-native
+payload, and canonical conversation keys. The project owns Page access tokens,
+outbound Graph API behavior, tools, dispatch policy, and durable duplicate
+admission.
 
 Do not install a Node-only Facebook or Messenger SDK in a Cloudflare project.
 The official JavaScript Business SDK targets the Marketing API and uses
@@ -80,37 +80,22 @@ export const channel = createMessengerChannel({
   pageId: process.env.MESSENGER_PAGE_ID!,
 
   // Paths: GET and POST /channels/messenger/webhook
-  async webhook({ delivery }) {
-    for (const event of delivery.events) {
-      switch (event.type) {
-        case 'message':
-          if (event.message.text === undefined) continue;
-          await dispatch(assistant, {
-            id: channel.conversationKey(event.conversation),
-            input: {
-              type: 'messenger.message',
-              messageId: event.message.id,
-              text: event.message.text,
-              attachmentTypes: event.message.attachments.map(
-                (attachment) => attachment.type,
-              ),
-              quickReplyPayload: event.message.quickReplyPayload,
-            },
-          });
-          break;
-        case 'postback':
-          await dispatch(assistant, {
-            id: channel.conversationKey(event.conversation),
-            input: {
-              type: 'messenger.postback',
-              messageId: event.messageId,
-              title: event.title,
-              payload: event.payload,
-            },
-          });
-          break;
-        default:
-          break;
+  async webhook({ payload }) {
+    for (const entry of payload.entry) {
+      for (const event of entry.messaging ?? []) {
+        if (event.message === undefined || event.message.is_echo) continue;
+        const conversation = channel.conversationRef(event);
+        if (conversation === undefined || event.message.text === undefined) {
+          continue;
+        }
+        await dispatch(assistant, {
+          id: channel.conversationKey(conversation),
+          input: {
+            type: 'messenger.message',
+            messageId: event.message.mid,
+            text: event.message.text,
+          },
+        });
       }
     }
   },
@@ -183,29 +168,36 @@ outbound credential. Never expose either secret to the model.
 ## Handle verified deliveries
 
 Meta may batch several Page entries and events in one signed POST. The handler
-runs once with ordered `delivery.events`; one failure causes the complete HTTP
-delivery to be retried. Claim message ids or other stable event identities
-before dispatch when duplicate admission is unacceptable.
+runs once with the provider-native `payload`; iterate `payload.entry[]` and the
+native `messaging`, `standby`, and `changes` arrays in Meta's delivered order.
+The event family is discriminated by which property is present
+(`event.message`, `event.postback`, `event.reaction`, `event.delivery`,
+`event.read`, `event.optin`, `event.referral`, `event.message_edit`), exactly
+as Meta documents. Field names stay snake_case (`mid`, `quick_reply.payload`,
+`is_echo`); unmodeled families and fields are forwarded intact. One failure
+causes the complete HTTP delivery to be retried, so claim message ids or other
+stable event identities before dispatch when duplicate admission is
+unacceptable.
 
-The package normalizes messages, echoes, edits, postbacks, reactions,
-deliveries, reads, opt-ins, referrals, and explicit unknown events. Unknown
-`standby` and Handover forms remain verified without claiming ownership of the
-conversation.
+`standby` events arrive while another app owns the conversation, and bot/echo
+filtering (`message.is_echo`) is application policy — the channel forwards all
+verified deliveries.
 
-Page-scoped ids and `user_ref` values are distinct canonical participant
-types. Bind the parsed conversation to a tool in trusted code; do not let the
-model choose a recipient id.
+`channel.conversationRef(event)` derives the counterpart participant for a
+native messaging event. Page-scoped ids and `user_ref` values are distinct
+canonical participant types. Bind the derived conversation to a tool in trusted
+code; do not let the model choose a recipient id.
 
-Opt-in events may contain a marketing-message token under `capabilities`.
-Treat it as a short-lived provider capability. Keep capabilities and `raw`
-payloads out of dispatch input, model context, logs, and durable session
-history.
+Opt-in events may contain a `notification_messages_token`. Treat it as a
+short-lived provider capability. Keep tokens and full native payloads out of
+dispatch input, model context, logs, and durable session history.
 
 Returning nothing produces `EVENT_RECEIVED` with status `200`. Return an
 ordinary Hono or Fetch `Response` for explicit status, headers, or body. Meta
-requires acknowledgement within five seconds, so complete only admission work
-inside the handler and move long-running behavior behind durable dispatch or
-application queues.
+retries the delivery if it is not acknowledged promptly, so complete only
+admission work inside the handler and move long-running behavior behind durable
+dispatch or application queues. A handler that blocks does not buy more time;
+rely on prompt admission plus idempotency rather than an in-handler deadline.
 
 ## Respect outbound policy
 
@@ -232,8 +224,8 @@ cover:
   echoes, delivery receipts, reads, opt-ins, referrals, unknown fields,
   `standby`, and batches;
 - both `entry.messaging` and documented `entry.changes` forms;
-- body limits, malformed events, handler failures, deadlines,
-  `EVENT_RECEIVED`, JSON returns, and explicit `Response` control;
+- body limits, malformed events, handler failures, `EVENT_RECEIVED`,
+  JSON returns, and explicit `Response` control;
 - canonical Page-scoped-id and `user_ref` key round trips;
 - real outbound Fetch requests against local fake transports in Node and
   workerd;
