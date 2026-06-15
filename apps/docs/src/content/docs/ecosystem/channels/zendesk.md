@@ -8,7 +8,7 @@ description: Receive verified Zendesk events and use a ticket-bound Fetch client
 Run the Zendesk recipe through your coding agent:
 
 ```sh
-flue add zendesk --print | codex
+flue add channel zendesk --print | codex
 ```
 
 It installs `@flue/zendesk` and creates a channel module with named `channel`

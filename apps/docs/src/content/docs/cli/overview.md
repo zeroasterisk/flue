@@ -85,5 +85,5 @@ A build packages the discovered application for its runtime target. It does not 
 | [`flue run`](/docs/cli/run/)         | Execute one workflow invocation locally.                          |
 | [`flue logs`](/docs/cli/logs/)       | Replay or follow workflow-run events from a running server.       |
 | [`flue build`](/docs/cli/build/)     | Create deployable application artifacts.                          |
-| [`flue add`](/docs/cli/add/)         | Fetch sandbox or channel installation recipes for a coding agent. |
+| [`flue add`](/docs/cli/add/)         | Fetch sandbox, channel, or database installation recipes for a coding agent. |
 | [`flue docs`](/docs/cli/docs/)       | List, read, and search the bundled Flue documentation.            |

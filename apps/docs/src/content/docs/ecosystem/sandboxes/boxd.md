@@ -11,7 +11,7 @@ The boxd connector adapts an already-initialized boxd `Box` from `@boxd-sh/sdk` 
 Run the connector installation flow in your Flue project:
 
 ```bash
-pnpm exec flue add boxd
+pnpm exec flue add sandbox boxd
 ```
 
 The generated connector expects your application to create and own the boxd VM. It does not decide VM identity, retention, or cleanup for you.

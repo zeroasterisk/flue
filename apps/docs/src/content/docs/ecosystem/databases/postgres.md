@@ -13,7 +13,7 @@ Add Postgres-backed persistence to any existing Flue project by running the
 following command in your terminal, or your coding agent of choice.
 
 ```sh
-flue add postgres
+flue add database postgres
 ```
 
 The blueprint installs `@flue/postgres`, helps you choose a Postgres driver,

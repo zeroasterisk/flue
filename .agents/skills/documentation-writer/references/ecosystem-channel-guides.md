@@ -26,7 +26,7 @@ Start with:
 2. A `package` header action linking the first-party package on npm. The shared
    docs header supplies the npm wordmark; do not add a duplicate package or API
    reference sentence to the page introduction.
-3. An `Add <Provider>` section using `flue add <provider>`.
+3. An `Add <Provider>` section using `flue add channel <provider>`.
 
 Present `flue add` as a command developers can run in their terminal or through
 their coding agent. Describe the recipe's result, including the channel

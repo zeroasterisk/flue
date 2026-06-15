@@ -8,7 +8,7 @@ The Cloudflare Shell connector adapts an application-owned `@cloudflare/shell` `
 ## Add the connector
 
 ```bash
-pnpm exec flue add cloudflare-shell
+pnpm exec flue add sandbox cloudflare-shell
 ```
 
 Import the generated helpers from your project connector file, not from `@flue/runtime/cloudflare`:

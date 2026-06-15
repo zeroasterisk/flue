@@ -9,7 +9,7 @@ Run the Salesforce Marketing Cloud Engagement recipe through your coding
 agent:
 
 ```sh
-flue add salesforce-marketing-cloud --print | codex
+flue add channel salesforce-marketing-cloud --print | codex
 ```
 
 It installs `@flue/salesforce-marketing-cloud` and creates named `channel` and

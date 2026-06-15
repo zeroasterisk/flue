@@ -8,7 +8,7 @@ description: Receive authenticated Teams activities and use a project-owned Bot 
 Run the Teams recipe through your coding agent:
 
 ```sh
-flue add teams --print | codex
+flue add channel teams --print | codex
 ```
 
 It installs `@flue/teams` for authenticated Bot Connector ingress and creates a

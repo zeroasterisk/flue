@@ -21,7 +21,7 @@ reasonably infer from the spec or the worked example.
 
 ## Starting point
 
-The user invoked `flue add <url> --category sandbox` with this argument as
+The user invoked `flue add sandbox <url>` with this argument as
 their starting point for the provider's documentation:
 
 `{{URL}}`

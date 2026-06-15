@@ -8,8 +8,8 @@
  * without hitting the network.
  *
  * Filename convention:
- *   <category>--<name>.md   → addressable as `flue add <name>`
- *   <category>.md           → category root, addressable as `flue add --category <category>`
+ *   <category>--<name>.md   → addressable as `flue add <category> <name>`
+ *   <category>.md           → category root, addressable as `flue add <category> <url>`
  *
  * NOTE: this filename-to-slug derivation is mirrored in
  * `apps/www/src/pages/cli/connectors/[name].md.ts`. If you change the
@@ -21,7 +21,7 @@
  *   { "category": "sandbox", "root": true }                                          ← category root
  *
  * Aliases are an optional list of additional names a user can pass to
- * `flue add <name>` that resolve to the same connector. Reserved for cases
+ * `flue add <category> <name>` that resolve to the same connector. Reserved for cases
  * where the canonical brand name is genuinely ambiguous (companies with
  * multiple products) — not for synonyms or marketing variants. See
  * `connectors/README.md` for the authoring guideline.
@@ -124,8 +124,8 @@ async function main() {
 
 	const connectors: ConnectorRecord[] = [];
 	const categoryRoots: CategoryRootRecord[] = [];
-	// Tracks any string a user can pass to `flue add` (slugs, category roots,
-	// and aliases) so we can guarantee unambiguous resolution at runtime.
+	// Tracks every connector slug, alias, and category root so the generated
+	// registry cannot contain ambiguous names.
 	const seenNames = new Map<string, string>();
 
 	for (const file of allFiles) {

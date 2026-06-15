@@ -9,7 +9,7 @@ The islo connector adapts a named islo sandbox into Flue's sandbox interface by 
 ## Add the connector
 
 ```bash
-pnpm exec flue add islo
+pnpm exec flue add sandbox islo
 ```
 
 ## Requirements

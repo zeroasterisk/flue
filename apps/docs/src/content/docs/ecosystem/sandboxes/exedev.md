@@ -9,7 +9,7 @@ The exe.dev connector adapts an existing exe.dev VM into Flue's sandbox interfac
 ## Add the connector
 
 ```bash
-pnpm exec flue add exedev
+pnpm exec flue add sandbox exedev
 ```
 
 ## Requirements

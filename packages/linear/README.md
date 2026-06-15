@@ -28,7 +28,7 @@ union does not model. The application switches on Linear's own `type` and
 `action` discriminants and reads Linear's own field names.
 
 This package does not include an outbound Linear client, OAuth installation
-storage, or model tools. Run `flue add linear` to generate editable project
+storage, or model tools. Run `flue add channel linear` to generate editable project
 code using the official `@linear/sdk` client.
 
 Conversation keys identify issues, nested issue-comment threads, and agent

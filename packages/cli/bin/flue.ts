@@ -97,7 +97,7 @@ function printUsage(log: (message: string) => void = console.error) {
 			'  flue connect <agent> <instance-id> [--target node] [--root <path>] [--output <path>] [--config <path>] [--env <path>]\n' +
 			'  flue build   [--target <node|cloudflare>] [--root <path>] [--output <path>] [--config <path>] [--env <path>]\n' +
 			'  flue init  --target <node|cloudflare> [--root <path>] [--force]\n' +
-			'  flue add   [<name>|<url>] [--category <category>] [--print]\n' +
+			'  flue add   [<category> <name|url>] [--print]\n' +
 			'  flue docs  [read <path> | search <query>]\n' +
 			"  flue logs  <workflowRunId> [--server <url>] [--header 'Name: value'] [--follow|-f|--no-follow] [--since <offset>] [--types a,b,c] [--limit <n>] [--format pretty|ndjson]\n" +
 			'\n' +
@@ -120,8 +120,6 @@ function printUsage(log: (message: string) => void = console.error) {
 			`  --port <number>      Port for the dev server. Default: ${DEFAULT_DEV_PORT}\n` +
 			'  --env <path>         Select one alternate .env-format file for build/dev/run/connect before config loads.\n' +
 			'                       Without --env, these commands load <project>/.env when present. Shell values win.\n' +
-			'  --category <name>    (flue add) Fetch the generic instructions for a connector category. Pair with a positional URL/path that\n' +
-			'                       points the agent at provider docs (e.g. `--category sandbox` or `--category channel`).\n' +
 			'  --print              (flue add) Print the raw connector markdown to stdout regardless of whether the caller is an agent.\n' +
 			'  --force              (flue init) Overwrite an existing flue.config.* in the target directory.\n' +
 			'\n' +
@@ -136,10 +134,10 @@ function printUsage(log: (message: string) => void = console.error) {
 			'  flue build --target node --output ./build\n' +
 			'  flue init --target node\n' +
 			'  flue add\n' +
-			'  flue add daytona | claude\n' +
-			'  flue add slack | codex\n' +
-			'  flue add https://e2b.dev --category sandbox | claude\n' +
-			'  flue add https://developers.notion.com/reference/webhooks --category channel | codex\n' +
+			'  flue add sandbox daytona | claude\n' +
+			'  flue add channel slack | codex\n' +
+			'  flue add sandbox https://e2b.dev | claude\n' +
+			'  flue add channel https://developers.notion.com/reference/webhooks | codex\n' +
 			'  flue docs\n' +
 			'  flue docs read guide/sandboxes\n' +
 			'  flue docs search "durable execution"\n' +
@@ -210,9 +208,8 @@ interface DevArgs {
 
 interface AddArgs {
 	command: 'add';
-	/** Connector slug, or (with --category) the {{URL}} value to substitute into the category root markdown. */
-	name: string;
 	category: string;
+	target: string;
 	print: boolean;
 }
 
@@ -414,47 +411,45 @@ function printCloudflareConnectUnsupported(): never {
 }
 
 function parseAddArgs(rest: string[]): AddArgs {
-	let name = '';
-	let category = '';
+	const positionals: string[] = [];
 	let print = false;
 
-	for (let i = 0; i < rest.length; i++) {
-		const arg = rest[i];
-		if (arg === undefined) continue;
-		if (arg === '--category') {
-			const value = rest[++i];
-			if (!value) {
-				console.error('Missing value for --category');
-				process.exit(1);
-			}
-			category = value;
-		} else if (arg === '--print') {
+	for (const arg of rest) {
+		if (arg === '--print') {
 			print = true;
 		} else if (arg.startsWith('--')) {
 			console.error(`Unknown flag for \`flue add\`: ${arg}`);
 			printUsage();
 			process.exit(1);
 		} else {
-			if (name) {
-				console.error(`Unexpected extra argument for \`flue add\`: ${arg}`);
-				printUsage();
-				process.exit(1);
-			}
-			name = arg;
+			positionals.push(arg);
 		}
 	}
 
-	if (category && !name) {
+	if (positionals.length === 0) {
+		return { command: 'add', category: '', target: '', print };
+	}
+
+	if (positionals.length < 2) {
 		console.error(
-			`\`flue add --category ${category}\` requires a URL or path argument — the user-provided ` +
-				`starting point for the agent's research.\n\n` +
-				`Example:\n` +
-				`  flue add https://e2b.dev --category ${category} | claude`,
+			'Missing connector name or URL.\n\nUsage:\n  flue add <category> <name|url> [--print]',
 		);
 		process.exit(1);
 	}
 
-	return { command: 'add', name, category, print };
+	const extra = positionals[2];
+	if (extra !== undefined) {
+		console.error(`Unexpected extra argument for \`flue add\`: ${extra}`);
+		printUsage();
+		process.exit(1);
+	}
+
+	return {
+		command: 'add',
+		category: positionals[0] ?? '',
+		target: positionals[1] ?? '',
+		print,
+	};
 }
 
 function parseDocsArgs(rest: string[]): DocsArgs {
@@ -1706,17 +1701,17 @@ function registryUrlFor(slug: string): string {
  * match (slug or alias) first, then falls back to a case-insensitive match.
  * Returns the matched connector entry, or undefined if nothing matched.
  */
-function resolveConnector(name: string): (typeof CONNECTORS)[number] | undefined {
-	// Exact: slug.
-	const bySlug = CONNECTORS.find((c) => c.slug === name);
+function resolveConnector(category: string, name: string): (typeof CONNECTORS)[number] | undefined {
+	const connectors = CONNECTORS.filter((connector) => connector.category === category);
+	const bySlug = connectors.find((connector) => connector.slug === name);
 	if (bySlug) return bySlug;
-	// Exact: alias.
-	const byAlias = CONNECTORS.find((c) => c.aliases.includes(name));
+	const byAlias = connectors.find((connector) => connector.aliases.includes(name));
 	if (byAlias) return byAlias;
-	// Case-insensitive fallback (slug or alias).
 	const lower = name.toLowerCase();
-	return CONNECTORS.find(
-		(c) => c.slug.toLowerCase() === lower || c.aliases.some((a) => a.toLowerCase() === lower),
+	return connectors.find(
+		(connector) =>
+			connector.slug.toLowerCase() === lower ||
+			connector.aliases.some((alias) => alias.toLowerCase() === lower),
 	);
 }
 
@@ -1743,7 +1738,7 @@ function categoryRootHint(): string {
 	lines.push(`Don't see what you need?`);
 	for (const root of CATEGORY_ROOTS) {
 		lines.push('');
-		lines.push(`  flue add <url> --category ${root.category}`);
+		lines.push(`  flue add ${root.category} <url>`);
 		lines.push(`    Build a ${root.category} connector from scratch. Pass a URL pointing at the`);
 		lines.push(`    provider's docs (homepage, SDK reference, GitHub repo, anything useful) as`);
 		lines.push(`    the agent's starting point. Pipe to your coding agent.`);
@@ -1751,16 +1746,18 @@ function categoryRootHint(): string {
 	return lines.join('\n');
 }
 
-function availableConnectorRows() {
-	return CONNECTORS.map((c) => ({
-		command: `flue add ${c.slug}`,
-		category: c.category,
-		website: c.website,
-	}));
+function availableConnectorRows(category?: string) {
+	return CONNECTORS.filter((connector) => !category || connector.category === category).map(
+		(connector) => ({
+			command: `flue add ${connector.category} ${connector.slug}`,
+			category: connector.category,
+			website: connector.website,
+		}),
+	);
 }
 
 function printListing(stream: NodeJS.WriteStream) {
-	stream.write('flue add <name>\n\n');
+	stream.write('flue add <category> <name|url>\n\n');
 	stream.write('Available connectors:\n');
 	stream.write(renderConnectorTable(availableConnectorRows()));
 	stream.write('\n');
@@ -1768,17 +1765,12 @@ function printListing(stream: NodeJS.WriteStream) {
 	if (hint) stream.write(`${hint}\n`);
 }
 
-function printUnknownConnector(name: string, stream: NodeJS.WriteStream) {
-	stream.write(`Connector "${name}" not found.\n\n`);
-	stream.write('Available connectors:\n');
-	stream.write(renderConnectorTable(availableConnectorRows()));
-	stream.write('\n');
-	if (CATEGORY_ROOTS.length > 0) {
-		stream.write('\nTo build one from scratch with your coding agent:\n');
-		for (const root of CATEGORY_ROOTS) {
-			stream.write(`  flue add <url> --category ${root.category}\n`);
-		}
-	}
+function printUnknownConnector(category: string, name: string, stream: NodeJS.WriteStream) {
+	stream.write(`Connector "${name}" not found in category "${category}".\n\n`);
+	stream.write(`Available ${category} connectors:\n`);
+	stream.write(renderConnectorTable(availableConnectorRows(category)));
+	stream.write('\n\nTo build one from scratch with your coding agent:\n');
+	stream.write(`  flue add ${category} <url>\n`);
 }
 
 async function fetchConnectorMarkdown(
@@ -2025,9 +2017,7 @@ function docsCommand(args: DocsArgs): void {
 }
 
 function printHumanInstructions(args: AddArgs) {
-	const cmd = args.category
-		? `flue add ${args.name} --category ${args.category}`
-		: `flue add ${args.name}`;
+	const cmd = `flue add ${args.category} ${shellQuote(args.target)}`;
 	const stream = process.stderr;
 	stream.write(`${cmd}\n\n`);
 	stream.write('To install this connector, pipe it to your coding agent:\n\n');
@@ -2075,32 +2065,38 @@ async function emitConnectorMarkdown(
 }
 
 async function addCommand(args: AddArgs) {
-	if (!args.name && !args.category) {
+	if (!args.category && !args.target) {
 		printListing(process.stderr);
 		return;
 	}
 
-	if (args.category) {
-		const root = CATEGORY_ROOTS.find((r) => r.category === args.category);
-		if (!root) {
-			console.error(
-				`[flue] Unknown category "${args.category}". Known categories: ${
-					CATEGORY_ROOTS.map((r) => r.category).join(', ') || '(none)'
-				}`,
-			);
-			process.exit(1);
-		}
+	const root = CATEGORY_ROOTS.find((entry) => entry.category === args.category);
+	if (!root) {
+		console.error(
+			`[flue] Unknown category "${args.category}". Known categories: ${
+				CATEGORY_ROOTS.map((entry) => entry.category).join(', ') || '(none)'
+			}`,
+		);
+		process.exit(1);
+	}
+
+	let url: URL | undefined;
+	try {
+		url = new URL(args.target);
+	} catch {}
+
+	if (url) {
 		await emitConnectorMarkdown(args, {
-			slug: args.category,
+			slug: root.category,
 			notFoundLabel: `category "${args.category}"`,
-			substituteUrl: args.name,
+			substituteUrl: args.target,
 		});
 		return;
 	}
 
-	const known = resolveConnector(args.name);
+	const known = resolveConnector(args.category, args.target);
 	if (!known) {
-		printUnknownConnector(args.name, process.stderr);
+		printUnknownConnector(args.category, args.target, process.stderr);
 		process.exit(1);
 	}
 

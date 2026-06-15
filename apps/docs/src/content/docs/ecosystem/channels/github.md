@@ -8,7 +8,7 @@ description: Receive signed GitHub webhooks and use Octokit from application-own
 Run the GitHub recipe through your coding agent:
 
 ```sh
-flue add github --print | codex
+flue add channel github --print | codex
 ```
 
 It installs `@flue/github` for verified ingress and the official

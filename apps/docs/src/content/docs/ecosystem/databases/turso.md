@@ -14,13 +14,13 @@ by running the following command in your terminal, or your coding agent of
 choice.
 
 ```sh
-flue add turso
+flue add database turso
 ```
 
 Turso is hosted, replicated libSQL. The blueprint installs `@flue/libsql` and
 the official `@libsql/client`, and writes a source-root `db.ts` that wraps the
 client with a Turso configuration — it is the **same adapter** as
-[`flue add libsql`](/docs/ecosystem/databases/libsql/), pointed at a Turso
+[`flue add database libsql`](/docs/ecosystem/databases/libsql/), pointed at a Turso
 database. Flue discovers `db.ts` at build time and wires it into the generated
 Node server.
 

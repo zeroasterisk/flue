@@ -8,7 +8,7 @@ description: Receive verified Intercom notifications and use a workspace-bound o
 Run the Intercom recipe through your coding agent:
 
 ```sh
-flue add intercom --print | codex
+flue add channel intercom --print | codex
 ```
 
 It installs `@flue/intercom` and the official

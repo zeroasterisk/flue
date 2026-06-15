@@ -19,7 +19,7 @@ Use `flue add` to give your coding agent the integration recipe for a
 first-party channel:
 
 ```sh
-flue add slack --print | codex
+flue add channel slack --print | codex
 ```
 
 The recipe inspects the project and creates a module such as
@@ -55,7 +55,7 @@ When Flue does not provide a first-party channel, give `flue add` the provider's
 webhook documentation and select the generic channel recipe:
 
 ```sh
-flue add https://provider.example/webhooks --category channel --print | codex
+flue add channel https://provider.example/webhooks --print | codex
 ```
 
 The recipe guides your coding agent through creating a discovered

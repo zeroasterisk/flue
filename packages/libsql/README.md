@@ -108,8 +108,8 @@ adapter does not apply there.
 ## Installation
 
 ```sh
-flue add libsql   # local file / self-hosted libSQL server
-flue add turso    # hosted Turso
+flue add database libsql   # local file / self-hosted libSQL server
+flue add database turso    # hosted Turso
 ```
 
 Both install this package and write the `db.ts` for the chosen target. See the

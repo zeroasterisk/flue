@@ -13,13 +13,13 @@ Add libSQL-backed persistence to any existing Flue project by running the
 following command in your terminal, or your coding agent of choice.
 
 ```sh
-flue add libsql
+flue add database libsql
 ```
 
 The blueprint installs `@flue/libsql` and the official `@libsql/client`, and
 writes a source-root `db.ts` that wraps the client. Flue discovers `db.ts` at
 build time and wires it into the generated Node server. For hosted Turso, use
-[`flue add turso`](/docs/ecosystem/databases/turso/) instead — it is the same
+[`flue add database turso`](/docs/ecosystem/databases/turso/) instead — it is the same
 adapter with a Turso client configuration.
 
 `@flue/libsql` is a **Node.js** adapter. The Cloudflare target uses Durable

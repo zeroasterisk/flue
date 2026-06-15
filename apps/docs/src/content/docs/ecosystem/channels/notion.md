@@ -8,7 +8,7 @@ description: Receive signed Notion webhook events and use the official client fr
 Run the Notion recipe through your coding agent:
 
 ```sh
-flue add notion --print | codex
+flue add channel notion --print | codex
 ```
 
 It installs `@flue/notion` and the official

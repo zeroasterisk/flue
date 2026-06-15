@@ -9,7 +9,7 @@ The Daytona connector adapts an already-initialized Daytona sandbox from `@dayto
 ## Add the connector
 
 ```bash
-pnpm exec flue add daytona
+pnpm exec flue add sandbox daytona
 ```
 
 The generated connector expects your application to create and own the Daytona sandbox. It does not decide sandbox identity, retention, or cleanup for you.

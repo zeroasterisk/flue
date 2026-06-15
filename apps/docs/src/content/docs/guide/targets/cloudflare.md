@@ -151,7 +151,7 @@ By default, Flue agents use a lightweight in-memory virtual sandbox. This is fas
 Add the connector to your project:
 
 ```bash
-pnpm exec flue add cloudflare-shell
+pnpm exec flue add sandbox cloudflare-shell
 ```
 
 Then import its helpers from your generated connector file, not from `@flue/runtime/cloudflare`:

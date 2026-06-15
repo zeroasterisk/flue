@@ -8,7 +8,7 @@ description: Receive verified Linear resource and agent-session webhooks with a 
 Run the Linear recipe through your coding agent:
 
 ```sh
-flue add linear --print | codex
+flue add channel linear --print | codex
 ```
 
 It installs `@flue/linear` for verified ingress and the official

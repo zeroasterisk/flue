@@ -30,7 +30,7 @@ on the native `activity.type` (`message`, `conversationUpdate`, `invoke`,
 you need to address a reply.
 
 This package does not include an outbound Teams client, OAuth credential
-storage, installation flow, or model tools. Run `flue add teams` to generate
+storage, installation flow, or model tools. Run `flue add channel teams` to generate
 editable project code using a narrow Fetch client over Microsoft's OAuth and
 Bot Connector REST protocols.
 

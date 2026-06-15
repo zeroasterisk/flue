@@ -1,6 +1,6 @@
 /**
- * Serves connector instructions for `flue add <name>` and
- * `flue add <url> --category <name>`.
+ * Serves connector instructions for `flue add <category> <name>` and
+ * `flue add <category> <url>`.
  *
  * Source-of-truth files live at the repo's top-level `connectors/` directory.
  * Filename convention: `<category>--<name>.md` for connectors,

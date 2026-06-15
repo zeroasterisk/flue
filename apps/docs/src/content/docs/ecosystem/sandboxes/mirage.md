@@ -9,7 +9,7 @@ The Mirage connector adapts an application-owned Mirage `Workspace` into Flue's 
 ## Add the connector
 
 ```bash
-pnpm exec flue add mirage
+pnpm exec flue add sandbox mirage
 ```
 
 ## Requirements

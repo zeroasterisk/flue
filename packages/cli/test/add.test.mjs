@@ -90,56 +90,71 @@ describe('flue add', () => {
 	it('lists named recipes and every generic category when no name is given', async () => {
 		const result = await runCli(['add']);
 		assert.equal(result.code, 0);
-		assert.match(result.stderr, /flue add github\s+channel\s+https:\/\/github\.com/);
-		assert.match(result.stderr, /flue add stripe\s+channel\s+https:\/\/stripe\.com/);
-		assert.match(result.stderr, /flue add notion\s+channel\s+https:\/\/developers\.notion\.com/);
-		assert.match(result.stderr, /flue add resend\s+channel\s+https:\/\/resend\.com/);
-		assert.match(result.stderr, /flue add shopify\s+channel\s+https:\/\/shopify\.dev/);
+		assert.match(result.stderr, /flue add channel github\s+channel\s+https:\/\/github\.com/);
+		assert.match(result.stderr, /flue add channel stripe\s+channel\s+https:\/\/stripe\.com/);
 		assert.match(
 			result.stderr,
-			/flue add intercom\s+channel\s+https:\/\/developers\.intercom\.com/,
+			/flue add channel notion\s+channel\s+https:\/\/developers\.notion\.com/,
 		);
-		assert.match(result.stderr, /flue add zendesk\s+channel\s+https:\/\/developer\.zendesk\.com/);
+		assert.match(result.stderr, /flue add channel resend\s+channel\s+https:\/\/resend\.com/);
+		assert.match(result.stderr, /flue add channel shopify\s+channel\s+https:\/\/shopify\.dev/);
 		assert.match(
 			result.stderr,
-			/flue add salesforce-marketing-cloud\s+channel\s+https:\/\/developer\.salesforce\.com/,
-		);
-		assert.match(result.stderr, /flue add slack\s+channel\s+https:\/\/slack\.com/);
-		assert.match(
-			result.stderr,
-			/flue add teams\s+channel\s+https:\/\/www\.microsoft\.com\/microsoft-teams/,
+			/flue add channel intercom\s+channel\s+https:\/\/developers\.intercom\.com/,
 		);
 		assert.match(
 			result.stderr,
-			/flue add google-chat\s+channel\s+https:\/\/developers\.google\.com\/workspace\/chat/,
-		);
-		assert.match(result.stderr, /flue add linear\s+channel\s+https:\/\/linear\.app\/developers/);
-		assert.match(
-			result.stderr,
-			/flue add telegram\s+channel\s+https:\/\/core\.telegram\.org\/bots\/api/,
+			/flue add channel zendesk\s+channel\s+https:\/\/developer\.zendesk\.com/,
 		);
 		assert.match(
 			result.stderr,
-			/flue add whatsapp\s+channel\s+https:\/\/developers\.facebook\.com\/docs\/whatsapp\/cloud-api/,
+			/flue add channel salesforce-marketing-cloud\s+channel\s+https:\/\/developer\.salesforce\.com/,
+		);
+		assert.match(result.stderr, /flue add channel slack\s+channel\s+https:\/\/slack\.com/);
+		assert.match(
+			result.stderr,
+			/flue add channel teams\s+channel\s+https:\/\/www\.microsoft\.com\/microsoft-teams/,
 		);
 		assert.match(
 			result.stderr,
-			/flue add twilio\s+channel\s+https:\/\/www\.twilio\.com\/docs\/messaging/,
+			/flue add channel google-chat\s+channel\s+https:\/\/developers\.google\.com\/workspace\/chat/,
 		);
 		assert.match(
 			result.stderr,
-			/flue add messenger\s+channel\s+https:\/\/developers\.facebook\.com\/docs\/messenger-platform/,
+			/flue add channel linear\s+channel\s+https:\/\/linear\.app\/developers/,
 		);
-		assert.match(result.stderr, /flue add postgres\s+database\s+https:\/\/www\.postgresql\.org/);
-		assert.match(result.stderr, /flue add libsql\s+database\s+https:\/\/github\.com\/tursodatabase\/libsql/);
-		assert.match(result.stderr, /flue add turso\s+database\s+https:\/\/turso\.tech/);
-		assert.ok(result.stderr.includes('flue add <url> --category sandbox'));
-		assert.ok(result.stderr.includes('flue add <url> --category channel'));
-		assert.ok(result.stderr.includes('flue add <url> --category database'));
+		assert.match(
+			result.stderr,
+			/flue add channel telegram\s+channel\s+https:\/\/core\.telegram\.org\/bots\/api/,
+		);
+		assert.match(
+			result.stderr,
+			/flue add channel whatsapp\s+channel\s+https:\/\/developers\.facebook\.com\/docs\/whatsapp\/cloud-api/,
+		);
+		assert.match(
+			result.stderr,
+			/flue add channel twilio\s+channel\s+https:\/\/www\.twilio\.com\/docs\/messaging/,
+		);
+		assert.match(
+			result.stderr,
+			/flue add channel messenger\s+channel\s+https:\/\/developers\.facebook\.com\/docs\/messenger-platform/,
+		);
+		assert.match(
+			result.stderr,
+			/flue add database postgres\s+database\s+https:\/\/www\.postgresql\.org/,
+		);
+		assert.match(
+			result.stderr,
+			/flue add database libsql\s+database\s+https:\/\/github\.com\/tursodatabase\/libsql/,
+		);
+		assert.match(result.stderr, /flue add database turso\s+database\s+https:\/\/turso\.tech/);
+		assert.ok(result.stderr.includes('flue add sandbox <url>'));
+		assert.ok(result.stderr.includes('flue add channel <url>'));
+		assert.ok(result.stderr.includes('flue add database <url>'));
 	});
 
 	it('prints the WhatsApp channel recipe', async () => {
-		const result = await runCli(['add', 'whatsapp', '--print']);
+		const result = await runCli(['add', 'channel', 'whatsapp', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/whatsapp'));
@@ -149,7 +164,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Stripe recipe with snapshot and thin event support', async () => {
-		const result = await runCli(['add', 'stripe', '--print']);
+		const result = await runCli(['add', 'channel', 'stripe', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/stripe'));
@@ -161,7 +176,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Notion recipe with setup and signed-event guidance', async () => {
-		const result = await runCli(['add', 'notion', '--print']);
+		const result = await runCli(['add', 'channel', 'notion', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/notion'));
@@ -173,7 +188,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Resend recipe with signed ingress and fake-client guidance', async () => {
-		const result = await runCli(['add', 'resend', '--print']);
+		const result = await runCli(['add', 'channel', 'resend', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/resend'));
@@ -189,7 +204,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Shopify recipe with signed ingress and a shop-bound GraphQL client', async () => {
-		const result = await runCli(['add', 'shopify', '--print']);
+		const result = await runCli(['add', 'channel', 'shopify', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/shopify'));
@@ -206,7 +221,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Intercom recipe with endpoint validation and the official SDK', async () => {
-		const result = await runCli(['add', 'intercom', '--print']);
+		const result = await runCli(['add', 'channel', 'intercom', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/intercom'));
@@ -220,7 +235,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Zendesk recipe with signed ingress and a ticket-bound Fetch client', async () => {
-		const result = await runCli(['add', 'zendesk', '--print']);
+		const result = await runCli(['add', 'channel', 'zendesk', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/zendesk'));
@@ -234,7 +249,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Salesforce Marketing Cloud recipe with signed ENS batches', async () => {
-		const result = await runCli(['add', 'salesforce-marketing-cloud', '--print']);
+		const result = await runCli(['add', 'channel', 'salesforce-marketing-cloud', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/salesforce-marketing-cloud'));
@@ -247,7 +262,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Twilio recipe with the Workers-compatible Fetch path', async () => {
-		const result = await runCli(['add', 'twilio', '--print']);
+		const result = await runCli(['add', 'channel', 'twilio', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/twilio'));
@@ -259,7 +274,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Messenger recipe with verified batches and the Graph Fetch path', async () => {
-		const result = await runCli(['add', 'messenger', '--print']);
+		const result = await runCli(['add', 'channel', 'messenger', '--print']);
 
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes('@flue/messenger'));
@@ -271,7 +286,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Teams channel recipe with the Workers-compatible Fetch path', async () => {
-		const result = await runCli(['add', 'teams', '--print']);
+		const result = await runCli(['add', 'channel', 'teams', '--print']);
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.startsWith('# Add a Microsoft Teams Channel to Flue'));
 		assert.ok(result.stdout.includes('export const channel'));
@@ -281,7 +296,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Google Chat recipe with both verified HTTP surfaces', async () => {
-		const result = await runCli(['add', 'google-chat', '--print']);
+		const result = await runCli(['add', 'channel', 'google-chat', '--print']);
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.startsWith('# Add a Google Chat Channel to Flue'));
 		assert.ok(result.stdout.includes('export const channel'));
@@ -292,7 +307,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Linear recipe with verified ingress and the official SDK path', async () => {
-		const result = await runCli(['add', 'linear', '--print']);
+		const result = await runCli(['add', 'channel', 'linear', '--print']);
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.startsWith('# Add a Linear Channel to Flue'));
 		assert.ok(result.stdout.includes('export const channel'));
@@ -303,7 +318,7 @@ describe('flue add', () => {
 	});
 
 	it('prints the Telegram recipe with verified ingress and the Workers client path', async () => {
-		const result = await runCli(['add', 'telegram', '--print']);
+		const result = await runCli(['add', 'channel', 'telegram', '--print']);
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.startsWith('# Add a Telegram Channel to Flue'));
 		assert.ok(result.stdout.includes('export const channel'));
@@ -314,7 +329,7 @@ describe('flue add', () => {
 	});
 
 	it('prints provider-native payload guidance when the Slack recipe is requested', async () => {
-		const result = await runCli(['add', 'slack', '--print']);
+		const result = await runCli(['add', 'channel', 'slack', '--print']);
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.startsWith('# Add a Slack Channel to Flue'));
 		assert.ok(result.stdout.includes('export const channel'));
@@ -331,7 +346,7 @@ describe('flue add', () => {
 	});
 
 	it('prints provider-native payload guidance when the Discord recipe is requested', async () => {
-		const result = await runCli(['add', 'discord', '--print']);
+		const result = await runCli(['add', 'channel', 'discord', '--print']);
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.startsWith('# Add a Discord Channel to Flue'));
 		assert.ok(result.stdout.includes('export const channel'));
@@ -346,43 +361,85 @@ describe('flue add', () => {
 	});
 
 	it('prints database recipes with their transaction-safe runner wiring', async () => {
-		const postgres = await runCli(['add', 'postgres', '--print']);
+		const postgres = await runCli(['add', 'database', 'postgres', '--print']);
 		assert.equal(postgres.code, 0);
 		assert.ok(postgres.stdout.includes('@flue/postgres'));
 		assert.ok(postgres.stdout.includes('PostgresQuery'));
 		assert.ok(postgres.stdout.includes('BEGIN'));
 		assert.ok(postgres.stdout.includes('ROLLBACK'));
 
-		const libsql = await runCli(['add', 'libsql', '--print']);
+		const libsql = await runCli(['add', 'database', 'libsql', '--print']);
 		assert.equal(libsql.code, 0);
 		assert.ok(libsql.stdout.includes('@flue/libsql'));
 		assert.ok(libsql.stdout.includes('const serialize'));
 		assert.ok(libsql.stdout.includes('tx.close()'));
 
-		const turso = await runCli(['add', 'turso', '--print']);
+		const turso = await runCli(['add', 'database', 'turso', '--print']);
 		assert.equal(turso.code, 0);
 		assert.ok(turso.stdout.includes('@flue/libsql'));
 		assert.ok(turso.stdout.includes('TURSO_DATABASE_URL'));
 		assert.ok(turso.stdout.includes('tx.close()'));
 	});
 
-	it('substitutes the provider research URL into the generic channel recipe', async () => {
-		const url = 'https://docs.example.test/webhooks';
-		const result = await runCli(['add', url, '--category', 'channel', '--print']);
+	it('substitutes any absolute research URL into the generic category recipe', async () => {
+		const url = 'git+ssh://git@example.test/provider.git';
+		const result = await runCli(['add', 'channel', url, '--print']);
 		assert.equal(result.code, 0);
 		assert.ok(result.stdout.includes(`\`${url}\``));
 		assert.ok(!result.stdout.includes('{{URL}}'));
 	});
 
+	it('shell-quotes URLs in human instructions', async () => {
+		const url = 'https://docs.example.test/?a=1&b=two';
+		const result = await runCli(['add', 'channel', url]);
+		assert.equal(result.code, 0);
+		assert.ok(result.stderr.includes(`flue add channel '${url}'`));
+		assert.ok(result.stderr.includes(`flue add channel '${url}' --print | claude`));
+	});
+
 	it('rejects an unknown category with every known category in the guidance', async () => {
+		const result = await runCli(['add', 'unknown', 'https://docs.example.test', '--print']);
+		assert.equal(result.code, 1);
+		assert.ok(result.stderr.includes('Known categories: channel, database, sandbox'));
+	});
+
+	it('rejects the removed category flag', async () => {
 		const result = await runCli([
 			'add',
 			'https://docs.example.test',
 			'--category',
-			'unknown',
+			'channel',
 			'--print',
 		]);
 		assert.equal(result.code, 1);
-		assert.ok(result.stderr.includes('Known categories: channel, database, sandbox'));
+		assert.ok(result.stderr.includes('Unknown flag for `flue add`: --category'));
+	});
+
+	it('rejects a legacy one-positional connector invocation', async () => {
+		const result = await runCli(['add', 'slack', '--print']);
+		assert.equal(result.code, 1);
+		assert.ok(result.stderr.includes('Missing connector name or URL'));
+	});
+
+	it('rejects a connector name under the wrong category', async () => {
+		const result = await runCli(['add', 'database', 'slack', '--print']);
+		assert.equal(result.code, 1);
+		assert.ok(result.stderr.includes('Connector "slack" not found in category "database"'));
+		assert.ok(result.stderr.includes('flue add database postgres'));
+		assert.ok(!result.stderr.includes('flue add channel slack'));
+	});
+
+	it('treats an unknown non-URL value as a connector name', async () => {
+		const result = await runCli(['add', 'channel', 'unknown-provider', '--print']);
+		assert.equal(result.code, 1);
+		assert.ok(
+			result.stderr.includes('Connector "unknown-provider" not found in category "channel"'),
+		);
+	});
+
+	it('rejects an extra positional argument', async () => {
+		const result = await runCli(['add', 'channel', 'slack', 'extra', '--print']);
+		assert.equal(result.code, 1);
+		assert.ok(result.stderr.includes('Unexpected extra argument for `flue add`: extra'));
 	});
 });

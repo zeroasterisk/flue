@@ -30,7 +30,7 @@ forwarded with its native `@octokit/webhooks-types` payload, discriminated by
 an empty `200`; JSON values and ordinary Hono responses are also supported.
 
 This package does not include an outbound GitHub client or model tools. Run
-`flue add github` to generate editable project code using the official
+`flue add channel github` to generate editable project code using the official
 `@octokit/rest` SDK and application-owned `defineTool(...)` values.
 
 Conversation keys are stable issue or pull-request identifiers, not

@@ -59,7 +59,7 @@ responses, and ordinary Hono or Fetch `Response` values pass through. Callback
 errors flow through normal Hono error handling.
 
 This package does not include an outbound Slack client or model tools. Run
-`flue add slack` for editable project code using the official
+`flue add channel slack` for editable project code using the official
 `@slack/web-api` client. Conversation keys are stable thread identifiers, not
 authorization capabilities. The package is stateless and does not deduplicate
 Events API retries.

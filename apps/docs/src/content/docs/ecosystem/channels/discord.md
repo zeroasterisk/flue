@@ -14,7 +14,7 @@ Add Discord as an inbound channel to any existing Flue project by running the
 following command in your terminal, or your coding agent of choice.
 
 ```sh
-flue add discord
+flue add channel discord
 ```
 
 The recipe installs and configures `@flue/discord` for inbound HTTP
@@ -129,7 +129,7 @@ for the response types allowed by each interaction family.
 Not every interaction represents a durable Discord channel conversation. When
 an interaction should continue an agent instance, application code can derive a
 `DiscordDestinationRef` from native `guild_id`, `channel.id`, `channel.type`, and
-`context` fields. The complete generated example from `flue add discord` shows
+`context` fields. The complete generated example from `flue add channel discord` shows
 that derivation and dispatches with `channel.conversationKey(ref)`.
 
 Some valid interactions, including modal submissions, may omit a channel.

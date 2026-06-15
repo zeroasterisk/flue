@@ -34,6 +34,13 @@ describe('flue (top-level flags)', () => {
 		}
 	});
 
+	it('documents positional flue add categories without the removed category flag', async () => {
+		const result = await runCli(['--help']);
+		assert.equal(result.code, 0);
+		assert.ok(result.stdout.includes('flue add   [<category> <name|url>] [--print]'));
+		assert.ok(!result.stdout.includes('--category'));
+	});
+
 	it('prints the package version to stdout and exits 0 when invoked with --version or -v', async () => {
 		const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 		for (const arg of ['--version', '-v']) {

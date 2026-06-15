@@ -8,7 +8,7 @@ description: Receive verified Messenger Page events with a project-owned Graph A
 Run the Messenger recipe through your coding agent:
 
 ```sh
-flue add messenger --print | codex
+flue add channel messenger --print | codex
 ```
 
 It installs `@flue/messenger` for verified Page ingress and creates an editable

@@ -9,7 +9,7 @@ The smolvm connector adapts an initialized `Machine` from `smolvm-embedded` into
 ## Add the connector
 
 ```bash
-pnpm exec flue add smolvm
+pnpm exec flue add sandbox smolvm
 ```
 
 ## Requirements

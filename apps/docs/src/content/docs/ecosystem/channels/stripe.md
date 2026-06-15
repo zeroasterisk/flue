@@ -8,7 +8,7 @@ description: Receive verified Stripe webhooks and use the official SDK from appl
 Run the Stripe recipe through your coding agent:
 
 ```sh
-flue add stripe --print | codex
+flue add channel stripe --print | codex
 ```
 
 It installs `@flue/stripe` and Stripe's official `stripe` SDK. The SDK verifies

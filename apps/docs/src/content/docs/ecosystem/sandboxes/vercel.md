@@ -9,7 +9,7 @@ The Vercel Sandbox connector adapts an initialized `@vercel/sandbox` `Sandbox` i
 ## Add the connector
 
 ```bash
-pnpm exec flue add vercel
+pnpm exec flue add sandbox vercel
 ```
 
 ## Requirements

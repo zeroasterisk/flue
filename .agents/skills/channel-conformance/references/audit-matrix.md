@@ -138,7 +138,7 @@ equivalent. Follow the repository's dependency build order.
 - It explains ingress and outbound credentials separately.
 - It instructs local synthetic verification and fake-transport client tests.
 - It never tells the coding agent to contact the provider.
-- `flue add <provider> --print` returns the intended recipe.
+- `flue add channel <provider> --print` returns the intended recipe.
 - The channel guide teaches setup, route URLs, callbacks, client composition,
   useful outbound examples where applicable, retries, and runtime support
   without claiming turnkey deployment.

@@ -183,13 +183,13 @@ Before doing any of this, **ask the user**:
 If they say no to either, **stop and recommend an alternative**. Other
 sandbox connectors that work from a Node-target Flue project include:
 
-- **Daytona** (`flue add daytona`) — provider-managed sandboxes via
+- **Daytona** (`flue add sandbox daytona`) — provider-managed sandboxes via
   `@daytona/sdk`.
-- **E2B** (`flue add e2b`) — Firecracker microVMs via the `e2b` package.
-- **Modal** (`flue add modal`) — sandboxes on Modal's serverless platform.
-- **Vercel Sandbox** (`flue add vercel`) — `@vercel/sandbox`.
-- **boxd** (`flue add boxd`) — microVMs via `@boxd-sh/sdk`.
-- **exe.dev** (`flue add exedev`) — SSH-accessed VMs.
+- **E2B** (`flue add sandbox e2b`) — Firecracker microVMs via the `e2b` package.
+- **Modal** (`flue add sandbox modal`) — sandboxes on Modal's serverless platform.
+- **Vercel Sandbox** (`flue add sandbox vercel`) — `@vercel/sandbox`.
+- **boxd** (`flue add sandbox boxd`) — microVMs via `@boxd-sh/sdk`.
+- **exe.dev** (`flue add sandbox exedev`) — SSH-accessed VMs.
 
 These all keep the project on `--target node` and don't require a
 platform migration.

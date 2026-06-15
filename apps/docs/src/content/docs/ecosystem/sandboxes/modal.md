@@ -9,7 +9,7 @@ The Modal connector adapts an already-initialized Modal Sandbox from the `modal`
 ## Add the connector
 
 ```bash
-pnpm exec flue add modal
+pnpm exec flue add sandbox modal
 ```
 
 ## Requirements

@@ -96,10 +96,10 @@ adapter does not apply there.
 ## Installation
 
 ```sh
-flue add postgres
+flue add database postgres
 ```
 
-`flue add postgres` installs the package, helps you pick a driver, and writes
+`flue add database postgres` installs the package, helps you pick a driver, and writes
 the `db.ts`. See the [Postgres guide](https://flueframework.com/docs/ecosystem/databases/postgres/)
 for setup and the [Data Persistence API](https://flueframework.com/docs/api/data-persistence-api/)
 for the adapter contract.

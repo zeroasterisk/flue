@@ -28,7 +28,7 @@ Discord's field names, nesting, and numeric discriminants. It re-exports the
 Discord API v10 interaction and response types from `discord-api-types`.
 
 This package does not include an outbound Discord client, response builder, or
-model tools. Run `flue add discord` to generate editable project code using
+model tools. Run `flue add channel discord` to generate editable project code using
 `@discordjs/rest` and application-owned `defineTool(...)` values.
 
 Conversation keys identify application-derived guild destinations, bot DMs,

@@ -9,7 +9,7 @@ The E2B connector adapts an initialized E2B sandbox from the `e2b` package into 
 ## Add the connector
 
 ```bash
-pnpm exec flue add e2b
+pnpm exec flue add sandbox e2b
 ```
 
 ## Requirements

@@ -8,7 +8,7 @@ description: Receive verified WhatsApp Business Cloud deliveries with a project-
 Run the WhatsApp recipe through your coding agent:
 
 ```sh
-flue add whatsapp --print | codex
+flue add channel whatsapp --print | codex
 ```
 
 It installs `@flue/whatsapp` for verified ingress and

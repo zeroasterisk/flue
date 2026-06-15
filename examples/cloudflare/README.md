@@ -3,7 +3,7 @@
 This directory exercises Flue's Cloudflare-specific surfaces. The agents
 here are intentionally minimal — each one demonstrates a single capability
 end-to-end so it's easy to copy the pattern into a real app. The cf-shell
-workflows use the project-owned `src/connectors/cloudflare-shell.ts` implementation generated conceptually by `flue add @cloudflare/shell`.
+workflows use the project-owned `src/connectors/cloudflare-shell.ts` implementation generated conceptually by `flue add sandbox @cloudflare/shell`.
 
 ## Agents
 

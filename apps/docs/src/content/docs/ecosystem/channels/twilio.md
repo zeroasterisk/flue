@@ -8,7 +8,7 @@ description: Receive verified Twilio SMS and MMS webhooks with a project-owned F
 Run the Twilio recipe through your coding agent:
 
 ```sh
-flue add twilio --print | codex
+flue add channel twilio --print | codex
 ```
 
 It installs `@flue/twilio` for verified ingress and creates an editable Fetch

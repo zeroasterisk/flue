@@ -14,7 +14,7 @@ Add Google Chat as an inbound channel to any existing Flue project by running th
 following command in your terminal, or your coding agent of choice.
 
 ```sh
-flue add google-chat
+flue add channel google-chat
 ```
 
 The recipe installs and configures `@flue/google-chat` for authenticated inbound

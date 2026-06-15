@@ -8,7 +8,7 @@ description: Receive verified Shopify webhooks and use a shop-bound Admin GraphQ
 Run the Shopify recipe through your coding agent:
 
 ```sh
-flue add shopify --print | codex
+flue add channel shopify --print | codex
 ```
 
 It installs `@flue/shopify` and the official lightweight

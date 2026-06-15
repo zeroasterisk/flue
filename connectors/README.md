@@ -2,7 +2,7 @@
 
 This directory holds the source-of-truth markdown files for all Flue
 connectors served at `https://flueframework.com/cli/connectors/<slug>.md`
-and pulled into user projects via `flue add <name>`.
+and pulled into user projects via `flue add <category> <name>`.
 
 A connector is **a markdown file with installation instructions for an AI
 coding agent**, not an npm package. The CLI is a fetch-and-print pipe; the
@@ -32,11 +32,11 @@ Connectors use a `<category>--<name>.md` filename convention. Category roots
 ```
 connectors/
   sandbox.md                 # Generic instructions for the "sandbox" category.
-                             # Addressable as: flue add <url> --category sandbox
-                             # The CLI substitutes the user-provided URL into
-                             # the markdown's {{URL}} placeholder before piping.
+                             # Addressable as: flue add sandbox <url>
+                             # The CLI substitutes the user-provided absolute URL
+                             # into the markdown's {{URL}} placeholder before piping.
   sandbox--daytona.md        # The Daytona sandbox connector.
-                             # Addressable as: flue add daytona
+                             # Addressable as: flue add sandbox daytona
 ```
 
 The double-dash separator is used so that providers whose names contain
@@ -50,7 +50,7 @@ derives slugs:
 
 - `<category>--<name>.md` → slug `<name>`
 - `<category>.md` (with `"root": true`) → not addressable as a connector
-  slug; only via `flue add <url> --category <category>`
+  slug; only via `flue add <category> <url>`
 
 If two files would resolve to the same slug, the prebuild script errors out.
 
@@ -91,7 +91,7 @@ see clean content.
 
 `aliases` lets a connector be addressable by names beyond its canonical slug.
 For example, `sandbox--vercel.md` declares `"aliases": ["@vercel/sandbox"]`,
-so `flue add @vercel/sandbox` and `flue add vercel` both resolve to the same
+so `flue add sandbox @vercel/sandbox` and `flue add sandbox vercel` both resolve to the same
 connector. The canonical slug is still what the listing UI advertises and
 what the registry URL is keyed on; aliases are purely a convenience for
 users who'd otherwise type a more specific name.
@@ -195,5 +195,5 @@ not store application business data in the adapter.
 3. Confirm the file is served correctly via the local website
    (`pnpm --filter @flue/www dev`) at
    `http://localhost:4321/cli/connectors/<name>.md`.
-4. Try it end-to-end: pipe `flue add <name>` to a coding agent in a sample
+4. Try it end-to-end: pipe `flue add <category> <name>` to a coding agent in a sample
    project and confirm the agent successfully installs the connector.

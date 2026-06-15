@@ -8,7 +8,7 @@ description: Receive verified Telegram Bot API Updates with a project-owned gram
 Run the Telegram recipe through your coding agent:
 
 ```sh
-flue add telegram --print | codex
+flue add channel telegram --print | codex
 ```
 
 It installs `@flue/telegram` for verified ingress and grammY for project-owned

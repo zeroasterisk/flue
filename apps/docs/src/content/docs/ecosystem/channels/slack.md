@@ -14,7 +14,7 @@ Add Slack as an inbound channel to any existing Flue project by running the
 following command in your terminal, or your coding agent of choice.
 
 ```sh
-flue add slack
+flue add channel slack
 ```
 
 The recipe installs and configures `@flue/slack` for inbound requests, along

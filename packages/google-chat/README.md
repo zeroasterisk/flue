@@ -41,7 +41,7 @@ stream-limited to 1 MiB by default and can be configured with `bodyLimit`.
 
 This package does not include an outbound Chat client, credential storage,
 Workspace Events subscription management, or model tools. Run
-`flue add google-chat` to generate editable project code using a narrow
+`flue add channel google-chat` to generate editable project code using a narrow
 service-account OAuth and Chat REST client.
 
 Conversation keys identify Google Chat spaces and optional threads. A thread

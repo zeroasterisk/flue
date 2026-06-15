@@ -27,7 +27,7 @@ reasonably infer from the spec or the worked example.
 
 ## Starting point
 
-The user invoked `flue add <url> --category database` with this argument as
+The user invoked `flue add database <url>` with this argument as
 their starting point for the backend's documentation:
 
 `{{URL}}`

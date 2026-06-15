@@ -14,7 +14,7 @@ provider does not have a named Flue recipe. Implement verified inbound webhook
 handling as project source, use the provider's established SDK for outbound API
 calls, and define only the model-facing tools the application actually needs.
 
-The user invoked `flue add <url> --category channel` with this research starting
+The user invoked `flue add channel <url>` with this research starting
 point:
 
 `{{URL}}`

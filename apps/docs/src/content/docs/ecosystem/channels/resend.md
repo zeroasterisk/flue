@@ -8,7 +8,7 @@ description: Receive verified Resend webhooks and retrieve inbound email through
 Run the Resend recipe through your coding agent:
 
 ```sh
-flue add resend --print | codex
+flue add channel resend --print | codex
 ```
 
 It installs `@flue/resend` and the official `resend@6.12.4` SDK. The recipe
