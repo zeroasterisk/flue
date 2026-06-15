@@ -1,5 +1,5 @@
 {
-	"name": "@flue/postgres",
+	"name": "@flue/libsql",
 	"version": "0.11.1",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -7,7 +7,7 @@
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/withastro/flue",
-		"directory": "packages/postgres"
+		"directory": "packages/libsql"
 	},
 	"exports": {
 		".": {
@@ -33,7 +33,7 @@
 		"@flue/runtime": "workspace:*"
 	},
 	"devDependencies": {
-		"@electric-sql/pglite": "^0.2.17",
+		"@libsql/client": "^0.17.3",
 		"tsdown": "^0.22.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.6"

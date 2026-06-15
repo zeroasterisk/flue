@@ -147,6 +147,28 @@ export function defineStoreContractTests(
 				expect(await store.sessions.load('s1')).toEqual(sessionData());
 			});
 
+			it('round-trips session images larger than a single database value', async () => {
+				const store = await create();
+				const imageData = 'a'.repeat(2 * 1024 * 1024 + 1);
+				const data: SessionData = {
+					...sessionData(),
+					entries: [{
+						type: 'message',
+						id: 'image-entry',
+						parentId: null,
+						timestamp: '2026-06-03T00:00:00.000Z',
+						message: {
+							role: 'user',
+							content: [{ type: 'image', data: imageData, mimeType: 'image/png' }],
+							timestamp: 0,
+						},
+					}],
+					leafId: 'image-entry',
+				};
+				await store.sessions.save('image-session', data);
+				expect(await store.sessions.load('image-session')).toEqual(data);
+			});
+
 			it('replaces existing session entries when session data is overwritten', async () => {
 				const store = await create();
 				await store.sessions.save('s1', sessionData());
@@ -197,6 +219,39 @@ export function defineStoreContractTests(
 				expect(await store.submissions.admitDispatch(dispatchInput({ input: { text: 'Different' } }))).toEqual({
 					kind: 'conflict',
 				});
+			});
+		});
+
+		// ── Direct admission ───────────────────────────────────────────────
+
+		describe('direct admission', () => {
+			it('round-trips direct submission images', async () => {
+				const store = await create();
+				const input = directInput({
+					payload: {
+						message: 'Hello',
+						images: [{ type: 'image', data: 'image-data', mimeType: 'image/png' }],
+					},
+				});
+				const admitted = await store.submissions.admitDirect(input);
+				expect(admitted.input).toEqual(input);
+				expect((await store.submissions.getSubmission(input.submissionId))?.input).toEqual(input);
+			});
+
+			it('rejects replay when a direct submission image has different bytes', async () => {
+				const store = await create();
+				await store.submissions.admitDirect(directInput({
+					payload: {
+						message: 'Hello',
+						images: [{ type: 'image', data: 'first-image', mimeType: 'image/png' }],
+					},
+				}));
+				await expect(store.submissions.admitDirect(directInput({
+					payload: {
+						message: 'Hello',
+						images: [{ type: 'image', data: 'second-image', mimeType: 'image/png' }],
+					},
+				}))).rejects.toThrow('unexpected result');
 			});
 		});
 

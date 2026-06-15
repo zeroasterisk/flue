@@ -66,11 +66,18 @@ const sandboxes: DirectoryItem[] = [
 	{ name: 'Vercel Sandbox', href: '/docs/ecosystem/sandboxes/vercel/', icon: 'https://svgl.app/library/vercel.svg', background: '#ffffff' },
 ];
 sandboxes.sort(sortDirectoryItems);
+
+const databases: DirectoryItem[] = [
+	{ name: 'libSQL', href: '/docs/ecosystem/databases/libsql/', icon: 'https://svgl.app/library/sqlite.svg', background: '#ffffff', keywords: 'libsql sqlite turso embedded sql database persistence' },
+	{ name: 'Postgres', href: '/docs/ecosystem/databases/postgres/', icon: 'https://svgl.app/library/postgresql.svg', background: '#ffffff', keywords: 'postgresql sql database persistence' },
+	{ name: 'Turso', href: '/docs/ecosystem/databases/turso/', background: '#2563eb', keywords: 'turso libsql sqlite hosted replicated sql database persistence' },
+];
+databases.sort(sortDirectoryItems);
 ---
 
 <DocsLayout
 	title="Ecosystem"
-	description="Browse deployment guides, channels, and sandbox connectors for Flue applications."
+	description="Browse deployment guides, channels, databases, and sandbox connectors for Flue applications."
 	currentSlug="ecosystem"
 	headings={[]}
 	showTableOfContents={false}
@@ -79,7 +86,7 @@ sandboxes.sort(sortDirectoryItems);
 	<div class="ecosystem-directory">
 		<header class="mb-4">
 			<h1 class="m-0 text-5xl font-bold leading-[1.08] tracking-[-0.05em] text-gray-950 max-docs-desktop:text-[2.375rem]">Ecosystem</h1>
-			<p class="mt-4 max-w-175 text-base leading-7 text-gray-600">Deploy Flue applications and extend them with channels, sandbox environments, and the tools your agents already use.</p>
+			<p class="mt-4 max-w-175 text-base leading-7 text-gray-600">Deploy Flue applications and extend them with channels, databases, sandbox environments, and the tools your agents already use.</p>
 		</header>
 
 		<label class="relative mb-14 block" for="ecosystem-search">
@@ -137,6 +144,26 @@ sandboxes.sort(sortDirectoryItems);
 									<img class:list={['ecosystem-logo', item.iconClass]} src={item.icon} alt="" loading="lazy" />
 								) : (
 									<span class="ecosystem-mark">{item.mark}</span>
+								)}
+							</span>
+							<span class="ecosystem-name">{item.name}</span>
+						</a>
+					</li>
+				))}
+			</ul>
+		</section>
+
+		<section class="ecosystem-section mb-14" data-ecosystem-section>
+			<h2 id="databases" class="mb-6 scroll-mt-20 text-3xl font-semibold tracking-[-0.03em] text-gray-950">Databases</h2>
+			<ul class="ecosystem-grid" role="list">
+				{databases.map((item) => (
+					<li data-ecosystem-item data-search={`${item.name} ${item.keywords ?? ''}`.toLowerCase()}>
+						<a class="ecosystem-item group" href={item.href} aria-label={item.name}>
+							<span class="ecosystem-icon" style={`--ecosystem-icon-bg: ${item.background}`}>
+								{item.icon ? (
+									<img class:list={['ecosystem-logo', item.iconClass]} src={item.icon} alt="" loading="lazy" />
+								) : (
+									<span class="ecosystem-default-grid" aria-hidden="true" />
 								)}
 							</span>
 							<span class="ecosystem-name">{item.name}</span>

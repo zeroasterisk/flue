@@ -9,35 +9,34 @@
 import { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from 'vitest';
 import { PersistedSchemaVersionError, type SessionData } from '@flue/runtime/adapter';
-import { postgresFromRunner, type PgRunner } from '../src/postgres-adapter.ts';
+import {
+	postgres,
+	type PostgresParameter,
+	type PostgresQuery,
+	type PostgresRunner,
+} from '../src/postgres-adapter.ts';
 import {
 	defineEventStreamStoreContractTests,
 	defineRunStoreContractTests,
 	defineStoreContractTests,
 } from '@flue/runtime/test-utils';
 
-// ─── PGlite → PgRunner adapter ─────────────────────────────────────────────
+// ─── PGlite → PostgresRunner adapter ───────────────────────────────────────
 
-function createPgliteRunner(): PgRunner {
+function createPgliteRunner(): PostgresRunner {
 	const db = new PGlite();
 	return {
-		async query(text: string, params: unknown[] = []) {
+		async query(text: string, params: PostgresParameter[] = []) {
 			const result = await db.query(text, params);
 			return (result.rows ?? []) as Record<string, unknown>[];
 		},
-		async transaction<T>(fn: (tx: PgRunner) => Promise<T>): Promise<T> {
+		transaction<T>(fn: (tx: { query: PostgresQuery }) => Promise<T>): Promise<T> {
 			return db.transaction(async (pgTx) => {
-				const txRunner: PgRunner = {
-					async query(text: string, params: unknown[] = []) {
-						const result = await pgTx.query(text, params);
-						return (result.rows ?? []) as Record<string, unknown>[];
-					},
-					transaction: () => {
-						throw new Error('Nested transactions not supported');
-					},
-					close: () => Promise.resolve(),
+				const query: PostgresQuery = async (text, params = []) => {
+					const result = await pgTx.query(text, params);
+					return (result.rows ?? []) as Record<string, unknown>[];
 				};
-				return fn(txRunner);
+				return fn({ query });
 			});
 		},
 		async close() {
@@ -49,10 +48,10 @@ function createPgliteRunner(): PgRunner {
 // ─── Contract tests (shared) ────────────────────────────────────────────────
 
 {
-	let adapter: ReturnType<typeof postgresFromRunner> | undefined;
+	let adapter: ReturnType<typeof postgres> | undefined;
 	defineStoreContractTests('Postgres AgentExecutionStore', {
 		async create() {
-			adapter = postgresFromRunner(createPgliteRunner());
+			adapter = postgres(createPgliteRunner());
 			await adapter.migrate?.();
 			const { executionStore } = await adapter.connect();
 			return executionStore;
@@ -65,10 +64,10 @@ function createPgliteRunner(): PgRunner {
 }
 
 {
-	let adapter: ReturnType<typeof postgresFromRunner> | undefined;
+	let adapter: ReturnType<typeof postgres> | undefined;
 	defineEventStreamStoreContractTests('Postgres EventStreamStore', {
 		async create() {
-			adapter = postgresFromRunner(createPgliteRunner());
+			adapter = postgres(createPgliteRunner());
 			await adapter.migrate?.();
 			const { eventStreamStore } = await adapter.connect();
 			return eventStreamStore;
@@ -81,10 +80,10 @@ function createPgliteRunner(): PgRunner {
 }
 
 {
-	let adapter: ReturnType<typeof postgresFromRunner> | undefined;
+	let adapter: ReturnType<typeof postgres> | undefined;
 	defineRunStoreContractTests('Postgres RunStore', {
 		async create() {
-			adapter = postgresFromRunner(createPgliteRunner());
+			adapter = postgres(createPgliteRunner());
 			await adapter.migrate?.();
 			const { runStore } = await adapter.connect();
 			return runStore;
@@ -112,9 +111,9 @@ function sessionData(): SessionData {
 }
 
 describe('postgres() PersistenceAdapter', () => {
-	it('creates a store and closes cleanly via postgresFromRunner', async () => {
+	it('creates a store and closes cleanly via postgres', async () => {
 		const runner = createPgliteRunner();
-		const adapter = postgresFromRunner(runner);
+		const adapter = postgres(runner);
 		await adapter.migrate?.();
 		const { executionStore: store } = await adapter.connect();
 		await store.sessions.save('s1', sessionData());
@@ -123,9 +122,41 @@ describe('postgres() PersistenceAdapter', () => {
 		await adapter.close();
 	});
 
+	it('loads legacy inline session images', async () => {
+		const runner = createPgliteRunner();
+		const adapter = postgres(runner);
+		await adapter.migrate?.();
+		const { executionStore: store } = await adapter.connect();
+		const entry = {
+			type: 'message' as const,
+			id: 'legacy-entry',
+			parentId: null,
+			timestamp: '2026-06-03T00:00:00.000Z',
+			message: {
+				role: 'user' as const,
+				content: [{ type: 'image' as const, data: 'legacy-inline-data', mimeType: 'image/png' }],
+				timestamp: 0,
+			},
+		};
+		await runner.query('INSERT INTO flue_sessions (id, data) VALUES ($1, $2)', [
+			'legacy-session',
+			JSON.stringify({ ...sessionData(), entries: undefined, leafId: 'legacy-entry' }),
+		]);
+		await runner.query(
+			'INSERT INTO flue_session_entries (session_id, entry_id, position, data) VALUES ($1, $2, $3, $4)',
+			['legacy-session', entry.id, 0, JSON.stringify(entry)],
+		);
+		expect(await store.sessions.load('legacy-session')).toEqual({
+			...sessionData(),
+			entries: [entry],
+			leafId: 'legacy-entry',
+		});
+		await adapter.close?.();
+	});
+
 	it('close() is idempotent', async () => {
 		const runner = createPgliteRunner();
-		const adapter = postgresFromRunner(runner);
+		const adapter = postgres(runner);
 		await adapter.migrate?.();
 		await adapter.connect();
 		if (!adapter.close) throw new Error('Expected adapter.close to be defined.');
@@ -135,7 +166,7 @@ describe('postgres() PersistenceAdapter', () => {
 
 	it('stamps a fresh database and rejects migrate() against a newer schema version', async () => {
 		const runner = createPgliteRunner();
-		const adapter = postgresFromRunner(runner);
+		const adapter = postgres(runner);
 		await adapter.migrate?.();
 
 		const rows = await runner.query(`SELECT value FROM flue_meta WHERE key = 'schema_version'`);

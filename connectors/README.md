@@ -10,10 +10,11 @@ agent does the file-writing.
 
 ## Supported categories
 
-| Category  | Status    | Notes                                                         |
-| --------- | --------- | ------------------------------------------------------------- |
-| `sandbox` | Supported | Adapts remote execution providers to Flue's sandbox contract. |
-| `channel` | Supported | Adds verified provider ingress, an SDK client, and app tools. |
+| Category   | Status    | Notes                                                          |
+| ---------- | --------- | -------------------------------------------------------------- |
+| `sandbox`  | Supported | Adapts remote execution providers to Flue's sandbox contract.  |
+| `channel`  | Supported | Adds verified provider ingress, an SDK client, and app tools.  |
+| `database` | Supported | Adapts a database backend to Flue's `PersistenceAdapter` via a `db.ts`. |
 
 > **Please don't open PRs introducing new categories.** Adding a category
 > requires CLI/runtime changes and a long-term maintenance commitment from
@@ -164,6 +165,26 @@ universal adapter. They should:
 
 Channel recipes must not imply a common provider client API, install generic
 tool collections, or add `app.ts` solely to mount a discovered channel.
+
+### Database bodies
+
+Database connectors produce a single source-root `db.ts` that default-exports a
+`PersistenceAdapter`, not a file under `connectors/`. Two shapes exist:
+
+- **Named connectors with a first-party package** (e.g. `database--postgres.md`)
+  install the maintained `@flue/<backend>` adapter and write the small `db.ts`
+  that reads its connection string from the environment. These are short:
+  check the target, inspect the project, install, write `db.ts`, verify.
+- **The category root** (`database.md`) is for backends with no first-party
+  package. Instead of a verbatim file, it points the agent at the
+  `PersistenceAdapter` spec on the website plus the Postgres connector as a
+  worked example, and tells it to implement the contract against the backend's
+  real primitives.
+
+Database bodies must state that a `db.ts` adapter is a Node-target concern (the
+Cloudflare target uses Durable Object SQLite and rejects `db.ts`), must read
+connection strings from the environment rather than inventing them, and must
+not store application business data in the adapter.
 
 ## Adding a new connector
 

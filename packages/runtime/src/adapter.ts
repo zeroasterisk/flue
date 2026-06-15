@@ -84,6 +84,24 @@ export { createSessionStorageKey } from './session-identity.ts';
 export { assertSupportedFlueSchemaVersion, FLUE_SCHEMA_VERSION } from './schema-version.ts';
 export { PersistedSchemaVersionError } from './errors.ts';
 
+// ─── Persisted chunk placement ───────────────────────────────────────────────
+
+export type {
+	PersistedChunkOwner,
+	PersistedChunkRow,
+	PersistedChunkStore,
+} from './persisted-image-placement.ts';
+export {
+	hydratePersistedDirectSubmission,
+	hydratePersistedSessionEntry,
+	matchesPersistedDirectSubmission,
+	prepareDirectSubmission,
+	prepareSessionEntry,
+	samePersistedChunks,
+	sessionEntryChunkOwner,
+	submissionChunkOwner,
+} from './persisted-image-placement.ts';
+
 // ─── Run store types ─────────────────────────────────────────────────────────
 
 export type {

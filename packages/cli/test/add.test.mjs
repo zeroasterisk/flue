@@ -61,6 +61,9 @@ before(async () => {
 			whatsapp: 'channel--whatsapp.md',
 			twilio: 'channel--twilio.md',
 			messenger: 'channel--messenger.md',
+			postgres: 'database--postgres.md',
+			libsql: 'database--libsql.md',
+			turso: 'database--turso.md',
 		};
 		const file = slug ? files[slug] : undefined;
 		if (!file) {
@@ -84,7 +87,7 @@ after(async () => {
 });
 
 describe('flue add', () => {
-	it('lists named channel recipes and both generic categories when no name is given', async () => {
+	it('lists named recipes and every generic category when no name is given', async () => {
 		const result = await runCli(['add']);
 		assert.equal(result.code, 0);
 		assert.match(result.stderr, /flue add github\s+channel\s+https:\/\/github\.com/);
@@ -127,8 +130,12 @@ describe('flue add', () => {
 			result.stderr,
 			/flue add messenger\s+channel\s+https:\/\/developers\.facebook\.com\/docs\/messenger-platform/,
 		);
+		assert.match(result.stderr, /flue add postgres\s+database\s+https:\/\/www\.postgresql\.org/);
+		assert.match(result.stderr, /flue add libsql\s+database\s+https:\/\/github\.com\/tursodatabase\/libsql/);
+		assert.match(result.stderr, /flue add turso\s+database\s+https:\/\/turso\.tech/);
 		assert.ok(result.stderr.includes('flue add <url> --category sandbox'));
 		assert.ok(result.stderr.includes('flue add <url> --category channel'));
+		assert.ok(result.stderr.includes('flue add <url> --category database'));
 	});
 
 	it('prints the WhatsApp channel recipe', async () => {
@@ -338,6 +345,27 @@ describe('flue add', () => {
 		assert.ok(!result.stdout.startsWith('---'));
 	});
 
+	it('prints database recipes with their transaction-safe runner wiring', async () => {
+		const postgres = await runCli(['add', 'postgres', '--print']);
+		assert.equal(postgres.code, 0);
+		assert.ok(postgres.stdout.includes('@flue/postgres'));
+		assert.ok(postgres.stdout.includes('PostgresQuery'));
+		assert.ok(postgres.stdout.includes('BEGIN'));
+		assert.ok(postgres.stdout.includes('ROLLBACK'));
+
+		const libsql = await runCli(['add', 'libsql', '--print']);
+		assert.equal(libsql.code, 0);
+		assert.ok(libsql.stdout.includes('@flue/libsql'));
+		assert.ok(libsql.stdout.includes('const serialize'));
+		assert.ok(libsql.stdout.includes('tx.close()'));
+
+		const turso = await runCli(['add', 'turso', '--print']);
+		assert.equal(turso.code, 0);
+		assert.ok(turso.stdout.includes('@flue/libsql'));
+		assert.ok(turso.stdout.includes('TURSO_DATABASE_URL'));
+		assert.ok(turso.stdout.includes('tx.close()'));
+	});
+
 	it('substitutes the provider research URL into the generic channel recipe', async () => {
 		const url = 'https://docs.example.test/webhooks';
 		const result = await runCli(['add', url, '--category', 'channel', '--print']);
@@ -346,7 +374,7 @@ describe('flue add', () => {
 		assert.ok(!result.stdout.includes('{{URL}}'));
 	});
 
-	it('rejects an unknown category with both known categories in the guidance', async () => {
+	it('rejects an unknown category with every known category in the guidance', async () => {
 		const result = await runCli([
 			'add',
 			'https://docs.example.test',
@@ -355,6 +383,6 @@ describe('flue add', () => {
 			'--print',
 		]);
 		assert.equal(result.code, 1);
-		assert.ok(result.stderr.includes('Known categories: channel, sandbox'));
+		assert.ok(result.stderr.includes('Known categories: channel, database, sandbox'));
 	});
 });

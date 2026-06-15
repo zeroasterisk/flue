@@ -7,6 +7,7 @@ import {
 	SqlSessionStore,
 } from '../sql-agent-execution-store.ts';
 import { ensureFlueSchemaVersion } from '../schema-version.ts';
+import { ensureSqlPersistedChunkTable } from '../sql-persisted-chunk-store.ts';
 import type { SessionStore } from '../types.ts';
 
 interface DurableObjectStorage {
@@ -22,6 +23,7 @@ export function createSqlSessionStore(storage: DurableObjectStorage): SessionSto
 	}
 	ensureFlueSchemaVersion(sql);
 	ensureSessionTable(sql);
+	ensureSqlPersistedChunkTable(sql);
 	const runTransaction = <T>(closure: () => T): T => transactionSync.call(storage, closure) as T;
 	return new SqlSessionStore(sql, runTransaction);
 }

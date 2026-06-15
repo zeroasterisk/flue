@@ -1,65 +1,105 @@
-# Flue — The Agent Harness Framework
+# `@flue/postgres`
 
-Not another SDK. Build autonomous agents and powerful AI workflows with Flue's programmable TypeScript harness.
+Postgres-backed durable persistence for Flue applications on the Node.js target.
 
 ```ts
-// agents/triage.ts
-import { createAgent, type AgentRouteHandler } from '@flue/runtime';
-import { local } from '@flue/runtime/node';
-import triage from '../skills/triage/SKILL.md' with { type: 'skill' };
-import verify from '../skills/verify/SKILL.md' with { type: 'skill' };
-import * as githubTools from '../tools/github.ts';
+// src/db.ts
+import { postgres, type PostgresQuery } from '@flue/postgres';
+import sql from 'postgres';
 
-// Give agents the context and autonomy to solve complex tasks:
-const instructions = `
-Triage a bug report end-to-end: reproduce the bug,
-diagnose the root cause, verify whether the behavior is
-intentional, and attempt a fix.
+const db = sql(process.env.DATABASE_URL!);
 
-...`;
-
-// Expose (and protect) your agents over HTTP:
-export const route: AgentRouteHandler = async (_c, next) => next();
-
-// Compose the complete harness your agent needs to do real work,
-// complete with virtual, local, or remote container sandbox.
-export default createAgent(() => ({
-  model:   'anthropic/claude-sonnet-4-6',
-  tools:   [...githubTools],
-  skills:  [triage, verify],
-  sandbox: local(),
-  instructions,
-}));
+export default postgres({
+  query: (text, params) => db.unsafe(text, params),
+  transaction: <T>(fn: (tx: { query: PostgresQuery }) => Promise<T>) =>
+    db.begin((tx) => fn({ query: (text, params) => tx.unsafe(text, params) })) as Promise<T>,
+  close: () => db.end(),
+});
 ```
 
-## The framework for building the next generation of agents.
+Default-export the adapter from a source-root `db.ts`. Flue discovers it at
+build time and wires it into the generated Node server. The adapter's
+`migrate()` hook runs once at startup and creates its tables idempotently, so
+there is no separate migration step.
 
-The first agents were built with raw LLM API calls. This worked for simple chatbots and scripted tasks, but not much else.
+This adapter persists Flue's runtime state:
 
-Agents like Claude Code and Codex broke the mold. These were *real agents.* Autonomous. You give them a task — not a pre-defined series of steps — and trust them to complete it using the context and tools that you provide.
+- agent session snapshots and compaction state;
+- accepted direct prompts and `dispatch(...)` submissions, with the durable
+  turn journals and leases that back interruption recovery;
+- workflow-run records and persisted run events;
+- run indexing for `/runs` lookups and `listRuns()`.
 
-**Flue unlocks this new architecture for agents.** Its built-in TypeScript harness gives any model the context and environment it needs for truly autonomous work: sessions, tools, skills, instructions, filesystem access, and a secure sandbox to run in. Run your agents locally via CLI or deploy them to your hosted runtime of choice.
+It does not store your application's business data. Keep customer records,
+tickets, and payments in your own tables.
 
-## Features
+## Bring your own driver
 
-Build agents that can safely take action, maintain continuity, and connect to the systems where work already happens.
+`@flue/postgres` does **not** pick or bundle a database driver. It runs against
+a small runner you wrap around your configured driver, so you own driver
+choice, pooling, TLS, and every other connection option.
 
-- **[Agents](https://flueframework.com/docs/guide/building-agents/)** — Build agents that can keep context across conversations and events as they autonomously work toward a goal.
-- **[Workflows](https://flueframework.com/docs/guide/workflows/)** — Run structured automations where your code guides agent reasoning from a clear input to a finished result.
-- **[Sandboxes](https://flueframework.com/docs/guide/sandboxes/)** — Give agents a secure environment where they can use tools, modify files, and autonomously complete real work.
-- **[Durable Execution](https://flueframework.com/docs/guide/durable-execution/)** — Learn how agents preserve progress through failures and restarts with durable recovery for accepted work.
-- **[Subagents](https://flueframework.com/docs/guide/subagents/)** — Define specialized roles for different tasks, then let your agent delegate work to the right expert.
-- **[Tools](https://flueframework.com/docs/guide/tools/)** — Give agents typed actions for calling APIs, querying data, and making controlled changes through your application.
-- **[Skills](https://flueframework.com/docs/guide/skills/)** — Package reusable expertise and workflows that agents can load whenever a task needs specialized guidance.
-- **[MCP Servers](https://flueframework.com/docs/guide/tools/#connect-mcp-tools)** — Connect agents to authenticated tools and services through the open Model Context Protocol ecosystem.
-- **[Observability](https://flueframework.com/docs/guide/observability/)** — Monitor your agents and export traces to OpenTelemetry, Braintrust, Sentry, or your own telemetry stack.
-- **[Channels](https://flueframework.com/docs/guide/channels/)** — Receive verified events from Slack, Teams, Discord, GitHub, and more.
+A runner is three functions:
 
-## Deploy Anywhere
+- `query(text, params)` — run a SQL string with numbered `$N` placeholders and
+  positional parameters, resolving to the result rows as plain objects.
+- `transaction(fn)` — run `fn` inside a single transaction on one connection,
+  committing on resolve and rolling back on throw. The `tx` passed to `fn` only
+  needs `query`.
+- `close()` — close the underlying driver.
 
-- **[Node.js](https://flueframework.com/docs/ecosystem/deploy/node/)**
-- **[Cloudflare Workers](https://flueframework.com/docs/ecosystem/deploy/cloudflare/)**
-- **[GitHub Actions](https://flueframework.com/docs/ecosystem/deploy/github-actions/)**
-- **[GitLab CI/CD](https://flueframework.com/docs/ecosystem/deploy/gitlab-ci/)**
-- **[Daytona](https://flueframework.com/docs/ecosystem/sandboxes/daytona/)**
-- **[Render](https://flueframework.com/docs/ecosystem/deploy/render/)**
+The example above wraps the [`postgres`](https://github.com/porsager/postgres)
+(porsager) driver. With [`pg`](https://node-postgres.com/) (node-postgres),
+`transaction` checks out a single client and issues `BEGIN`/`COMMIT`/`ROLLBACK`
+itself (a pool cannot run a transaction across arbitrary connections):
+
+```ts
+import { postgres } from '@flue/postgres';
+import { Pool } from 'pg';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+export default postgres({
+  query: async (text, params) => (await pool.query(text, params)).rows,
+  transaction: async (fn) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn({ query: async (t, p) => (await client.query(t, p)).rows });
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+  close: () => pool.end(),
+});
+```
+
+## When to use it
+
+Reach for `@flue/postgres` when state must survive host replacement or be
+shared across multiple application replicas — for example, when another Node
+process must recover accepted work after a host failure, or when several
+replicas need the same workflow-run history. For a single host, the built-in
+file-backed `sqlite()` adapter from `@flue/runtime/node` is enough.
+
+## Target support
+
+This adapter targets **Node.js**. The Cloudflare target uses Durable Object
+SQLite automatically and rejects a `db.ts` file at build time, so a database
+adapter does not apply there.
+
+## Installation
+
+```sh
+flue add postgres
+```
+
+`flue add postgres` installs the package, helps you pick a driver, and writes
+the `db.ts`. See the [Postgres guide](https://flueframework.com/docs/ecosystem/databases/postgres/)
+for setup and the [Data Persistence API](https://flueframework.com/docs/api/data-persistence-api/)
+for the adapter contract.

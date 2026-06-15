@@ -56,12 +56,16 @@ import { ensureFlueSchemaVersion } from './schema-version.ts';
 import { createSessionStorageKey } from './session-identity.ts';
 import type { SessionData, SessionEntry, SessionStore } from './types.ts';
 import {
-	extractDirectSubmissionImages,
-	extractSessionEntryImages,
-	hydrateDirectSubmissionImages,
-	hydrateSessionEntryImages,
-	type PersistedImageChunk,
-} from './persisted-images.ts';
+	hydratePersistedDirectSubmission,
+	hydratePersistedSessionEntry,
+	matchesPersistedDirectSubmission,
+	prepareDirectSubmission,
+	prepareSessionEntry,
+	samePersistedChunks,
+	sessionEntryChunkOwner,
+	submissionChunkOwner,
+} from './persisted-image-placement.ts';
+import { createSqlPersistedChunkStore, ensureSqlPersistedChunkTable } from './sql-persisted-chunk-store.ts';
 
 /**
  * Bring the agent execution store schema to the current version.
@@ -76,6 +80,7 @@ export function ensureSqlAgentExecutionTables(sql: SqlStorage): void {
 	ensureSessionTable(sql);
 	ensureSubmissionTable(sql);
 	ensureTurnJournalTable(sql);
+	ensureSqlPersistedChunkTable(sql);
 }
 
 /**
@@ -104,10 +109,11 @@ export class SqlSessionStore implements SessionStore {
 	async save(id: string, data: SessionData): Promise<void> {
 		const { entries: sessionEntries, ...session } = data;
 		const entries = sessionEntries.map((entry, position) => {
-			const extracted = extractSessionEntryImages(entry);
-			return { entry, position, data: JSON.stringify(extracted.value), chunks: extracted.chunks };
+			const prepared = prepareSessionEntry(entry);
+			return { entry, position, data: JSON.stringify(prepared.value), chunks: prepared.chunks };
 		});
 		this.transactionSync(() => {
+			const chunkStore = createSqlPersistedChunkStore(this.sql);
 			this.sql.exec(
 				`INSERT INTO flue_sessions (id, data) VALUES (?, ?)
 				 ON CONFLICT (id) DO UPDATE SET data = excluded.data`,
@@ -123,9 +129,10 @@ export class SqlSessionStore implements SessionStore {
 			for (const { entry, position, data: entryData, chunks } of entries) {
 				retained.add(entry.id);
 				const current = existing.get(entry.id);
-				const currentChunks = readImageChunks(this.sql, 'session_entry', id, entry.id);
+				const owner = sessionEntryChunkOwner(id, entry.id);
+				const currentChunks = chunkStore.read(owner);
 				const entryChanged = current?.position !== position || current.data !== entryData;
-				const chunksChanged = !sameImageChunks(currentChunks, chunks);
+				const chunksChanged = !samePersistedChunks(currentChunks, chunks);
 				if (!entryChanged && !chunksChanged) continue;
 				if (entryChanged) {
 					this.sql.exec(
@@ -139,11 +146,11 @@ export class SqlSessionStore implements SessionStore {
 						entryData,
 					);
 				}
-				if (chunksChanged) replaceImageChunks(this.sql, 'session_entry', id, entry.id, chunks);
+				if (chunksChanged) chunkStore.replace(owner, chunks);
 			}
 			for (const row of existingRows) {
 				if (typeof row.entry_id === 'string' && !retained.has(row.entry_id)) {
-					deleteImageChunks(this.sql, 'session_entry', id, row.entry_id);
+					chunkStore.delete(sessionEntryChunkOwner(id, row.entry_id));
 					this.sql.exec(
 						'DELETE FROM flue_session_entries WHERE session_id = ? AND entry_id = ?',
 						id,
@@ -156,6 +163,7 @@ export class SqlSessionStore implements SessionStore {
 
 	async load(id: string): Promise<SessionData | null> {
 		return this.transactionSync(() => {
+			const chunkStore = createSqlPersistedChunkStore(this.sql);
 			const rows = this.sql.exec('SELECT data FROM flue_sessions WHERE id = ?', id).toArray();
 			const row = rows[0];
 			if (!row) return null;
@@ -173,9 +181,9 @@ export class SqlSessionStore implements SessionStore {
 					if (typeof entryRow.entry_id !== 'string' || typeof entryRow.data !== 'string') {
 						throw new Error('[flue] Persisted session entry row is malformed.');
 					}
-					return hydrateSessionEntryImages(
+					return hydratePersistedSessionEntry(
 						JSON.parse(entryRow.data) as SessionEntry,
-						readImageData(this.sql, 'session_entry', id, entryRow.entry_id),
+						chunkStore.read(sessionEntryChunkOwner(id, entryRow.entry_id)),
 					);
 				}),
 			};
@@ -184,11 +192,7 @@ export class SqlSessionStore implements SessionStore {
 
 	async delete(id: string): Promise<void> {
 		this.transactionSync(() => {
-			this.sql.exec(
-				'DELETE FROM flue_image_chunks WHERE owner_kind = ? AND owner_id = ?',
-				'session_entry',
-				id,
-			);
+			createSqlPersistedChunkStore(this.sql).deleteOwner('session_entry', id);
 			this.sql.exec('DELETE FROM flue_session_entries WHERE session_id = ?', id);
 			this.sql.exec('DELETE FROM flue_sessions WHERE id = ?', id);
 		});
@@ -634,15 +638,16 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 				sessionKey,
 				startedAt,
 			);
-			this.sql.exec(
-				`DELETE FROM flue_image_chunks
-				 WHERE owner_kind = 'submission' AND owner_id IN (
-				   SELECT submission_id FROM flue_agent_submissions
-				   WHERE session_key = ? AND status = 'settled' AND accepted_at <= ?
-				 )`,
+			const deletedSubmissionRows = this.sql.exec(
+				`SELECT submission_id FROM flue_agent_submissions
+				 WHERE session_key = ? AND status = 'settled' AND accepted_at <= ?`,
 				sessionKey,
 				startedAt,
+			).toArray();
+			const submissionOwners = deletedSubmissionRows.flatMap((row) =>
+				typeof row.submission_id === 'string' ? [submissionChunkOwner(row.submission_id)] : [],
 			);
+			createSqlPersistedChunkStore(this.sql).deleteMany(submissionOwners);
 			this.sql.exec(
 				`DELETE FROM flue_agent_submissions
 				 WHERE session_key = ? AND status = 'settled' AND accepted_at <= ?`,
@@ -757,13 +762,14 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 
 	private admitSubmission(input: AgentSubmissionInput): AgentDispatchAdmission {
 		const { kind, submissionId } = input;
-		const extracted = kind === 'direct'
-			? extractDirectSubmissionImages(input)
+		const prepared = kind === 'direct'
+			? prepareDirectSubmission(input)
 			: { value: input, chunks: [] };
-		const payload = JSON.stringify(extracted.value);
+		const payload = JSON.stringify(prepared.value);
 		const acceptedAt = parseAcceptedAt(input.acceptedAt, `${kind} admission`);
 		const sessionKey = createSessionStorageKey(input.id, SUBMISSION_HARNESS_NAME, SUBMISSION_SESSION_NAME);
 		return this.transactionSync(() => {
+			const chunkStore = createSqlPersistedChunkStore(this.sql);
 			if (kind === 'dispatch') {
 				const receipt = this.getDispatchReceipt(submissionId);
 				if (receipt) return { kind: 'retained_receipt', receipt };
@@ -786,11 +792,24 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 			);
 			const row = this.readSubmissionRow(submissionId);
 			if (!row) throw new Error(`[flue] Durable ${kind} admission did not create a submission row.`);
-			if (row.kind !== kind || row.payload !== payload) return { kind: 'conflict' };
-			const persistedChunks = readImageChunks(this.sql, 'submission', submissionId, '');
-			if (persistedChunks.length === 0 && extracted.chunks.length > 0) {
-				insertImageChunks(this.sql, 'submission', submissionId, '', extracted.chunks);
-			} else if (!sameImageChunks(persistedChunks, extracted.chunks)) {
+			if (row.kind !== kind) return { kind: 'conflict' };
+			const owner = submissionChunkOwner(submissionId);
+			if (row.payload !== payload) {
+				if (
+					kind !== 'direct' ||
+					typeof row.payload !== 'string' ||
+					!matchesPersistedDirectSubmission(
+						input,
+						JSON.parse(row.payload) as DirectAgentSubmissionInput,
+						chunkStore.read(owner),
+					)
+				) return { kind: 'conflict' };
+				return { kind: 'submission', submission: this.parseSubmission(row) };
+			}
+			const persistedChunks = chunkStore.read(owner);
+			if (persistedChunks.length === 0 && prepared.chunks.length > 0) {
+				chunkStore.replace(owner, prepared.chunks);
+			} else if (!samePersistedChunks(persistedChunks, prepared.chunks)) {
 				return { kind: 'conflict' };
 			}
 			return { kind: 'submission', submission: this.parseSubmission(row) };
@@ -804,7 +823,7 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 	private parseSubmission(row: SqlRow): AgentSubmission {
 		return parseSubmission(
 			row,
-			readImageData(this.sql, 'submission', String(row.submission_id), ''),
+			createSqlPersistedChunkStore(this.sql).read(submissionChunkOwner(String(row.submission_id))),
 		);
 	}
 
@@ -907,7 +926,7 @@ function parseTurnJournal(row: SqlRow): AgentTurnJournal {
 	};
 }
 
-function parseSubmission(row: SqlRow, imageData: ReadonlyMap<string, string>): AgentSubmission {
+function parseSubmission(row: SqlRow, chunks: Parameters<typeof hydratePersistedDirectSubmission>[1]): AgentSubmission {
 	if (
 		typeof row.sequence !== 'number' ||
 		typeof row.submission_id !== 'string' ||
@@ -941,7 +960,7 @@ function parseSubmission(row: SqlRow, imageData: ReadonlyMap<string, string>): A
 	}
 	const parsedPayload = JSON.parse(row.payload);
 	const input = row.kind === 'direct'
-		? hydrateDirectSubmissionImages(parsedPayload as DirectAgentSubmissionInput, imageData)
+		? hydratePersistedDirectSubmission(parsedPayload as DirectAgentSubmissionInput, chunks)
 		: parsedPayload;
 	if (!isSubmissionPayload(input, {
 		kind: row.kind as string,
@@ -974,140 +993,6 @@ function parseSubmission(row: SqlRow, imageData: ReadonlyMap<string, string>): A
 	};
 }
 
-interface ImageChunkRow {
-	imageId: string;
-	index: number;
-	count: number;
-	data: string;
-}
-
-function readImageChunks(
-	sql: SqlStorage,
-	ownerKind: string,
-	ownerId: string,
-	ownerPart: string,
-): ImageChunkRow[] {
-	const rows = sql
-		.exec(
-			`SELECT image_id, chunk_index, chunk_count, data
-			 FROM flue_image_chunks
-			 WHERE owner_kind = ? AND owner_id = ? AND owner_part = ?
-			 ORDER BY image_id, chunk_index`,
-			ownerKind,
-			ownerId,
-			ownerPart,
-		)
-		.toArray();
-	return rows.map((row) => {
-		if (
-			typeof row.image_id !== 'string' ||
-			typeof row.chunk_index !== 'number' ||
-			!Number.isInteger(row.chunk_index) ||
-			typeof row.chunk_count !== 'number' ||
-			!Number.isInteger(row.chunk_count) ||
-			typeof row.data !== 'string'
-		) {
-			throw new Error('[flue] Persisted image chunk row is malformed.');
-		}
-		return {
-			imageId: row.image_id,
-			index: row.chunk_index,
-			count: row.chunk_count,
-			data: row.data,
-		};
-	});
-}
-
-function deleteImageChunks(
-	sql: SqlStorage,
-	ownerKind: string,
-	ownerId: string,
-	ownerPart: string,
-): void {
-	sql.exec(
-		'DELETE FROM flue_image_chunks WHERE owner_kind = ? AND owner_id = ? AND owner_part = ?',
-		ownerKind,
-		ownerId,
-		ownerPart,
-	);
-}
-
-function insertImageChunks(
-	sql: SqlStorage,
-	ownerKind: string,
-	ownerId: string,
-	ownerPart: string,
-	chunks: PersistedImageChunk[],
-): void {
-	for (const chunk of chunks) {
-		sql.exec(
-			`INSERT INTO flue_image_chunks
-			 (owner_kind, owner_id, owner_part, image_id, chunk_index, chunk_count, data)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			ownerKind,
-			ownerId,
-			ownerPart,
-			chunk.imageId,
-			chunk.index,
-			chunk.count,
-			chunk.data,
-		);
-	}
-}
-
-function replaceImageChunks(
-	sql: SqlStorage,
-	ownerKind: string,
-	ownerId: string,
-	ownerPart: string,
-	chunks: PersistedImageChunk[],
-): void {
-	deleteImageChunks(sql, ownerKind, ownerId, ownerPart);
-	insertImageChunks(sql, ownerKind, ownerId, ownerPart, chunks);
-}
-
-function readImageData(
-	sql: SqlStorage,
-	ownerKind: string,
-	ownerId: string,
-	ownerPart: string,
-): Map<string, string> {
-	const rows = readImageChunks(sql, ownerKind, ownerId, ownerPart);
-	const grouped = new Map<string, ImageChunkRow[]>();
-	for (const row of rows) {
-		const imageRows = grouped.get(row.imageId) ?? [];
-		imageRows.push(row);
-		grouped.set(row.imageId, imageRows);
-	}
-	const data = new Map<string, string>();
-	for (const [imageId, imageRows] of grouped) {
-		const expectedCount = imageRows[0]?.count;
-		if (
-			expectedCount === undefined ||
-			expectedCount < 1 ||
-			imageRows.length !== expectedCount ||
-			imageRows.some((row, index) => row.count !== expectedCount || row.index !== index)
-		) {
-			throw new Error('[flue] Persisted image chunks are missing or malformed.');
-		}
-		data.set(imageId, imageRows.map((row) => row.data).join(''));
-	}
-	return data;
-}
-
-function sameImageChunks(left: ImageChunkRow[], right: PersistedImageChunk[]): boolean {
-	if (left.length !== right.length) return false;
-	const rightByKey = new Map(right.map((chunk) => [imageChunkKey(chunk), chunk]));
-	return left.every((chunk) => {
-		const other = rightByKey.get(imageChunkKey(chunk));
-		return other !== undefined && chunk.count === other.count && chunk.data === other.data;
-	});
-}
-
-function imageChunkKey(chunk: Pick<ImageChunkRow, 'imageId' | 'index'>): string {
-	return `${chunk.imageId}\u0000${chunk.index}`;
-}
-
 export function ensureSessionTable(sql: SqlStorage): void {
 	sql.exec(
 		`CREATE TABLE IF NOT EXISTS flue_sessions (
@@ -1128,7 +1013,6 @@ export function ensureSessionTable(sql: SqlStorage): void {
 		`CREATE INDEX IF NOT EXISTS flue_session_entries_session_position_idx
 		 ON flue_session_entries (session_id, position ASC)`,
 	);
-	ensureImageChunkTable(sql);
 }
 
 function ensureTurnJournalTable(sql: SqlStorage): void {
@@ -1162,23 +1046,7 @@ function ensureTurnJournalTable(sql: SqlStorage): void {
 	);
 }
 
-function ensureImageChunkTable(sql: SqlStorage): void {
-	sql.exec(
-		`CREATE TABLE IF NOT EXISTS flue_image_chunks (
-		 owner_kind TEXT NOT NULL,
-		 owner_id TEXT NOT NULL,
-		 owner_part TEXT NOT NULL,
-		 image_id TEXT NOT NULL,
-		 chunk_index INTEGER NOT NULL,
-		 chunk_count INTEGER NOT NULL,
-		 data TEXT NOT NULL,
-		 PRIMARY KEY (owner_kind, owner_id, owner_part, image_id, chunk_index)
-		)`,
-	);
-}
-
 function ensureSubmissionTable(sql: SqlStorage): void {
-	ensureImageChunkTable(sql);
 	sql.exec(
 		`CREATE TABLE IF NOT EXISTS flue_agent_submissions (
 		 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
