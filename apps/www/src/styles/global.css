@@ -4,6 +4,16 @@
 	--font-heading: system-ui, -apple-system, sans-serif;
 }
 
+.squircle-button {
+	border-radius: 32px;
+}
+
+@supports (corner-shape: squircle) {
+	.squircle-button {
+		corner-shape: squircle;
+	}
+}
+
 .animated-dash {
 	background-image: repeating-linear-gradient(
 		to bottom,

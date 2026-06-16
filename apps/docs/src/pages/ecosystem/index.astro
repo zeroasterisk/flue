@@ -1,90 +1,6 @@
 ---
 import DocsLayout from '../../layouts/DocsLayout.astro';
-
-interface DirectoryItem {
-	name: string;
-	href: string;
-	icon?: string;
-	mark?: string;
-	brand?: 'daytona' | 'e2b' | 'modal';
-	background: string;
-	iconClass?: string;
-	keywords?: string;
-	sortName?: string;
-}
-
-function sortDirectoryItems(a: DirectoryItem, b: DirectoryItem): number {
-	return (a.sortName ?? a.name).localeCompare(b.sortName ?? b.name);
-}
-
-const channels: DirectoryItem[] = [
-	{ name: 'Discord', href: '/docs/ecosystem/channels/discord/', icon: 'https://svgl.app/library/discord.svg', background: '#5865f2', iconClass: 'monochrome-white' },
-	{ name: 'Facebook', href: '/docs/ecosystem/channels/messenger/', mark: 'messenger', background: '#ffffff', keywords: 'messenger' },
-	{ name: 'GitHub', href: '/docs/ecosystem/channels/github/', icon: 'https://svgl.app/library/github_light.svg', background: '#181717', iconClass: 'monochrome-white' },
-	{ name: 'Google Chat', href: '/docs/ecosystem/channels/google-chat/', icon: 'https://svgl.app/library/google-chat.svg', background: '#ffffff' },
-	{ name: 'Intercom', href: '/docs/ecosystem/channels/intercom/', mark: 'intercom', background: '#286efa' },
-	{ name: 'Linear', href: '/docs/ecosystem/channels/linear/', icon: 'https://svgl.app/library/linear.svg', background: '#181717', iconClass: 'monochrome-white' },
-	{ name: 'Microsoft Teams', href: '/docs/ecosystem/channels/teams/', icon: 'https://svgl.app/library/microsoft-teams.svg', background: '#ffffff' },
-	{ name: 'Notion', href: '/docs/ecosystem/channels/notion/', icon: 'https://svgl.app/library/notion.svg', background: '#ffffff' },
-	{ name: 'Resend', href: '/docs/ecosystem/channels/resend/', icon: 'https://svgl.app/library/resend-icon-white.svg', background: '#181717' },
-	{ name: 'Salesforce Marketing Cloud', href: '/docs/ecosystem/channels/salesforce-marketing-cloud/', icon: 'https://svgl.app/library/salesforce.svg', background: '#ffffff', keywords: 'salesforce marketing cloud sfmc' },
-	{ name: 'Shopify', href: '/docs/ecosystem/channels/shopify/', icon: 'https://svgl.app/library/shopify.svg', background: '#ffffff' },
-	{ name: 'Slack', href: '/docs/ecosystem/channels/slack/', icon: 'https://svgl.app/library/slack.svg', background: '#ffffff' },
-	{ name: 'Stripe', href: '/docs/ecosystem/channels/stripe/', icon: 'https://svgl.app/library/stripe.svg', background: '#635bff', iconClass: 'monochrome-white' },
-	{ name: 'Telegram', href: '/docs/ecosystem/channels/telegram/', icon: 'https://svgl.app/library/telegram.svg', background: '#ffffff' },
-	{ name: 'Twilio', href: '/docs/ecosystem/channels/twilio/', icon: 'https://svgl.app/library/twilio.svg', background: '#f22f46', iconClass: 'monochrome-white' },
-	{ name: 'WhatsApp', href: '/docs/ecosystem/channels/whatsapp/', icon: 'https://svgl.app/library/whatsapp-icon.svg', background: '#25d366', iconClass: 'monochrome-white' },
-	{ name: 'Zendesk', href: '/docs/ecosystem/channels/zendesk/', mark: 'zendesk', background: '#ffffff' },
-];
-channels.sort(sortDirectoryItems);
-
-const deploy: DirectoryItem[] = [
-	{ name: 'AWS', href: '/docs/ecosystem/deploy/aws/', icon: 'https://svgl.app/library/aws_dark.svg', background: '#181717', keywords: 'ecs express fargate ec2 cloud' },
-	{ name: 'Cloudflare', href: '/docs/ecosystem/deploy/cloudflare/', icon: 'https://svgl.app/library/cloudflare.svg', background: '#ffffff', keywords: 'workers' },
-	{ name: 'Docker', href: '/docs/ecosystem/deploy/docker/', icon: 'https://svgl.app/library/docker.svg', background: '#ffffff', keywords: 'container image' },
-	{ name: 'Fly.io', href: '/docs/ecosystem/deploy/fly/', icon: 'https://svgl.app/library/fly.svg', background: '#ffffff', keywords: 'hosting machines container' },
-	{ name: 'GitHub Actions', href: '/docs/ecosystem/deploy/github-actions/', icon: 'https://svgl.app/library/github_light.svg', background: '#181717', iconClass: 'monochrome-white', keywords: 'ci cd' },
-	{ name: 'GitLab CI/CD', href: '/docs/ecosystem/deploy/gitlab-ci/', icon: 'https://svgl.app/library/gitlab.svg', background: '#ffffff', keywords: 'ci cd' },
-	{ name: 'Node.js', href: '/docs/ecosystem/deploy/node/', icon: 'https://svgl.app/library/nodejs.svg', background: '#ffffff', keywords: 'node hosting server' },
-	{ name: 'Railway', href: '/docs/ecosystem/deploy/railway/', icon: 'https://svgl.app/library/railway.svg', background: '#181717', iconClass: 'invert', keywords: 'hosting node container' },
-	{ name: 'Render', href: '/docs/ecosystem/deploy/render/', icon: 'https://svgl.app/library/render_black.svg', background: '#ffffff', iconClass: 'ecosystem-logo-large', keywords: 'hosting node' },
-	{ name: 'SST', href: '/docs/ecosystem/deploy/sst/', icon: 'https://svgl.app/library/sst.svg', background: '#ffffff', keywords: 'iac infrastructure aws fargate' },
-];
-deploy.sort(sortDirectoryItems);
-
-const sandboxes: DirectoryItem[] = [
-	{ name: 'boxd', href: '/docs/ecosystem/sandboxes/boxd/', background: '#2563eb' },
-	{ name: 'Cloudflare Sandbox', href: '/docs/ecosystem/sandboxes/cloudflare/', icon: 'https://svgl.app/library/cloudflare.svg', background: '#ffffff' },
-	{ name: '@cloudflare/shell', href: '/docs/ecosystem/sandboxes/cloudflare-shell/', icon: 'https://svgl.app/library/cloudflare.svg', background: '#ffffff', keywords: 'cloudflare shell', sortName: 'Cloudflare Shell' },
-	{ name: 'Daytona', href: '/docs/ecosystem/sandboxes/daytona/', brand: 'daytona', background: '#181717' },
-	{ name: 'E2B', href: '/docs/ecosystem/sandboxes/e2b/', brand: 'e2b', background: '#ffffff' },
-	{ name: 'exe.dev', href: '/docs/ecosystem/sandboxes/exedev/', background: '#2563eb' },
-	{ name: 'islo', href: '/docs/ecosystem/sandboxes/islo/', background: '#2563eb' },
-	{ name: 'Mirage', href: '/docs/ecosystem/sandboxes/mirage/', background: '#2563eb' },
-	{ name: 'Modal', href: '/docs/ecosystem/sandboxes/modal/', brand: 'modal', background: '#ffffff' },
-	{ name: 'smolvm', href: '/docs/ecosystem/sandboxes/smolvm/', background: '#2563eb' },
-	{ name: 'Vercel Sandbox', href: '/docs/ecosystem/sandboxes/vercel/', icon: 'https://svgl.app/library/vercel.svg', background: '#ffffff' },
-];
-sandboxes.sort(sortDirectoryItems);
-
-const databases: DirectoryItem[] = [
-	{ name: 'libSQL', href: '/docs/ecosystem/databases/libsql/', mark: 'sqlite', background: '#ffffff', keywords: 'libsql sqlite turso embedded sql database persistence' },
-	{ name: 'MongoDB', href: '/docs/ecosystem/databases/mongodb/', icon: 'https://svgl.app/library/mongodb-icon-light.svg', background: '#00ed64', iconClass: 'monochrome-white ecosystem-logo-mongodb', keywords: 'mongodb atlas document database persistence' },
-	{ name: 'MySQL', href: '/docs/ecosystem/databases/mysql/', icon: 'https://svgl.app/library/mysql-icon-light.svg', background: '#ffffff', keywords: 'mysql sql innodb database persistence' },
-	{ name: 'Postgres', href: '/docs/ecosystem/databases/postgres/', icon: 'https://svgl.app/library/postgresql.svg', background: '#ffffff', keywords: 'postgresql sql database persistence' },
-	{ name: 'Redis', href: '/docs/ecosystem/databases/redis/', icon: 'https://svgl.app/library/redis.svg', background: '#ffffff', keywords: 'redis key value database persistence' },
-	{ name: 'Supabase', href: '/docs/ecosystem/databases/supabase/', icon: 'https://svgl.app/library/supabase.svg', background: '#ffffff', keywords: 'supabase postgres postgresql sql database persistence' },
-	{ name: 'Turso', href: '/docs/ecosystem/databases/turso/', mark: 'turso', background: '#1b252d', keywords: 'turso libsql sqlite hosted replicated sql database persistence' },
-	{ name: 'Valkey', href: '/docs/ecosystem/databases/valkey/', mark: 'valkey', background: '#123678', keywords: 'valkey redis protocol key value database persistence' },
-];
-databases.sort(sortDirectoryItems);
-
-const tooling: DirectoryItem[] = [
-	{ name: 'Braintrust', href: '/docs/ecosystem/tooling/braintrust/', icon: '/docs/braintrust.svg', background: '#2c1fea', iconClass: 'ecosystem-logo-tooling', keywords: 'braintrust observability tracing evaluation evals monitoring' },
-	{ name: 'OpenTelemetry', href: '/docs/ecosystem/tooling/opentelemetry/', icon: '/docs/opentelemetry.svg', background: '#ffffff', iconClass: 'ecosystem-logo-tooling', keywords: 'opentelemetry otel observability telemetry tracing traces otlp monitoring vendor neutral' },
-	{ name: 'Sentry', href: '/docs/ecosystem/tooling/sentry/', icon: 'https://svgl.app/library/sentry.svg', background: '#ffffff', iconClass: 'ecosystem-logo-tooling', keywords: 'sentry observability monitoring errors tracing' },
-];
-tooling.sort(sortDirectoryItems);
+import { channels, databases, deploy, sandboxes, tooling } from '../../../../ecosystem-catalog';
 ---
 
 <DocsLayout
@@ -310,18 +226,14 @@ tooling.sort(sortDirectoryItems);
 
 <style>
 	.ecosystem-grid {
-		--ecosystem-tile-size: clamp(5.75rem, 7.4vw, 6.75rem);
+		--ecosystem-tile-size: clamp(5.25rem, 6.4vw, 5.875rem);
 		display: grid;
 		grid-template-columns: repeat(auto-fit, var(--ecosystem-tile-size));
-		justify-content: space-between;
-		gap: clamp(1.15rem, 2vw, 1.75rem) clamp(0.85rem, 1.6vw, 1.4rem);
+		justify-content: start;
+		gap: clamp(1rem, 1.6vw, 1.35rem) clamp(0.75rem, 1.2vw, 1rem);
 		margin: 0;
 		padding: 0;
 		list-style: none;
-	}
-
-	.ecosystem-grid.is-filtering {
-		justify-content: start;
 	}
 
 	.ecosystem-item {
@@ -372,8 +284,13 @@ tooling.sort(sortDirectoryItems);
 	}
 
 	.ecosystem-logo.ecosystem-logo-large {
-		width: 70%;
-		height: 70%;
+		width: 82%;
+		height: 82%;
+	}
+
+	.ecosystem-logo.ecosystem-logo-small {
+		width: 48%;
+		height: 48%;
 	}
 
 	.ecosystem-logo.ecosystem-logo-tooling {
@@ -431,7 +348,7 @@ tooling.sort(sortDirectoryItems);
 	}
 
 	.ecosystem-e2b-logo {
-		width: 64%;
+		width: 80%;
 	}
 
 	.ecosystem-modal-logo {
