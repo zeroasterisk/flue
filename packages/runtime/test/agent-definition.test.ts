@@ -38,62 +38,60 @@ describe('createAgent()', () => {
 		expect(() => createAgent(null as never)).toThrow('requires an initializer function');
 	});
 
-	it('invokes the initializer with id env and payload when a context initializes the created agent', async () => {
+	it('invokes the initializer with id and env when a context initializes the created agent', async () => {
 		const env = { API_KEY: 'secret' };
-		const payload = { request: 'payload' };
 		const initialize = vi.fn(() => ({ model: false as const }));
-		const ctx = createContext({ id: 'workflow-run', env, payload });
+		const ctx = createContext({ id: 'workflow-run', env, payload: { request: 'payload' } });
 
-		await ctx.init(createAgent(initialize));
+		await ctx.initializeCreatedAgent(createAgent(initialize));
 
 		expect(initialize).toHaveBeenCalledOnce();
-		expect(initialize).toHaveBeenCalledWith({ id: 'workflow-run', env, payload });
+		expect(initialize).toHaveBeenCalledWith({ id: 'workflow-run', env });
 	});
 
 	it('rejects unknown runtime fields when an initializer returns unsupported configuration', async () => {
 		const agent = createAgent(() => ({ model: false, unsupported: true }) as never);
 
-		await expect(createContext().init(agent)).rejects.toThrow(
-			'unknown runtime config field "unsupported"',
+		await expect(createContext().initializeCreatedAgent(agent)).rejects.toThrow(
+			'Unknown agent runtime config field "unsupported"',
 		);
 	});
 
 	it('rejects a top-level name when an initializer returns one', async () => {
 		const agent = createAgent(() => ({ model: false, name: 'support' }) as never);
 
-		await expect(createContext().init(agent)).rejects.toThrow(
-			'unknown runtime config field "name"',
+		await expect(createContext().initializeCreatedAgent(agent)).rejects.toThrow(
+			'Unknown agent runtime config field "name"',
 		);
 	});
 
 	it('rejects harness initialization when the initializer does not explicitly select a model or model false', async () => {
-		await expect(createContext().init(createAgent(() => ({})))).rejects.toThrow(
-			'createAgent() requires a model',
-		);
+		await expect(createContext().init({})).rejects.toThrow('init() requires a model');
 	});
 
 	// Compile-time contract, enforced by `check:types` over this file: typed
-	// created agents stay usable in untyped positions such as `dispatch(agent)`
-	// and an untyped workflow's `init(agent)`.
-	it('keeps a typed created agent assignable to bare CreatedAgent positions when payload and env type parameters are supplied', () => {
+	// created agents stay usable in untyped positions such as `dispatch(agent)`.
+	it('keeps an env-typed created agent assignable to bare CreatedAgent positions', () => {
 		interface Env {
 			DB: { query(sql: string): unknown };
 		}
-		const typed = createAgent<{ text: string }, Env>(() => ({ model: false }));
+		const typed = createAgent<Env>(() => ({ model: false }));
 		const bare: CreatedAgent = typed;
-		const initFromUntypedContext = (ctx: FlueContext) => ctx.init(typed);
 
 		expect(bare.__flueCreatedAgent).toBe(true);
-		expect(initFromUntypedContext).toBeInstanceOf(Function);
 	});
 
-	it('rejects a typed created agent at compile time when a typed context expects an incompatible payload', () => {
-		const typed = createAgent<{ text: string }>(() => ({ model: false }));
-		const initFromMismatchedContext = (ctx: FlueContext<{ other: number }>) =>
-			// @ts-expect-error — the agent's payload shape does not match the context's payload.
-			ctx.init(typed);
+	it('allows runtime config in workflows with different payload types', () => {
+		interface Env {
+			DB: { query(sql: string): unknown };
+		}
+		const initFromFirstWorkflow = (ctx: FlueContext<{ text: string }, Env>) =>
+			ctx.init({ model: false });
+		const initFromSecondWorkflow = (ctx: FlueContext<{ other: number }, Env>) =>
+			ctx.init({ model: false });
 
-		expect(initFromMismatchedContext).toBeInstanceOf(Function);
+		expect(initFromFirstWorkflow).toBeInstanceOf(Function);
+		expect(initFromSecondWorkflow).toBeInstanceOf(Function);
 	});
 });
 
@@ -167,12 +165,12 @@ describe('defineAgentProfile()', () => {
 			subagents: [{ name: 'profile_agent', model: false }],
 		});
 		const harness = await createContext().init(
-			createAgent(() => ({
+			{
 				profile,
 				skills: [{ name: 'runtime_skill', description: 'Runtime skill.' }],
 				tools: [createTool('runtime_tool')],
 				subagents: [{ name: 'runtime_agent', model: false }],
-			})),
+			},
 		);
 		const session = await harness.session();
 
@@ -189,17 +187,17 @@ describe('defineAgentProfile()', () => {
 	it('rejects duplicate tool names when a created agent repeats a profile tool name', async () => {
 		await expect(
 			createContext().init(
-				createAgent(() => ({
+				{
 					profile: defineAgentProfile({ model: false, tools: [createTool('lookup')] }),
 					tools: [createTool('lookup')],
-				})),
+				},
 			),
 		).rejects.toThrow('duplicate tool name "lookup"');
 	});
 
 	it('replaces scalar profile defaults when a created agent supplies scalar overrides', async () => {
 		const profile = defineAgentProfile({ model: 'profile/model' });
-		const harness = await createContext().init(createAgent(() => ({ profile, model: false })));
+		const harness = await createContext().init({ profile, model: false });
 		const session = await harness.session();
 
 		await expect(session.prompt('Answer without a model.')).rejects.toThrow(
@@ -247,7 +245,7 @@ describe('defineAgentProfile()', () => {
 
 	it('accepts durability config when a created agent supplies it', async () => {
 		const harness = await createContext().init(
-			createAgent(() => ({ model: false, durability: { maxAttempts: 3, timeoutMs: 7_200_000 } })),
+			{ model: false, durability: { maxAttempts: 3, timeoutMs: 7_200_000 } },
 		);
 		expect(harness).toBeDefined();
 	});

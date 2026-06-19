@@ -58,13 +58,11 @@ export interface DirectAgentPayload {
 }
 
 /** Context passed to a {@link createAgent} initializer. */
-export interface AgentCreateContext<TPayload = unknown, TEnv = Record<string, any>> {
-	/** Agent instance id, or workflow run id when initialized with `ctx.init()`. */
+export interface AgentCreateContext<TEnv = Record<string, any>> {
+	/** Stable agent instance id. */
 	readonly id: string;
 	/** Platform environment bindings supplied by the runtime. */
 	readonly env: TEnv;
-	/** Workflow payload when initialized with `ctx.init()`; otherwise `undefined`. */
-	readonly payload: TPayload | undefined;
 }
 
 /**
@@ -361,7 +359,7 @@ export interface AgentProfile {
 	durability?: DurabilityConfig;
 }
 
-/** Configuration returned by a {@link createAgent} initializer. */
+/** Configuration passed to {@link FlueContext.init} or returned by a {@link createAgent} initializer. */
 export interface AgentRuntimeConfig {
 	/** Reusable baseline profile. Created-agent fields replace or extend profile values. */
 	profile?: AgentProfile;
@@ -409,15 +407,12 @@ export interface AgentHarnessOptions {
 }
 
 /** Opaque agent initializer created by {@link createAgent}. */
-export interface CreatedAgent<TPayload = unknown, TEnv = Record<string, any>> {
+export interface CreatedAgent<TEnv = Record<string, any>> {
 	readonly __flueCreatedAgent: true;
 	// Deliberately method syntax (not an arrow-typed property): methods are
-	// bivariant under strictFunctionTypes, so payload/env-typed created agents
-	// remain assignable to bare `CreatedAgent` positions such as `dispatch()`
-	// and an untyped `FlueContext.init()`.
-	initialize(
-		context: AgentCreateContext<TPayload, TEnv>,
-	): AgentRuntimeConfig | Promise<AgentRuntimeConfig>;
+	// bivariant under strictFunctionTypes, so env-typed created agents remain
+	// assignable to bare `CreatedAgent` positions such as `dispatch()`.
+	initialize(context: AgentCreateContext<TEnv>): AgentRuntimeConfig | Promise<AgentRuntimeConfig>;
 }
 
 // ─── Flue Context ──────────────────────────────────────────────────────────
@@ -460,10 +455,11 @@ export interface FlueContext<TPayload = unknown, TEnv = Record<string, any>> {
 	/** Emit observable structured log events, persisted in a run stream only during a workflow run. */
 	readonly log: FlueLogger;
 	/**
-	 * Initialize a created agent for this workflow invocation. Each harness name
-	 * may be initialized once per context. Defaults to the `'default'` harness.
+	 * Initialize an agent harness for this workflow invocation from runtime
+	 * configuration. Each harness name may be initialized once per context.
+	 * Defaults to the `'default'` harness.
 	 */
-	init(agent: CreatedAgent<TPayload, TEnv>, options?: AgentHarnessOptions): Promise<FlueHarness>;
+	init(runtimeConfig: AgentRuntimeConfig, options?: AgentHarnessOptions): Promise<FlueHarness>;
 }
 
 export interface FlueLogger {
