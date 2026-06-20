@@ -1188,7 +1188,7 @@ describe('session.task()', () => {
 		expect(store.records.has(parentKey)).toBe(false);
 	});
 
-	it('rejects recursive delegation when task depth exceeds the supported limit', async () => {
+	it('rejects recursive delegation when delegation depth exceeds the supported limit', async () => {
 		const provider = createProvider([{ id: 'reviewer' }]);
 		let rejectedTaskResult: unknown;
 		provider.setResponses([
@@ -1225,7 +1225,7 @@ describe('session.task()', () => {
 			role: 'toolResult',
 			toolName: 'task',
 			isError: true,
-			content: [{ type: 'text', text: 'Maximum task depth (4) exceeded.' }],
+			content: [{ type: 'text', text: 'Maximum delegation depth (4) exceeded.' }],
 		});
 	});
 });

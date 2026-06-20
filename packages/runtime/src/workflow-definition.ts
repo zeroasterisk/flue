@@ -9,7 +9,6 @@ import {
 	type JsonValue,
 } from './action.ts';
 import { isAgentDefinition } from './agent-definition.ts';
-import { isTopLevelObjectSchema, isValibotSchema } from './schema.ts';
 import type { AgentDefinition } from './types.ts';
 
 type InlineRunResult<S extends ActionOutputSchema | undefined> = S extends ActionOutputSchema
@@ -21,14 +20,6 @@ export interface WorkflowDefinition<TAction extends ActionDefinition = ActionDef
 	readonly agent: AgentDefinition;
 	readonly action: TAction;
 }
-
-export type ExtractedWorkflow<TAction extends ActionDefinition = ActionDefinition> =
-	WorkflowDefinition<TAction>;
-
-export type InlineWorkflow<
-	TInput extends ActionInputSchema | undefined = ActionInputSchema | undefined,
-	TOutput extends ActionOutputSchema | undefined = ActionOutputSchema | undefined,
-> = WorkflowDefinition<ActionDefinition<TInput, TOutput>>;
 
 const workflowDefinitions = new WeakSet<object>();
 
@@ -53,11 +44,13 @@ type InlineWorkflowOptions<
 
 export function defineWorkflow<TAction extends ActionDefinition>(
 	options: ExtractedWorkflowOptions<TAction>,
-): ExtractedWorkflow<TAction>;
+): WorkflowDefinition<TAction>;
 export function defineWorkflow<
 	const TInput extends ActionInputSchema | undefined = undefined,
 	const TOutput extends ActionOutputSchema | undefined = undefined,
->(options: InlineWorkflowOptions<TInput, TOutput>): InlineWorkflow<TInput, TOutput>;
+>(
+	options: InlineWorkflowOptions<TInput, TOutput>,
+): WorkflowDefinition<ActionDefinition<TInput, TOutput>>;
 export function defineWorkflow(
 	options: ExtractedWorkflowOptions<ActionDefinition> | InlineWorkflowOptions<any, any>,
 ): WorkflowDefinition {
@@ -80,17 +73,6 @@ export function defineWorkflow(
 			throw new Error('[flue] defineWorkflow({ action }) does not accept input or output.');
 		}
 		return makeWorkflowDefinition(options.agent, options.action);
-	}
-	if (typeof options.run !== 'function') {
-		throw new Error('[flue] defineWorkflow({ run }) must be a function.');
-	}
-	if (options.input !== undefined) {
-		if (!isValibotSchema(options.input) || !isTopLevelObjectSchema(options.input)) {
-			throw new Error('[flue] defineWorkflow({ input }) must be a top-level object Valibot schema.');
-		}
-	}
-	if (options.output !== undefined && !isValibotSchema(options.output)) {
-		throw new Error('[flue] defineWorkflow({ output }) must be a Valibot schema.');
 	}
 	const action = defineAction({
 		name: 'workflow',

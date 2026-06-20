@@ -130,7 +130,7 @@ guide/routing -- Routing
 guide/sandboxes -- Sandboxes
   Give agents a workspace for files and command-driven work.
 guide/schedules -- Schedules
-  Run Flue agents on a schedule with Cloudflare or Node.js.
+  Invoke Flue workflows or dispatch agent input on a schedule with Cloudflare or Node.js.
 guide/skills -- Skills
   Add Agent Skills to Flue agents and invoke them from sessions.
 guide/subagents -- Subagents

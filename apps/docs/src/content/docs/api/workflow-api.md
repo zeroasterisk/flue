@@ -12,14 +12,14 @@ The Workflow API is exported from `@flue/runtime`.
 function defineWorkflow<TAction extends ActionDefinition>(options: {
   agent: AgentDefinition;
   action: TAction;
-}): ExtractedWorkflow<TAction>;
+}): WorkflowDefinition<TAction>;
 
 function defineWorkflow<TInput, TOutput>(options: {
   agent: AgentDefinition;
   input?: TInput;
   output?: TOutput;
   run(context: ActionContext<TInput>): unknown | Promise<unknown>;
-}): InlineWorkflow<TInput, TOutput>;
+}): WorkflowDefinition<ActionDefinition<TInput, TOutput>>;
 ```
 
 Creates a branded workflow value. Default-export it from a discovered `workflows/<name>.ts` module.

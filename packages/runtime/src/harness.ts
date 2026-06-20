@@ -174,7 +174,7 @@ export class Harness implements FlueHarness {
 			onAgentEvent: this.decorateEventCallback(this.eventCallback),
 			agentTools: this.agentTools,
 			toolFactory: this.toolFactory,
-			taskDepth: this.scopeDepth,
+			delegationDepth: this.scopeDepth,
 			createTaskSession: (taskOptions) => this.createTaskSession(taskOptions),
 			actions: this.actions,
 			createActionHarness: (actionOptions) => this.createActionHarness(actionOptions),
@@ -271,14 +271,14 @@ export class Harness implements FlueHarness {
 			onAgentEvent: eventCallback,
 			agentTools: taskAgent ? (taskAgent.tools ?? []) : this.agentTools,
 			toolFactory: this.toolFactory,
-			taskDepth: options.depth,
+			delegationDepth: options.depth,
 			createTaskSession: (childOptions) => this.createTaskSession(childOptions),
 			actions: taskConfig.actions ?? [],
 			createActionHarness: (actionOptions) => this.createActionHarness(actionOptions),
 		});
 	}
 
-	private createActionHarness: import('./session.ts').CreateActionHarness = async (options) => {
+	private createActionHarness: import('./session.ts').CreateActionHarness = (options) => {
 		const scope = createActionScopeName(options.invocationId);
 		const nestedScope = this.scopeName ? `${this.scopeName}:${scope}` : scope;
 		const harness = new Harness(

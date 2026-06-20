@@ -26,7 +26,7 @@ Defines reusable finite behavior. The returned frozen value can be bound to a wo
 | `output`      | No       | Valibot schema for the returned value.                                                       |
 | `run`         | Yes      | Finite handler receiving `ActionContext`.                                                    |
 
-Definition rejects missing metadata, non-Valibot schemas, and input schemas whose top level is not an object.
+Definition rejects missing metadata, non-Valibot schemas, and input schemas whose top level is not an object. Inline `defineWorkflow({ run })` definitions delegate these schema checks to `defineAction()` and report the same errors.
 
 ## `ActionContext`
 

@@ -198,6 +198,18 @@ describe('defineWorkflow()', () => {
 		expect(inline).not.toHaveProperty('description');
 	});
 
+	it('delegates inline schema validation to defineAction()', () => {
+		const agent = defineAgent(() => ({ model: false }));
+
+		expect(() =>
+			defineWorkflow({
+				agent,
+				input: v.string() as never,
+				run: async () => undefined,
+			}),
+		).toThrow('defineAction({ input }) must be a top-level object schema');
+	});
+
 	it('excludes undefined-producing inline output schemas from the public type', () => {
 		const agent = defineAgent(() => ({ model: false }));
 		const invalidOutput = v.undefined();

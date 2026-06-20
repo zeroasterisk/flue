@@ -23,6 +23,7 @@ describe('package entrypoints', () => {
 		expect(runtime).toMatchObject({
 			ActionInputValidationError: expect.any(Function),
 			ActionOutputValidationError: expect.any(Function),
+			DelegationDepthExceededError: expect.any(Function),
 			connectMcpServer: expect.any(Function),
 			defineAgent: expect.any(Function),
 			defineWorkflow: expect.any(Function),
@@ -49,6 +50,14 @@ describe('package entrypoints', () => {
 
 		expect(rootDeclaration).not.toContain('ActionSessionRef');
 		expect(adapterDeclaration).toContain('ActionSessionRef');
+	});
+
+	it('exposes only WorkflowDefinition from the public workflow type surface', () => {
+		const declarations = readFileSync('dist/index.d.mts', 'utf8');
+
+		expect(declarations).toContain('WorkflowDefinition');
+		expect(declarations).not.toContain('ExtractedWorkflow');
+		expect(declarations).not.toContain('InlineWorkflow');
 	});
 
 	it('exposes flue() when a consumer imports @flue/runtime/routing', async () => {

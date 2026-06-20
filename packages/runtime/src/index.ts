@@ -37,7 +37,7 @@ export {
 	SubmissionInterruptedError,
 	SubmissionRetryExhaustedError,
 	SubmissionTimeoutError,
-	TaskDepthExceededError,
+	DelegationDepthExceededError,
 	ToolInputValidationError,
 	ToolNameConflictError,
 	type ToolValidationIssue,
@@ -68,7 +68,7 @@ export type {
 export { bash, createSandboxSessionEnv, type SandboxApi } from './sandbox.ts';
 export { defineTool } from './tool.ts';
 export { defineWorkflow } from './workflow-definition.ts';
-export type { ExtractedWorkflow, InlineWorkflow, WorkflowDefinition } from './workflow-definition.ts';
+export type { WorkflowDefinition } from './workflow-definition.ts';
 export type {
 	AgentCreateContext,
 	AgentDispatchRequest,

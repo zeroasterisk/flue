@@ -553,13 +553,13 @@ export class ModelNotConfiguredError extends FlueError {
 	}
 }
 
-export class TaskDepthExceededError extends FlueError {
+export class DelegationDepthExceededError extends FlueError {
 	constructor({ maxDepth }: { maxDepth: number }) {
 		super({
-			type: 'task_depth_exceeded',
-			message: `Maximum task depth (${maxDepth}) exceeded.`,
-			details: 'The chain of delegated tasks is too deep.',
-			dev: 'Each task() delegation adds one level. Restructure the agents to delegate less deeply.',
+			type: 'delegation_depth_exceeded',
+			message: `Maximum delegation depth (${maxDepth}) exceeded.`,
+			details: 'The chain of delegated Tasks and Actions is too deep.',
+			dev: 'Each nested task() or Action delegation adds one level. Restructure the agents to delegate less deeply.',
 		});
 	}
 }
