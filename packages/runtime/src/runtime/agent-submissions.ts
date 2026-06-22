@@ -4,9 +4,11 @@ import type {
 	AgentSubmissionStore,
 	SubmissionAttemptRef,
 	SubmissionDurability,
+	SubmissionTerminalOutbox,
 } from '../agent-execution-store.ts';
 import type { FlueContextInternal } from '../client.ts';
 import {
+	FlueError,
 	SubmissionInterruptedError,
 	SubmissionRetryExhaustedError,
 	SubmissionTimeoutError,
@@ -307,6 +309,7 @@ export async function reconcileInterruptedSubmission(
 	submission: AgentSubmission,
 	agent: AgentDefinition,
 	createContext: (dispatchId: string | undefined) => FlueContextInternal,
+	deliverTerminalEvent: (terminal: SubmissionTerminalOutbox) => Promise<string>,
 	lease?: { ownerId: string; leaseExpiresAt: number },
 ): Promise<ReconciliationResult> {
 	const { input } = submission;
@@ -336,14 +339,19 @@ export async function reconcileInterruptedSubmission(
 	// gets no later checkpoint.
 	const journal = await submissions.getTurnJournal(submission.submissionId);
 	if (state === 'completed') {
-		// Settle as success and surface the persisted result. When the
-		// settlement CAS is lost (another claimant settled first) the result
-		// is still real — return it so a live observer resolves instead of
-		// hanging; only the CAS winner emits the durable settlement event.
-		const settled = await submissions.completeSubmission(attempt);
-		if (settled) {
-			emitSubmissionSettled(ctx, submission.submissionId, 'completed');
-			if (journal?.streamKey) await submissions.deleteStreamChunkSegments(journal.streamKey);
+		const settled =
+			submission.kind === 'direct'
+				? await settleDirectSubmission(
+						submissions,
+						attempt,
+						ctx,
+						deliverTerminalEvent,
+						'completed',
+						inspected.result,
+					)
+				: await submissions.completeSubmission(attempt);
+		if (settled && journal?.streamKey) {
+			await submissions.deleteStreamChunkSegments(journal.streamKey);
 		}
 		return { disposition: 'completed', result: inspected.result };
 	}
@@ -374,6 +382,7 @@ export async function reconcileInterruptedSubmission(
 			'exhausted_retry_budget',
 			error,
 			createContext,
+			deliverTerminalEvent,
 			journal?.streamKey,
 		);
 	}
@@ -389,6 +398,7 @@ export async function reconcileInterruptedSubmission(
 			'exceeded_timeout',
 			error,
 			createContext,
+			deliverTerminalEvent,
 			journal?.streamKey,
 		);
 	}
@@ -517,6 +527,7 @@ export async function reconcileInterruptedSubmission(
 			'interrupted_before_input_marker',
 			error,
 			createContext,
+			deliverTerminalEvent,
 			journal?.streamKey,
 		);
 	}
@@ -542,6 +553,7 @@ export async function reconcileInterruptedSubmission(
 		'interrupted_after_input_application',
 		error,
 		createContext,
+		deliverTerminalEvent,
 		journal?.streamKey,
 		interruptedTools,
 	);
@@ -592,6 +604,7 @@ export interface ProcessSubmissionOptions {
 	createContext: (dispatchId: string | undefined) => FlueContextInternal;
 	/** Observer registry for direct submission events and settlement. */
 	observers: Pick<AgentSubmissionObserverRegistry, 'publish' | 'complete' | 'fail'>;
+	deliverTerminalEvent: (terminal: SubmissionTerminalOutbox) => Promise<string>;
 	onInteractionStart?: (interaction: {
 		agentName: string;
 		instanceId: string;
@@ -701,31 +714,41 @@ export async function processSubmission(opts: ProcessSubmissionOptions): Promise
 		})(ctx);
 
 	try {
-		const result = opts.wrapExecution ? await opts.wrapExecution(execute) : await execute();
-		await submissions.completeSubmission(attempt);
-		// Always notify the observer for direct submissions so the caller's
-		// completion promise resolves. When completeSubmission returns false
-		// (stale attempt, superseded by another claimant), the result is
-		// still the real response for this input — mirroring the fail path
-		// below, an unnotified observer would otherwise hang forever.
-		if (submission.kind === 'direct') observers.complete(submission.submissionId, result);
-	} catch (error) {
-		// During shutdown, the coordinator aborts active submissions at the
-		// turn boundary. Don't permanently settle the submission — leave it
-		// in 'running' so its expired lease triggers reclamation on restart.
-		// Still notify the observer so the direct prompt caller's completion
-		// promise rejects instead of hanging.
-		if (opts.isShutdownAbort?.(error)) {
-			if (submission.kind === 'direct') observers.fail(submission.submissionId, error);
+		let result: unknown;
+		try {
+			result = opts.wrapExecution ? await opts.wrapExecution(execute) : await execute();
+		} catch (error) {
+			if (opts.isShutdownAbort?.(error)) {
+				if (submission.kind === 'direct') observers.fail(submission.submissionId, error);
+				throw error;
+			}
+			const settled =
+				submission.kind === 'direct'
+					? await settleDirectSubmission(
+							submissions,
+							attempt,
+							ctx,
+							opts.deliverTerminalEvent,
+							'failed',
+							undefined,
+							error,
+						)
+					: await submissions.failSubmission(attempt, error);
+			if (submission.kind === 'direct' && settled) observers.fail(submission.submissionId, error);
 			throw error;
 		}
-		await submissions.failSubmission(attempt, error);
-		// Always notify the observer for direct submissions so the caller's
-		// completion promise rejects. When failSubmission returns false
-		// (stale attempt, superseded by another coordinator), the observer
-		// would otherwise hang forever.
-		if (submission.kind === 'direct') observers.fail(submission.submissionId, error);
-		throw error;
+		const settled =
+			submission.kind === 'direct'
+				? await settleDirectSubmission(
+						submissions,
+						attempt,
+						ctx,
+						opts.deliverTerminalEvent,
+						'completed',
+						result,
+					)
+				: await submissions.completeSubmission(attempt);
+		if (submission.kind === 'direct' && settled) observers.complete(submission.submissionId, result);
 	} finally {
 		if (submission.kind === 'direct') ctx.setEventCallback(undefined);
 		opts.onSettled?.();
@@ -742,6 +765,7 @@ async function failInterruptedSubmission(
 	reason: AgentSubmissionInterruption['reason'],
 	error: Error,
 	createContext: (dispatchId: string | undefined) => FlueContextInternal,
+	deliverTerminalEvent: (terminal: SubmissionTerminalOutbox) => Promise<string>,
 	journalStreamKey: string | undefined,
 	interruptedTools?: ReadonlyArray<{ readonly name: string; readonly id: string }>,
 ): Promise<ReconciliationResult> {
@@ -770,9 +794,19 @@ async function failInterruptedSubmission(
 			terminalError,
 		);
 	}
-	const settled = await submissions.failSubmission(attempt, error);
+	const settled =
+		submission.kind === 'direct'
+			? await settleDirectSubmission(
+					submissions,
+					attempt,
+					ctx,
+					deliverTerminalEvent,
+					'failed',
+					undefined,
+					error,
+				)
+			: await submissions.failSubmission(attempt, error);
 	if (!settled) return { disposition: 'stale' };
-	emitSubmissionSettled(ctx, submission.submissionId, 'failed', error);
 	// Terminal settlement supersedes any chunk segments an interrupted turn
 	// left durable for recovery; no later checkpoint will delete them. Only
 	// the settlement CAS winner deletes — a lost CAS means another live
@@ -781,34 +815,63 @@ async function failInterruptedSubmission(
 	return { disposition: 'failed', error };
 }
 
-/**
- * Durable settlement marker for reconciliation-driven outcomes. Normal
- * processing leaves its own event trail; reconciliation settles work whose
- * original process is gone, so detached stream readers would otherwise never
- * learn the outcome. Best-effort: durable persistence rides the stream
- * subscription the coordinator wired onto the context, and a delivery
- * failure must never affect settlement itself.
- */
-function emitSubmissionSettled(
+async function settleDirectSubmission(
+	submissions: AgentSubmissionStore,
+	attempt: SubmissionAttemptRef,
 	ctx: FlueContextInternal,
-	submissionId: string,
+	deliverTerminalEvent: (terminal: SubmissionTerminalOutbox) => Promise<string>,
 	outcome: 'completed' | 'failed',
-	error?: Error,
-): void {
+	result?: unknown,
+	error?: unknown,
+): Promise<boolean> {
+	const event = ctx.createEvent({
+		type: 'submission_settled',
+		submissionId: attempt.submissionId,
+		outcome,
+		...(outcome === 'completed' ? { result } : { error: serializeSubmissionError(error) }),
+	});
+	const eventKey = `direct-submission:${attempt.submissionId}:settled`;
+	const terminal = await submissions.reserveSubmissionTerminal(attempt, { eventKey, event });
+	if (!terminal) return false;
 	try {
-		ctx.emitEvent({
-			type: 'submission_settled',
-			submissionId,
-			outcome,
-			...(error ? { error: error.message } : {}),
-		});
-	} catch (emitError) {
-		console.warn(
-			'[flue:submission-reconciliation] Failed to emit settlement event for submission',
-			submissionId,
-			emitError,
-		);
+		await ctx.flushEventCallbacks();
+	} catch (callbackError) {
+		console.error('[flue:event-stream] Event persistence failed before terminal settlement:', callbackError);
 	}
+	const offset = terminal.offset ?? (await deliverTerminalEvent(terminal));
+	if (!(await submissions.recordSubmissionTerminalOffset(attempt, eventKey, offset))) return false;
+	ctx.publishEvent(terminal.event as AttachedAgentEvent);
+	try {
+		await ctx.flushEventCallbacks();
+	} catch (callbackError) {
+		console.error('[flue:subscriber] Terminal event subscriber failed:', callbackError);
+	}
+	return submissions.finalizeSubmissionTerminal(attempt, eventKey);
+}
+
+function serializeSubmissionError(error: unknown): {
+	name?: string;
+	message: string;
+	type?: string;
+	details?: string;
+	dev?: string;
+	meta?: Record<string, unknown>;
+} {
+	if (error instanceof FlueError) {
+		return {
+			name: error.name,
+			message: error.message,
+			type: error.type,
+			details: error.details,
+			...(error.meta ? { meta: error.meta } : {}),
+		};
+	}
+	return {
+		name: 'Error',
+		message: 'The agent submission failed because of an internal error.',
+		type: 'internal_error',
+		details: 'The server encountered an unexpected error while processing the agent submission.',
+	};
 }
 
 function submissionAttemptRef(submission: AgentSubmission): SubmissionAttemptRef | null {

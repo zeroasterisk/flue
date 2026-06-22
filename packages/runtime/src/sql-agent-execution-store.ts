@@ -36,6 +36,7 @@ import type {
 	AgentTurnJournalPhase,
 	CreateTurnJournalInput,
 	SubmissionAttemptRef,
+	SubmissionTerminalOutbox,
 	SubmissionClaimRef,
 } from './agent-execution-store.ts';
 import {
@@ -63,7 +64,7 @@ import {
 	type DirectAgentSubmissionInput,
 } from './runtime/agent-submissions.ts';
 import type { DispatchInput } from './runtime/dispatch-queue.ts';
-import { ensureFlueSchemaVersion } from './schema-version.ts';
+import { FLUE_SCHEMA_VERSION, ensureFlueSchemaVersion } from './schema-version.ts';
 import { createSessionStorageKey } from './session-identity.ts';
 import {
 	createSqlPersistedChunkStore,
@@ -79,7 +80,39 @@ import type { SessionData, SessionEntry, SessionStore } from './types.ts';
  * Stamps a fresh database with the current schema version and throws when
  * the database records an unknown or newer version, then runs idempotent DDL.
  */
+function migrateSqlAgentExecutionSchema(sql: SqlStorage): void {
+	sql.exec(
+		`CREATE TABLE IF NOT EXISTS flue_meta (
+		 key TEXT PRIMARY KEY,
+		 value TEXT NOT NULL
+		)`,
+	);
+	const version = sql
+		.exec(`SELECT value FROM flue_meta WHERE key = 'schema_version'`)
+		.toArray()[0]?.value;
+	if (String(version) !== '1' || FLUE_SCHEMA_VERSION !== 2) return;
+	const tables = sql
+		.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'flue_agent_submissions'`)
+		.toArray();
+	if (tables.length > 0) {
+		const columns = new Set(
+			sql.exec('PRAGMA table_info(flue_agent_submissions)').toArray().map((row) => String(row.name)),
+		);
+		if (!columns.has('terminal_event_key')) {
+			sql.exec('ALTER TABLE flue_agent_submissions ADD COLUMN terminal_event_key TEXT');
+		}
+		if (!columns.has('terminal_event_json')) {
+			sql.exec('ALTER TABLE flue_agent_submissions ADD COLUMN terminal_event_json TEXT');
+		}
+		if (!columns.has('terminal_event_offset')) {
+			sql.exec('ALTER TABLE flue_agent_submissions ADD COLUMN terminal_event_offset TEXT');
+		}
+	}
+	sql.exec(`UPDATE flue_meta SET value = ? WHERE key = 'schema_version'`, String(FLUE_SCHEMA_VERSION));
+}
+
 export function ensureSqlAgentExecutionTables(sql: SqlStorage): void {
+	migrateSqlAgentExecutionSchema(sql);
 	ensureFlueSchemaVersion(sql);
 	ensureSessionTable(sql);
 	ensureSubmissionTable(sql);
@@ -459,7 +492,7 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 				.exec(
 					`SELECT 1
 					 FROM flue_agent_submissions
-				 WHERE status IN ('queued', 'running')
+				 WHERE status IN ('queued', 'running', 'terminalizing')
 				 LIMIT 1`,
 				)
 				.toArray().length > 0
@@ -476,7 +509,7 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 				     SELECT 1
 				     FROM flue_agent_submissions AS earlier
 				     WHERE earlier.session_key = current.session_key
-				       AND earlier.status IN ('queued', 'running')
+				       AND earlier.status IN ('queued', 'running', 'terminalizing')
 				       AND earlier.sequence < current.sequence
 				   )
 				 ORDER BY current.sequence ASC`,
@@ -497,6 +530,19 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 				.toArray(),
 			'active',
 		);
+	}
+
+	async listPendingTerminalOutboxes(): Promise<SubmissionTerminalOutbox[]> {
+		return this.sql
+			.exec(
+				`SELECT submission_id, session_key, attempt_id, terminal_event_key,
+				        terminal_event_json, terminal_event_offset
+				 FROM flue_agent_submissions
+				 WHERE status = 'terminalizing'
+				 ORDER BY sequence ASC`,
+			)
+			.toArray()
+			.map(parseTerminalOutbox);
 	}
 
 	// ── Attempt markers ──────────────────────────────────────────────────
@@ -595,7 +641,7 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 				.exec(
 					`SELECT 1
 					 FROM flue_agent_submissions
-					 WHERE session_key = ? AND status IN ('queued', 'running')
+					 WHERE session_key = ? AND status IN ('queued', 'running', 'terminalizing')
 					 LIMIT 1`,
 					sessionKey,
 				)
@@ -701,7 +747,7 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 				     SELECT 1
 				     FROM flue_agent_submissions AS earlier
 				     WHERE earlier.session_key = current.session_key
-				       AND earlier.status IN ('queued', 'running')
+				       AND earlier.status IN ('queued', 'running', 'terminalizing')
 				       AND earlier.sequence < current.sequence
 				   )
 				 RETURNING ${submissionColumns}`,
@@ -761,6 +807,80 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 					attempt.attemptId,
 				)
 				.toArray().length > 0
+		);
+	}
+
+	async reserveSubmissionTerminal(
+		attempt: SubmissionAttemptRef,
+		terminal: { eventKey: string; event: unknown },
+	): Promise<SubmissionTerminalOutbox | null> {
+		const eventJson = JSON.stringify(terminal.event);
+		return this.transactionSync(() => {
+			const inserted = this.sql
+				.exec(
+					`UPDATE flue_agent_submissions
+					 SET status = 'terminalizing', terminal_event_key = ?, terminal_event_json = ?
+					 WHERE submission_id = ? AND kind = 'direct' AND status = 'running' AND attempt_id = ?
+					 RETURNING submission_id, session_key, attempt_id, terminal_event_key,
+					           terminal_event_json, terminal_event_offset`,
+					terminal.eventKey,
+					eventJson,
+					attempt.submissionId,
+					attempt.attemptId,
+				)
+				.toArray()[0];
+			if (inserted) return parseTerminalOutbox(inserted);
+			const existing = this.sql
+				.exec(
+					`SELECT submission_id, session_key, attempt_id, terminal_event_key,
+					        terminal_event_json, terminal_event_offset
+					 FROM flue_agent_submissions
+					 WHERE submission_id = ? AND kind = 'direct' AND status = 'terminalizing'
+					   AND attempt_id = ? AND terminal_event_key = ? AND terminal_event_json = ?`,
+					attempt.submissionId,
+					attempt.attemptId,
+					terminal.eventKey,
+					eventJson,
+				)
+				.toArray()[0];
+			return existing ? parseTerminalOutbox(existing) : null;
+		});
+	}
+
+	async recordSubmissionTerminalOffset(
+		attempt: SubmissionAttemptRef,
+		eventKey: string,
+		offset: string,
+	): Promise<boolean> {
+		return this.updateOwnedSubmission(
+			`UPDATE flue_agent_submissions
+			 SET terminal_event_offset = COALESCE(terminal_event_offset, ?)
+			 WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ?
+			   AND terminal_event_key = ?
+			   AND (terminal_event_offset IS NULL OR terminal_event_offset = ?)
+			 RETURNING submission_id`,
+			offset,
+			attempt.submissionId,
+			attempt.attemptId,
+			eventKey,
+			offset,
+		);
+	}
+
+	async finalizeSubmissionTerminal(
+		attempt: SubmissionAttemptRef,
+		eventKey: string,
+	): Promise<boolean> {
+		return this.updateOwnedSubmission(
+			`UPDATE flue_agent_submissions
+			 SET status = 'settled', settled_at = ?, error = NULL
+			 WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ?
+			   AND terminal_event_key = ? AND terminal_event_offset IS NOT NULL
+			 RETURNING submission_id`,
+			Date.now(),
+			attempt.submissionId,
+			attempt.attemptId,
+			eventKey,
 		);
 	}
 
@@ -986,6 +1106,31 @@ function parseTurnJournal(row: SqlRow): AgentTurnJournal {
 	};
 }
 
+function parseTerminalOutbox(row: SqlRow): SubmissionTerminalOutbox {
+	if (
+		typeof row.submission_id !== 'string' ||
+		typeof row.session_key !== 'string' ||
+		typeof row.attempt_id !== 'string' ||
+		typeof row.terminal_event_key !== 'string' ||
+		typeof row.terminal_event_json !== 'string' ||
+		(row.terminal_event_offset !== null &&
+			row.terminal_event_offset !== undefined &&
+			typeof row.terminal_event_offset !== 'string')
+	) {
+		throw new Error('[flue] Persisted submission terminal outbox is malformed.');
+	}
+	return {
+		submissionId: row.submission_id,
+		sessionKey: row.session_key,
+		attemptId: row.attempt_id,
+		eventKey: row.terminal_event_key,
+		event: JSON.parse(row.terminal_event_json),
+		...(typeof row.terminal_event_offset === 'string'
+			? { offset: row.terminal_event_offset }
+			: {}),
+	};
+}
+
 function parseSubmission(
 	row: SqlRow,
 	chunks: Parameters<typeof hydratePersistedDirectSubmission>[1],
@@ -996,7 +1141,10 @@ function parseSubmission(
 		typeof row.session_key !== 'string' ||
 		(row.kind !== 'dispatch' && row.kind !== 'direct') ||
 		typeof row.payload !== 'string' ||
-		(row.status !== 'queued' && row.status !== 'running' && row.status !== 'settled') ||
+		(row.status !== 'queued' &&
+			row.status !== 'running' &&
+			row.status !== 'terminalizing' &&
+			row.status !== 'settled') ||
 		typeof row.accepted_at !== 'number' ||
 		(row.attempt_id !== null &&
 			row.attempt_id !== undefined &&
@@ -1015,7 +1163,7 @@ function parseSubmission(
 				row.input_applied_at !== null ||
 				row.recovery_requested_at !== null ||
 				row.started_at !== null)) ||
-		(row.status === 'running' &&
+		((row.status === 'running' || row.status === 'terminalizing') &&
 			(typeof row.attempt_id !== 'string' || typeof row.started_at !== 'number')) ||
 		typeof row.attempt_count !== 'number' ||
 		typeof row.max_retry !== 'number' ||
@@ -1134,7 +1282,10 @@ function ensureSubmissionTable(sql: SqlStorage): void {
 		 max_retry INTEGER NOT NULL DEFAULT ${DURABILITY_DEFAULT_MAX_ATTEMPTS},
 		 timeout_at INTEGER NOT NULL DEFAULT 0,
 		 owner_id TEXT,
-		 lease_expires_at INTEGER NOT NULL DEFAULT 0
+		 lease_expires_at INTEGER NOT NULL DEFAULT 0,
+		 terminal_event_key TEXT,
+		 terminal_event_json TEXT,
+		 terminal_event_offset TEXT
 		)`,
 	);
 	sql.exec(

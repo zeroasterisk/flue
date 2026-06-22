@@ -170,7 +170,7 @@ describe('postgres() PersistenceAdapter', () => {
 		await adapter.migrate?.();
 
 		const rows = await runner.query(`SELECT value FROM flue_meta WHERE key = 'schema_version'`);
-		expect(rows).toEqual([{ value: '1' }]);
+		expect(rows).toEqual([{ value: '2' }]);
 
 		await runner.query(`UPDATE flue_meta SET value = '999' WHERE key = 'schema_version'`);
 		await expect(adapter.migrate?.()).rejects.toThrowError(PersistedSchemaVersionError);

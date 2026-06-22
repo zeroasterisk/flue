@@ -425,6 +425,122 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 			});
 		});
 
+		describe('direct terminal outbox', () => {
+			it('reserves a canonical terminal event only for the owning direct attempt', async () => {
+				const store = await create();
+				await store.submissions.admitDirect(directInput());
+				await store.submissions.claimSubmission(claim('direct-1', 'attempt-1'));
+				const terminal = { type: 'submission_settled', submissionId: 'direct-1', v: 1 };
+
+				expect(
+					await store.submissions.reserveSubmissionTerminal(attempt('direct-1', 'stale'), {
+						eventKey: 'direct-1:terminal',
+						event: terminal,
+					}),
+				).toBeNull();
+				const reserved = await store.submissions.reserveSubmissionTerminal(
+					attempt('direct-1', 'attempt-1'),
+					{ eventKey: 'direct-1:terminal', event: terminal },
+				);
+				expect(reserved).toEqual({
+					submissionId: 'direct-1',
+					sessionKey: 'agent-session:["agent-1","default","default"]',
+					attemptId: 'attempt-1',
+					eventKey: 'direct-1:terminal',
+					event: terminal,
+				});
+				expect(await store.submissions.getSubmission('direct-1')).toMatchObject({
+					status: 'terminalizing',
+				});
+			});
+
+			it('replays an exact reservation and rejects a conflicting terminal payload', async () => {
+				const store = await create();
+				await store.submissions.admitDirect(directInput());
+				await store.submissions.claimSubmission(claim('direct-1', 'attempt-1'));
+				const ref = attempt('direct-1', 'attempt-1');
+				const first = await store.submissions.reserveSubmissionTerminal(ref, {
+					eventKey: 'direct-1:terminal',
+					event: { outcome: 'completed' },
+				});
+				expect(
+					await store.submissions.reserveSubmissionTerminal(ref, {
+						eventKey: 'direct-1:terminal',
+						event: { outcome: 'completed' },
+					}),
+				).toEqual(first);
+				expect(
+					await store.submissions.reserveSubmissionTerminal(ref, {
+						eventKey: 'direct-1:terminal',
+						event: { outcome: 'failed' },
+					}),
+				).toBeNull();
+			});
+
+			it('keeps terminalizing work unsettled and ordered but not runnable or reclaimable', async () => {
+				const store = await create();
+				await store.submissions.admitDirect(directInput());
+				await store.submissions.admitDirect(directInput({ submissionId: 'direct-2' }));
+				await store.submissions.claimSubmission({
+					...claim('direct-1', 'attempt-1'),
+					leaseExpiresAt: 1,
+				});
+				await store.submissions.reserveSubmissionTerminal(attempt('direct-1', 'attempt-1'), {
+					eventKey: 'direct-1:terminal',
+					event: { outcome: 'completed' },
+				});
+
+				expect(await store.submissions.hasUnsettledSubmissions()).toBe(true);
+				expect(await store.submissions.listRunnableSubmissions()).toEqual([]);
+				expect(await store.submissions.listRunningSubmissions()).toEqual([]);
+				expect(await store.submissions.listExpiredSubmissions()).toEqual([]);
+			});
+
+			it('lists, records, and finalizes pending terminal outboxes after append', async () => {
+				const store = await create();
+				await store.submissions.admitDirect(directInput());
+				await store.submissions.claimSubmission(claim('direct-1', 'attempt-1'));
+				const ref = attempt('direct-1', 'attempt-1');
+				await store.submissions.reserveSubmissionTerminal(ref, {
+					eventKey: 'direct-1:terminal',
+					event: { outcome: 'completed' },
+				});
+				expect(await store.submissions.finalizeSubmissionTerminal(ref, 'direct-1:terminal')).toBe(
+					false,
+				);
+				expect(
+					await store.submissions.recordSubmissionTerminalOffset(
+						ref,
+						'direct-1:terminal',
+						'0000000000000000_0000000000000004',
+					),
+				).toBe(true);
+				expect(await store.submissions.listPendingTerminalOutboxes()).toEqual([
+					expect.objectContaining({ offset: '0000000000000000_0000000000000004' }),
+				]);
+				expect(await store.submissions.finalizeSubmissionTerminal(ref, 'direct-1:terminal')).toBe(
+					true,
+				);
+				expect(await store.submissions.listPendingTerminalOutboxes()).toEqual([]);
+				expect(await store.submissions.hasUnsettledSubmissions()).toBe(false);
+			});
+
+			it('leaves dispatch settlement behavior unchanged', async () => {
+				const store = await create();
+				await store.submissions.admitDispatch(dispatchInput());
+				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
+				expect(
+					await store.submissions.reserveSubmissionTerminal(attempt('dispatch-1', 'attempt-1'), {
+						eventKey: 'dispatch-1:terminal',
+						event: { outcome: 'completed' },
+					}),
+				).toBeNull();
+				expect(
+					await store.submissions.completeSubmission(attempt('dispatch-1', 'attempt-1')),
+				).toBe(true);
+			});
+		});
+
 		// ── Durability ───────────────────────────────────────────────────
 
 		describe('durability', () => {

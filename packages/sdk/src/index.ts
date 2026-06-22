@@ -26,12 +26,22 @@ export type {
 	AgentPromptResult,
 	AgentSendResult,
 } from './public/invoke.ts';
+export {
+	FlueExecutionError,
+	type AgentWaitOptions,
+	type FlueExecutionFailure,
+	type FlueExecutionTarget,
+	type WorkflowRunOptions,
+	type WorkflowRunResult,
+} from './public/settle.ts';
 export type { FlueEventStream, FlueStreamOptions } from './public/stream.ts';
 export type {
 	AgentPromptResponse,
+	AgentSubmissionSettledEvent,
 	AttachedAgentEvent,
 	FlueEvent,
 	FluePublicError,
+	FlueSerializedError,
 	LlmAssistantMessage,
 	LlmImageContent,
 	LlmMessage,

@@ -503,6 +503,143 @@ describe('createFlueClient', () => {
 		});
 	});
 
+	describe('agents.wait()', () => {
+		it('follows an admission from its offset and returns its correlated result', async () => {
+			const offsets: Array<string | null> = [];
+			const seenEvents: string[] = [];
+			const client = createFlueClient({
+				baseUrl: 'https://flue.test',
+				fetch: async (input) => {
+					const url = new URL(typeof input === 'string' ? input : new Request(input).url);
+					offsets.push(url.searchParams.get('offset'));
+					return dsJsonResponse(
+						[
+							{ type: 'text_delta', submissionId: 'other', text: 'ignore' },
+							{ type: 'text_delta', submissionId: 'submission-1', text: 'hello' },
+							{
+								type: 'submission_settled',
+								submissionId: 'submission-1',
+								outcome: 'completed',
+								result: { text: 'done' },
+							},
+						],
+						{ closed: true },
+					);
+				},
+			});
+
+			await expect(
+				client.agents.wait<{ text: string }>(
+					{
+						streamUrl: 'https://flue.test/agents/hello/instance-1',
+						offset: 'admission-offset',
+						submissionId: 'submission-1',
+					},
+					{ onEvent: (event) => seenEvents.push(event.type) },
+				),
+			).resolves.toEqual({ text: 'done' });
+			expect(offsets).toEqual(['admission-offset']);
+			expect(seenEvents).toEqual(['text_delta', 'submission_settled']);
+		});
+
+		it('throws a structured SDK error when the submission fails', async () => {
+			const client = createFlueClient({
+				baseUrl: 'https://flue.test',
+				fetch: async () =>
+					dsJsonResponse(
+						[
+							{
+								type: 'submission_settled',
+								submissionId: 'submission-1',
+								outcome: 'failed',
+								error: { name: 'Error', message: 'model unavailable' },
+							},
+						],
+						{ closed: true },
+					),
+			});
+
+			const error = await client.agents
+				.wait({
+					streamUrl: 'https://flue.test/agents/hello/instance-1',
+					offset: 'admission-offset',
+					submissionId: 'submission-1',
+				})
+				.catch((error: unknown) => error);
+
+			expect(error).toMatchObject({
+				name: 'FlueExecutionError',
+				target: 'agent_submission',
+				targetId: 'submission-1',
+				failure: 'failed',
+				error: { name: 'Error', message: 'model unavailable' },
+			});
+		});
+	});
+
+	describe('workflows.run()', () => {
+		it('invokes a workflow, delivers events, and returns the run_end result', async () => {
+			const requests: Request[] = [];
+			const seenEvents: string[] = [];
+			const client = createFlueClient({
+				baseUrl: 'https://flue.test',
+				fetch: async (input, init) => {
+					const request = new Request(input, init);
+					requests.push(request);
+					if (request.method === 'POST') return Response.json({ runId: 'run-1' }, { status: 202 });
+					return dsJsonResponse(
+						[
+							{ type: 'run_start', runId: 'run-1' },
+							{ type: 'run_end', runId: 'run-1', isError: false, result: 42, durationMs: 10 },
+						],
+						{ closed: true },
+					);
+				},
+			});
+
+			await expect(
+				client.workflows.run<number>('report', {
+					input: { month: 'June' },
+					onEvent: (event) => seenEvents.push(event.type),
+				}),
+			).resolves.toEqual({ runId: 'run-1', result: 42 });
+			expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+				'/workflows/report',
+				'/runs/run-1',
+			]);
+			expect(seenEvents).toEqual(['run_start', 'run_end']);
+		});
+
+		it('falls back to run metadata when the stream ends without run_end', async () => {
+			const paths: string[] = [];
+			const client = createFlueClient({
+				baseUrl: 'https://flue.test',
+				fetch: async (input, init) => {
+					const request = new Request(input, init);
+					const url = new URL(request.url);
+					paths.push(`${url.pathname}${url.search}`);
+					if (request.method === 'POST') return Response.json({ runId: 'run-1' }, { status: 202 });
+					if (url.searchParams.has('meta')) {
+						return Response.json({
+							runId: 'run-1',
+							workflowName: 'report',
+							status: 'completed',
+							startedAt: '2026-06-01T00:00:00.000Z',
+							result: { summary: 'done' },
+						});
+					}
+					return dsJsonResponse([{ type: 'run_start', runId: 'run-1' }], { closed: true });
+				},
+			});
+
+			await expect(client.workflows.run('report')).resolves.toEqual({
+				runId: 'run-1',
+				result: { summary: 'done' },
+			});
+			expect(paths).toEqual(['/workflows/report', '/runs/run-1?offset=-1', '/runs/run-1?meta']);
+		});
+	});
+
 	describe('URL resolution', () => {
 		it('resolves relative base URLs against the browser origin', async () => {
 			const original = Object.getOwnPropertyDescriptor(globalThis, 'location');

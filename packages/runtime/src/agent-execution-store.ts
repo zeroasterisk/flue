@@ -27,7 +27,7 @@ export const LEASE_DURATION_MS = 30_000;
 
 // ─── Submission ─────────────────────────────────────────────────────────────
 
-type AgentSubmissionStatus = 'queued' | 'running' | 'settled';
+type AgentSubmissionStatus = 'queued' | 'running' | 'terminalizing' | 'settled';
 
 export interface AgentSubmission {
 	readonly sequence: number;
@@ -47,6 +47,15 @@ export interface AgentSubmission {
 	readonly timeoutAt: number;
 	readonly ownerId?: string;
 	readonly leaseExpiresAt: number;
+}
+
+export interface SubmissionTerminalOutbox {
+	readonly submissionId: string;
+	readonly sessionKey: string;
+	readonly attemptId: string;
+	readonly eventKey: string;
+	readonly event: unknown;
+	readonly offset?: string;
 }
 
 export interface SubmissionAttemptRef {
@@ -164,6 +173,8 @@ export interface AgentSubmissionStore {
 	listRunnableSubmissions(): Promise<AgentSubmission[]>;
 	/** All running submissions, in admission order. */
 	listRunningSubmissions(): Promise<AgentSubmission[]>;
+	/** Direct terminal events reserved for durable publication but not yet finalized. */
+	listPendingTerminalOutboxes(): Promise<SubmissionTerminalOutbox[]>;
 
 	// Turn journal lifecycle. Each submission has at most ONE journal slot.
 	/**
@@ -275,6 +286,24 @@ export interface AgentSubmissionStore {
 	 */
 	requeueSubmissionBeforeInputApplied(attempt: SubmissionAttemptRef): Promise<boolean>;
 	/**
+	 * Atomically reserve the canonical decorated terminal event for publication.
+	 * Only a running direct submission owned by `attempt` may transition to
+	 * terminalizing. Exact retries return the existing reservation; conflicting
+	 * terminal payloads return `null`.
+	 */
+	reserveSubmissionTerminal(
+		attempt: SubmissionAttemptRef,
+		terminal: { eventKey: string; event: unknown },
+	): Promise<SubmissionTerminalOutbox | null>;
+	/** Record the append offset for an owned terminalizing reservation. */
+	recordSubmissionTerminalOffset(
+		attempt: SubmissionAttemptRef,
+		eventKey: string,
+		offset: string,
+	): Promise<boolean>;
+	/** Finalize an owned terminalizing submission after its event was appended. */
+	finalizeSubmissionTerminal(attempt: SubmissionAttemptRef, eventKey: string): Promise<boolean>;
+	/**
 	 * Settle the submission successfully. Gated on a running submission
 	 * owned by `attempt`: a stale attempt or an already-settled submission
 	 * returns `false` and preserves the first terminal state.
@@ -314,7 +343,7 @@ export interface AgentSubmissionStore {
 	// Deletion
 	/**
 	 * Delete all settled submission state for the session. Three phases:
-	 * (1) reject when any submission in the session is queued or running,
+	 * (1) reject when any submission in the session is queued, running, or terminalizing,
 	 * else durably write a deletion marker that blocks new admissions;
 	 * (2) invoke `deleteSessionTree` (the runtime's snapshot deletion) —
 	 * when it throws, remove the marker so the session returns to a usable

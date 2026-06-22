@@ -1021,17 +1021,18 @@ type FlueEventVariant =
 	  }
 	| { type: 'idle' }
 	| {
-			/**
-			 * Reconciliation settled an interrupted durable agent submission.
-			 * Normal processing leaves its own event trail (operations, turns);
-			 * reconciliation settles work whose original process is gone, so
-			 * detached stream readers would otherwise never learn the outcome.
-			 */
 			type: 'submission_settled';
 			submissionId: string;
 			outcome: 'completed' | 'failed';
-			/** Terminal error message when `outcome` is `'failed'`. */
-			error?: string;
+			result?: unknown;
+			error?: {
+				name?: string;
+				message: string;
+				type?: string;
+				details?: string;
+				dev?: string;
+				meta?: Record<string, unknown>;
+			};
 	  }
 	| {
 			type: 'run_end';

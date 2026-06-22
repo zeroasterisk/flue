@@ -257,8 +257,43 @@ describe('sqlite() PersistenceAdapter', () => {
 		const rows = db.prepare(`SELECT value FROM flue_meta WHERE key = 'schema_version'`).all() as {
 			value: string;
 		}[];
-		expect(rows).toEqual([{ value: '1' }]);
+		expect(rows).toEqual([{ value: '2' }]);
 		db.close();
+	});
+
+	it('migrates version 1 submission storage to the terminal outbox schema', async () => {
+		const dir = createTempDir();
+		const dbPath = join(dir, 'migration-test.db');
+		const db = new DatabaseSync(dbPath);
+		db.exec(`
+			CREATE TABLE flue_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			INSERT INTO flue_meta (key, value) VALUES ('schema_version', '1');
+			CREATE TABLE flue_agent_submissions (
+				sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+				submission_id TEXT NOT NULL UNIQUE,
+				session_key TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				payload TEXT NOT NULL,
+				status TEXT NOT NULL,
+				accepted_at INTEGER NOT NULL
+			);
+		`);
+		db.close();
+
+		const adapter = sqlite(dbPath);
+		await adapter.migrate?.();
+		await adapter.close?.();
+		const migrated = new DatabaseSync(dbPath);
+		const columns = migrated.prepare('PRAGMA table_info(flue_agent_submissions)').all() as Array<{
+			name: string;
+		}>;
+		expect(columns.map((column) => column.name)).toEqual(
+			expect.arrayContaining(['terminal_event_key', 'terminal_event_json', 'terminal_event_offset']),
+		);
+		expect(
+			migrated.prepare(`SELECT value FROM flue_meta WHERE key = 'schema_version'`).get(),
+		).toEqual({ value: '2' });
+		migrated.close();
 	});
 
 	it('rejects opening a database stamped with a newer schema version', async () => {

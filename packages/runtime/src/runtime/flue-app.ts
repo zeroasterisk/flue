@@ -70,6 +70,7 @@ export interface WorkflowRecord {
 
 interface RuntimeBase {
 	devMode?: boolean;
+	temporaryLocalExposure?: boolean;
 	runtimeVersion?: string;
 	agents: AgentRecord[];
 	workflows: WorkflowRecord[];
@@ -642,7 +643,9 @@ const runStreamReadHandler: MiddlewareHandler = async (c) => {
 		? rt.workflows.find((record) => record.name === pointer.workflowName)
 		: undefined;
 
-	if (!workflow?.runs) throw new RunNotFoundError({ runId });
+	if (!workflow || (!workflow.runs && !rt.temporaryLocalExposure)) {
+		throw new RunNotFoundError({ runId });
+	}
 
 	return runAttachedMiddleware(c, workflow.runs, async () => {
 		if (method !== 'GET' && method !== 'HEAD') {
@@ -766,11 +769,13 @@ function normalizeAttachedRequest(request: Request, pathname: string): Request {
 }
 
 function registeredAgentsForTransport(rt: FlueRuntime): readonly string[] {
-	return rt.agents.filter((agent) => agent.route !== undefined).map((agent) => agent.name);
+	return rt.agents
+		.filter((agent) => rt.temporaryLocalExposure || agent.route !== undefined)
+		.map((agent) => agent.name);
 }
 
 function registeredWorkflowsForTransport(rt: FlueRuntime): readonly string[] {
 	return rt.workflows
-		.filter((workflow) => workflow.route !== undefined)
+		.filter((workflow) => rt.temporaryLocalExposure || workflow.route !== undefined)
 		.map((workflow) => workflow.name);
 }

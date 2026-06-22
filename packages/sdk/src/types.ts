@@ -119,6 +119,23 @@ export interface FluePublicError {
 	meta?: Record<string, unknown>;
 }
 
+export interface FlueSerializedError {
+	name?: string;
+	message: string;
+	type?: string;
+	details?: string;
+	dev?: string;
+	meta?: Record<string, unknown>;
+}
+
+export type AgentSubmissionSettledEvent = {
+	type: 'submission_settled';
+	submissionId: string;
+	outcome: 'completed' | 'failed';
+	result?: unknown;
+	error?: FlueSerializedError;
+};
+
 /** Observable workflow-run event. */
 export type FlueEvent = (
 	| {
@@ -214,19 +231,7 @@ export type FlueEvent = (
 			attributes?: Record<string, unknown>;
 	  }
 	| { type: 'idle' }
-	| {
-			/**
-			 * Recovery settled an interrupted durable agent submission. Normal
-			 * processing leaves its own event trail; recovery settles work whose
-			 * original process is gone, so stream readers would otherwise never
-			 * learn the outcome.
-			 */
-			type: 'submission_settled';
-			submissionId: string;
-			outcome: 'completed' | 'failed';
-			/** Terminal error message when `outcome` is `'failed'`. */
-			error?: string;
-	  }
+	| AgentSubmissionSettledEvent
 	| {
 			type: 'run_end';
 			runId: string;

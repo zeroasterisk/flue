@@ -11,11 +11,23 @@ import {
 	sendAgent,
 } from './public/invoke.ts';
 import {
+	type AgentWaitOptions,
+	runWorkflow,
+	type WorkflowRunOptions,
+	type WorkflowRunResult,
+	waitForAgentSubmission,
+} from './public/settle.ts';
+import {
 	createFlueEventStream,
 	type FlueEventStream,
 	type FlueStreamOptions,
 } from './public/stream.ts';
-import type { AttachedAgentEvent, FlueEvent, RunRecord } from './types.ts';
+import type {
+	AgentPromptResponse,
+	AttachedAgentEvent,
+	FlueEvent,
+	RunRecord,
+} from './types.ts';
 
 export type { RequestHeaders };
 
@@ -57,6 +69,10 @@ export interface FlueClient {
 		prompt(name: string, id: string, options: AgentPromptOptions): Promise<AgentPromptResult>;
 		/** Starts one prompt without waiting for completion. */
 		send(name: string, id: string, options: AgentPromptOptions): Promise<AgentSendResult>;
+		wait<TResult = AgentPromptResponse>(
+			admission: AgentSendResult,
+			options?: AgentWaitOptions,
+		): Promise<TResult>;
 		/** Stream events from an agent instance via the Durable Streams protocol. */
 		stream(
 			name: string,
@@ -82,6 +98,10 @@ export interface FlueClient {
 		): Promise<WorkflowWaitResult>;
 		/** Start a workflow run and return its ID. */
 		invoke(name: string, options?: WorkflowInvokeOptions): Promise<WorkflowInvokeResult>;
+		run<TResult = unknown>(
+			name: string,
+			options?: WorkflowRunOptions,
+		): Promise<WorkflowRunResult<TResult>>;
 	};
 }
 
@@ -92,6 +112,7 @@ export function createFlueClient(options: CreateFlueClientOptions): FlueClient {
 		agents: {
 			prompt: (name, id, opts) => promptAgent(http, name, id, opts),
 			send: (name, id, opts) => sendAgent(http, name, id, opts),
+			wait: (admission, opts) => waitForAgentSubmission(http, admission, opts),
 			stream: (name, id, opts = {}) =>
 				createFlueEventStream<AttachedAgentEvent>(opts, {
 					url: http.url(`/agents/${encodeURIComponent(name)}/${encodeURIComponent(id)}`),
@@ -140,6 +161,7 @@ export function createFlueClient(options: CreateFlueClientOptions): FlueClient {
 					body: opts?.input,
 					signal: opts?.signal,
 				}),
+			run: (name, opts) => runWorkflow(http, name, opts),
 		},
 	};
 }

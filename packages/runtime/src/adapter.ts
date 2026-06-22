@@ -45,6 +45,7 @@ export type {
 	SubmissionAttemptRef,
 	SubmissionClaimRef,
 	SubmissionDurability,
+	SubmissionTerminalOutbox,
 } from './agent-execution-store.ts';
 
 export {

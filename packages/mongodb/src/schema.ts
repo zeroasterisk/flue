@@ -85,6 +85,13 @@ export function schema(prefix: string): MongoCollectionSpec[] {
 		spec('event_streams'),
 		spec('event_entries', [
 			{ name: 'path_offset', key: { path: 1, offset: 1 }, unique: true, collation: simple },
+			{
+				name: 'path_event_key',
+				key: { path: 1, eventKey: 1 },
+				unique: true,
+				partialFilterExpression: { eventKey: { $type: 'string' } },
+				collation: simple,
+			},
 		]),
 	];
 }

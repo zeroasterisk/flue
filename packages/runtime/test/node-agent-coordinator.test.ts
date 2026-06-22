@@ -1848,6 +1848,54 @@ describe('NodeAgentCoordinator', () => {
 			expect(await executionStore.submissions.hasUnsettledSubmissions()).toBe(false);
 		});
 
+		it('appends the terminal result before settling a direct prompt', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createFauxProvider();
+			provider.setResponses([fauxAssistantMessage('Terminal reply.')]);
+			const executionStore = await openExecutionStore(dbPath);
+			const eventStreamStore = createTestEventStreamStore();
+			let terminalAppended = false;
+			const originalAppend = eventStreamStore.appendEvent.bind(eventStreamStore);
+			eventStreamStore.appendEvent = async (path, event) => {
+				if ((event as { type?: string }).type === 'submission_settled') terminalAppended = true;
+				return originalAppend(path, event);
+			};
+			const originalComplete = executionStore.submissions.completeSubmission.bind(
+				executionStore.submissions,
+			);
+			executionStore.submissions.completeSubmission = async (attempt) => {
+				expect(terminalAppended).toBe(true);
+				return originalComplete(attempt);
+			};
+			const coordinator = createNodeAgentCoordinator({
+				submissions: executionStore.submissions,
+				sessions: executionStore.sessions,
+				agents: [
+					{
+						name: 'assistant',
+						definition: defineAgent(() => ({
+							model: `${provider.getModel().provider}/${provider.getModel().id}`,
+						})),
+					},
+				],
+				createContext: makeFauxCreateContext(provider, executionStore),
+				eventStreamStore,
+			});
+
+			const receipt = await coordinator
+				.createAdmission('assistant', 'instance-1')({ message: 'Hello terminal event' });
+			const stream = await eventStreamStore.readEvents(agentStreamPath('assistant', 'instance-1'));
+			const terminal = stream.events
+				.map((event) => event.data as Record<string, unknown>)
+				.find((event) => event.type === 'submission_settled');
+
+			expect(terminal).toMatchObject({
+				outcome: 'completed',
+				submissionId: receipt.submissionId,
+				result: { text: 'Terminal reply.' },
+			});
+		});
+
 		it('persists direct prompt submission across store reopens', async () => {
 			const dbPath = createTempDbPath();
 			const provider = createFauxProvider();
@@ -1996,7 +2044,7 @@ describe('NodeAgentCoordinator', () => {
 
 			const submission = await executionStore.submissions.getSubmission('direct-terminalized');
 			expect(submission).toMatchObject({ status: 'settled' });
-			expect(submission?.error).toBeDefined();
+			expect(submission?.error).toBeUndefined();
 		});
 
 		it('resolves a waiting direct prompt with the persisted result when reconciliation settles completed work', async () => {
@@ -2103,7 +2151,11 @@ describe('NodeAgentCoordinator', () => {
 				.map((event) => event.data as Record<string, unknown>)
 				.filter((event) => event.type === 'submission_settled');
 			expect(settledEvents).toMatchObject([
-				{ outcome: 'completed', submissionId: receipt.submissionId },
+				{
+					outcome: 'completed',
+					submissionId: receipt.submissionId,
+					result: { text: 'Completed canonical response.' },
+				},
 			]);
 		});
 
@@ -2171,7 +2223,14 @@ describe('NodeAgentCoordinator', () => {
 				.map((event) => event.data as Record<string, unknown>)
 				.filter((event) => event.type === 'submission_settled');
 			expect(settledEvents).toMatchObject([
-				{ outcome: 'failed', submissionId: expect.any(String) },
+				{
+					outcome: 'failed',
+					submissionId: expect.any(String),
+					error: {
+						type: 'submission_interrupted',
+						message: expect.any(String),
+					},
+				},
 			]);
 			expect(settledEvents[0]).toHaveProperty('submissionId');
 		});

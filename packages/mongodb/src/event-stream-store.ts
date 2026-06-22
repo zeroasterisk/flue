@@ -67,6 +67,44 @@ export class MongoEventStreamStore implements EventStreamStore {
 			throw error;
 		}
 	}
+	async appendEventOnce(path: string, key: string, event: unknown): Promise<string> {
+		const existing = await this.entries().findOne({ path, eventKey: key });
+		if (existing) {
+			const persisted = await this.values.read(existing.data as unknown as StoredValue);
+			if (JSON.stringify(persisted) !== JSON.stringify(event)) throw new TypeError(`Event key "${key}" has a conflicting payload.`);
+			return formatOffset(Number(existing.offset));
+		}
+		const pointer = await this.values.stage(`event:${path}:${crypto.randomUUID()}`, event);
+		let committed = false;
+		try {
+			const offset = await this.runner.transaction(async (tx) => {
+				const entries = tx.collection(collectionName(this.prefix, 'event_entries'));
+				const replay = await entries.findOne({ path, eventKey: key });
+				if (replay) {
+					const persisted = await this.values.read(replay.data as unknown as StoredValue);
+					if (JSON.stringify(persisted) !== JSON.stringify(event)) throw new TypeError(`Event key "${key}" has a conflicting payload.`);
+					return Number(replay.offset);
+				}
+				await this.values.publish(pointer, tx);
+				const meta = await tx.collection(collectionName(this.prefix, 'event_streams')).findOneAndUpdate(
+					{ _id: path, closed: false }, { $inc: { nextOffset: 1 } }, { returnDocument: 'before' });
+				if (!meta) {
+					const found = await tx.collection(collectionName(this.prefix, 'event_streams')).findOne({ _id: path });
+					throw new TypeError(found ? `Event stream "${path}" is closed.` : `Event stream "${path}" does not exist.`);
+				}
+				const value = Number(meta.nextOffset);
+				await entries.insertOne({ _id: `${path}:${value}`, path, offset: value, eventKey: key, data: pointer });
+				return value;
+			});
+			committed = true;
+			this.notify(path);
+			return formatOffset(offset);
+		} catch (error) {
+			if (!committed) await this.values.discardStaged(pointer);
+			throw error;
+		}
+	}
+
 	async readEvents(
 		path: string,
 		opts?: { offset?: string; limit?: number },

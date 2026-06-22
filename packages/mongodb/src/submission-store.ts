@@ -87,12 +87,12 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 	}
 
 	async hasUnsettledSubmissions(): Promise<boolean> {
-		return Boolean(await this.c('submissions').findOne({ status: { $in: ['queued', 'running'] } }));
+		return Boolean(await this.c('submissions').findOne({ status: { $in: ['queued', 'running', 'terminalizing'] } }));
 	}
 
 	async listRunnableSubmissions(): Promise<AgentSubmission[]> {
 		const rows = await this.c('submissions').find(
-			{ status: { $in: ['queued', 'running'] } },
+			{ status: { $in: ['queued', 'running', 'terminalizing'] } },
 			{ sort: { sequence: 1 } },
 		);
 		const seen = new Set<string>();
@@ -328,7 +328,7 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 			await touchGuard(tx, this.prefix, String(candidate.sessionKey));
 			const earlier = await submissions.findOne({
 				sessionKey: candidate.sessionKey,
-				status: { $in: ['queued', 'running'] },
+				status: { $in: ['queued', 'running', 'terminalizing'] },
 				sequence: { $lt: candidate.sequence },
 			});
 			if (earlier) return null;
@@ -409,6 +409,26 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 			{ inputAppliedAt: null },
 		);
 	}
+	async listPendingTerminalOutboxes(): Promise<any[]> {
+		return (await this.c('submissions').find({ kind: 'direct', status: 'terminalizing' }, { sort: { sequence: 1 } })).map((row) => ({ submissionId: String(row.submissionId), sessionKey: String(row.sessionKey), attemptId: String(row.attemptId), eventKey: String(row.terminalKey), event: row.terminalEvent, ...(row.terminalOffset != null ? { offset: String(row.terminalOffset) } : {}) }));
+	}
+	async reserveSubmissionTerminal(attempt: SubmissionAttemptRef, terminal: { eventKey: string; event: unknown }): Promise<any | null> {
+		const row = await this.c('submissions').findOneAndUpdate(
+			{ submissionId: attempt.submissionId, kind: 'direct', status: 'running', attemptId: attempt.attemptId, ownerId: { $ne: null }, terminalKey: null },
+			{ $set: { status: 'terminalizing', terminalKey: terminal.eventKey, terminalEvent: terminal.event } }, { returnDocument: 'after' });
+		const current = row ?? await this.c('submissions').findOne({ submissionId: attempt.submissionId, status: 'terminalizing', attemptId: attempt.attemptId });
+		if (!current || current.terminalKey !== terminal.eventKey || JSON.stringify(current.terminalEvent) !== JSON.stringify(terminal.event)) return null;
+		return { submissionId: String(current.submissionId), sessionKey: String(current.sessionKey), attemptId: String(current.attemptId), eventKey: String(current.terminalKey), event: current.terminalEvent, ...(current.terminalOffset != null ? { offset: String(current.terminalOffset) } : {}) };
+	}
+	async recordSubmissionTerminalOffset(attempt: SubmissionAttemptRef, eventKey: string, offset: string): Promise<boolean> {
+		const result = await this.c('submissions').updateOne({ submissionId: attempt.submissionId, status: 'terminalizing', attemptId: attempt.attemptId, terminalKey: eventKey, $or: [{ terminalOffset: null }, { terminalOffset: offset }] }, { $set: { terminalOffset: offset } });
+		return result.matchedCount === 1;
+	}
+	async finalizeSubmissionTerminal(attempt: SubmissionAttemptRef, eventKey: string): Promise<boolean> {
+		const result = await this.c('submissions').updateOne({ submissionId: attempt.submissionId, kind: 'direct', status: 'terminalizing', attemptId: attempt.attemptId, terminalKey: eventKey, terminalOffset: { $ne: null } }, { $set: { status: 'settled', settledAt: Date.now() } });
+		return result.matchedCount === 1;
+	}
+
 	completeSubmission(attempt: SubmissionAttemptRef): Promise<boolean> {
 		return this.lifecycle(attempt, {
 			$set: { status: 'settled', settledAt: Date.now(), error: null },
@@ -585,7 +605,7 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 				if (
 					await tx
 						.collection(collectionName(this.prefix, 'submissions'))
-						.findOne({ sessionKey, status: { $in: ['queued', 'running'] } })
+						.findOne({ sessionKey, status: { $in: ['queued', 'running', 'terminalizing'] } })
 				)
 					throw new TypeError(
 						'Session cannot be deleted while durable agent submissions are queued or running.',

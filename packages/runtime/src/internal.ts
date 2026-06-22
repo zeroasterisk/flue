@@ -27,6 +27,7 @@ export type {
 	PersistenceAdapter,
 	SubmissionAttemptRef,
 	SubmissionDurability,
+	SubmissionTerminalOutbox,
 } from './agent-execution-store.ts';
 export type { FlueContextConfig, FlueContextInternal } from './client.ts';
 export { createFlueContext, initializeRootHarness } from './client.ts';

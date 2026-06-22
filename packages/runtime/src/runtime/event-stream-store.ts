@@ -92,6 +92,12 @@ export interface EventStreamStore {
 	/** Append a JSON event. Returns the new offset as a zero-padded string. */
 	appendEvent(path: string, event: unknown): Promise<string>;
 
+	/**
+	 * Append one event under an idempotency key. An exact retry returns the
+	 * original offset; reusing the key with another JSON payload rejects.
+	 */
+	appendEventOnce(path: string, key: string, event: unknown): Promise<string>;
+
 	/** Read events starting after the given offset. */
 	readEvents(
 		path: string,
@@ -136,6 +142,26 @@ CREATE TABLE IF NOT EXISTS flue_event_stream_entries (
   PRIMARY KEY (path, seq)
 )`;
 
+const CREATE_EVENT_KEYS_TABLE = `
+CREATE TABLE IF NOT EXISTS flue_event_stream_keys (
+  path    TEXT NOT NULL,
+  key     TEXT NOT NULL,
+  seq     INTEGER NOT NULL,
+  data    TEXT NOT NULL,
+  PRIMARY KEY (path, key),
+  UNIQUE (path, seq)
+)`;
+
+const CREATE_EVENT_KEY_TRIGGER = `
+CREATE TRIGGER IF NOT EXISTS flue_event_stream_key_append
+AFTER INSERT ON flue_event_stream_keys
+BEGIN
+  INSERT INTO flue_event_stream_entries (path, seq, data)
+  VALUES (NEW.path, NEW.seq, NEW.data);
+  UPDATE flue_event_streams SET next_offset = next_offset + 1
+  WHERE path = NEW.path;
+END`;
+
 export const DEFAULT_READ_LIMIT = 100;
 export const MAX_READ_LIMIT = 1000;
 
@@ -158,6 +184,8 @@ export class SqliteEventStreamStore implements EventStreamStore {
 		ensureFlueSchemaVersion(sql);
 		sql.exec(CREATE_STREAMS_TABLE);
 		sql.exec(CREATE_ENTRIES_TABLE);
+		sql.exec(CREATE_EVENT_KEYS_TABLE);
+		sql.exec(CREATE_EVENT_KEY_TRIGGER);
 	}
 
 	async createStream(path: string): Promise<void> {
@@ -210,6 +238,41 @@ export class SqliteEventStreamStore implements EventStreamStore {
 		this.notifyListeners(path);
 
 		return formatOffset(offset);
+	}
+
+	async appendEventOnce(path: string, key: string, event: unknown): Promise<string> {
+		const data = JSON.stringify(event);
+		const inserted = this.sql
+			.exec(
+				`INSERT OR IGNORE INTO flue_event_stream_keys (path, key, seq, data)
+				 SELECT path, ?, next_offset, ? FROM flue_event_streams
+				 WHERE path = ? AND closed = 0
+				 RETURNING seq`,
+				key,
+				data,
+				path,
+			)
+			.toArray()[0];
+		if (inserted) {
+			this.notifyListeners(path);
+			return formatOffset(inserted.seq as number);
+		}
+		const existing = this.sql
+			.exec(
+				'SELECT seq, data FROM flue_event_stream_keys WHERE path = ? AND key = ?',
+				path,
+				key,
+			)
+			.toArray()[0];
+		if (existing) {
+			if (existing.data !== data) {
+				throw new Error(`[flue] Event key "${key}" already has a conflicting payload.`);
+			}
+			return formatOffset(existing.seq as number);
+		}
+		const meta = await this.getStreamMeta(path);
+		if (!meta) throw new Error(`[flue] Event stream "${path}" does not exist.`);
+		throw new Error(`[flue] Event stream "${path}" is closed.`);
 	}
 
 	async readEvents(

@@ -51,8 +51,11 @@ export interface FlueContextConfig {
 export interface FlueContextInternal extends FlueEventContext {
 	readonly runId: string | undefined;
 	initializeRootHarness(agent: AgentDefinition): Promise<Harness>;
+	createEvent(event: FlueEventInput): FlueEvent;
+	publishEvent(event: FlueEvent): void;
 	emitEvent(event: FlueEventInput): FlueEvent;
 	subscribeEvent(callback: FlueEventCallback): () => void;
+	flushEventCallbacks(): Promise<void>;
 	setEventCallback(callback: FlueEventCallback | undefined): void;
 	setSubmissionId(submissionId: string | undefined): void;
 }
@@ -60,26 +63,35 @@ export interface FlueContextInternal extends FlueEventContext {
 export function createFlueContext(config: FlueContextConfig): FlueContextInternal {
 	const subscribers = new Set<FlueEventCallback>();
 	let handlerUnsubscribe: (() => void) | undefined;
+	const pendingEventCallbacks = new Set<Promise<void>>();
+	let eventCallbackError: unknown;
 	let eventIndex = config.initialEventIndex ?? 0;
 	let submissionId: string | undefined;
 
-	const emitEvent = (event: FlueEventInput): FlueEvent => {
-		const decorated: FlueEvent = {
-			...event,
-			...(config.runId === undefined ? { instanceId: config.id } : { runId: config.runId }),
-			...(config.dispatchId === undefined ? {} : { dispatchId: config.dispatchId }),
-			...(submissionId === undefined ? {} : { submissionId }),
-			v: 1,
-			eventIndex: eventIndex++,
-			timestamp: new Date().toISOString(),
-		};
+	const createEvent = (event: FlueEventInput): FlueEvent => ({
+		...event,
+		...(config.runId === undefined ? { instanceId: config.id } : { runId: config.runId }),
+		...(config.dispatchId === undefined ? {} : { dispatchId: config.dispatchId }),
+		...(submissionId === undefined ? {} : { submissionId }),
+		v: 1,
+		eventIndex: eventIndex++,
+		timestamp: new Date().toISOString(),
+	});
+
+	const publishEvent = (decorated: FlueEvent): void => {
 		for (const subscriber of subscribers) {
 			try {
-				Promise.resolve(subscriber(decorated)).catch((error) => {
-					console.error('[flue:subscriber] Event subscriber failed:', error);
-				});
+				const callback = subscriber(decorated);
+				if (callback instanceof Promise) {
+					const pending = callback
+						.catch((error) => {
+							eventCallbackError ??= error;
+						})
+						.finally(() => pendingEventCallbacks.delete(pending));
+					pendingEventCallbacks.add(pending);
+				}
 			} catch (error) {
-				console.error('[flue:subscriber] Event subscriber failed:', error);
+				eventCallbackError ??= error;
 			}
 		}
 		// Fan out to module-scoped subscribers registered via
@@ -88,6 +100,11 @@ export function createFlueContext(config: FlueContextConfig): FlueContextInterna
 		// a second argument so cross-cutting code can read runtime identity
 		// and environment metadata.
 		dispatchGlobalEvent(decorated, ctx);
+	};
+
+	const emitEvent = (event: FlueEventInput): FlueEvent => {
+		const decorated = createEvent(event);
+		publishEvent(decorated);
 		return decorated;
 	};
 
@@ -139,11 +156,24 @@ export function createFlueContext(config: FlueContextConfig): FlueContextInterna
 			},
 		},
 
+		createEvent,
+
+		publishEvent,
+
 		emitEvent,
 
 		subscribeEvent(callback: FlueEventCallback): () => void {
 			subscribers.add(callback);
 			return () => subscribers.delete(callback);
+		},
+
+		async flushEventCallbacks(): Promise<void> {
+			await Promise.all(pendingEventCallbacks);
+			if (eventCallbackError !== undefined) {
+				const error = eventCallbackError;
+				eventCallbackError = undefined;
+				throw error;
+			}
 		},
 
 		setEventCallback(callback: FlueEventCallback | undefined): void {

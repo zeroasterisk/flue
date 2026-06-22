@@ -42,6 +42,41 @@ export function defineEventStreamStoreContractTests(
 			});
 		});
 
+		it('returns the same offset when appendEventOnce retries the same keyed event', async () => {
+			const store = await create();
+			await store.createStream('runs/test');
+			const first = await store.appendEventOnce('runs/test', 'terminal-1', { index: 0 });
+			const retry = await store.appendEventOnce('runs/test', 'terminal-1', { index: 0 });
+
+			expect(retry).toBe(first);
+			expect(await store.readEvents('runs/test')).toMatchObject({
+				events: [{ data: { index: 0 }, offset: first }],
+			});
+		});
+
+		it('rejects a conflicting appendEventOnce payload without appending', async () => {
+			const store = await create();
+			await store.createStream('runs/test');
+			const offset = await store.appendEventOnce('runs/test', 'terminal-1', { index: 0 });
+
+			await expect(
+				store.appendEventOnce('runs/test', 'terminal-1', { index: 1 }),
+			).rejects.toThrow('conflicting payload');
+			expect(await store.getStreamMeta('runs/test')).toEqual({ nextOffset: offset, closed: false });
+		});
+
+		it('allocates distinct offsets for concurrent appendEventOnce calls', async () => {
+			const store = await create();
+			await store.createStream('runs/test');
+			const offsets = await Promise.all([
+				store.appendEventOnce('runs/test', 'event-1', { index: 0 }),
+				store.appendEventOnce('runs/test', 'event-2', { index: 1 }),
+			]);
+
+			expect(new Set(offsets).size).toBe(2);
+			expect((await store.readEvents('runs/test')).events).toHaveLength(2);
+		});
+
 		it('rejects appends after a stream closes', async () => {
 			const store = await create();
 			await store.createStream('runs/test');

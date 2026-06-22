@@ -261,6 +261,18 @@ async function ensureTables(runner: LibsqlRunner): Promise<void> {
 			)
 		`);
 
+		for (const statement of [
+			`ALTER TABLE flue_agent_submissions ADD COLUMN terminal_key TEXT`,
+			`ALTER TABLE flue_agent_submissions ADD COLUMN terminal_event TEXT`,
+			`ALTER TABLE flue_agent_submissions ADD COLUMN terminal_offset TEXT`,
+		]) {
+			try {
+				await tx.query(statement);
+			} catch (error) {
+				if (!String(error).toLowerCase().includes('duplicate column')) throw error;
+			}
+		}
+
 		await tx.query(`
 			CREATE TABLE IF NOT EXISTS flue_agent_turn_journals (
 				submission_id TEXT PRIMARY KEY,
@@ -364,6 +376,16 @@ async function ensureTables(runner: LibsqlRunner): Promise<void> {
 				data    TEXT NOT NULL,
 				PRIMARY KEY (path, seq)
 			)
+		`);
+		try {
+			await tx.query(`ALTER TABLE flue_event_stream_entries ADD COLUMN event_key TEXT`);
+		} catch (error) {
+			if (!String(error).toLowerCase().includes('duplicate column')) throw error;
+		}
+		await tx.query(`
+			CREATE UNIQUE INDEX IF NOT EXISTS flue_event_stream_entries_path_event_key_idx
+			ON flue_event_stream_entries (path, event_key)
+			WHERE event_key IS NOT NULL
 		`);
 	});
 }
@@ -594,7 +616,7 @@ class LibsqlSubmissionStore implements AgentSubmissionStore {
 
 	async hasUnsettledSubmissions(): Promise<boolean> {
 		const rows = await this.runner.query(
-			`SELECT 1 FROM flue_agent_submissions WHERE status IN ('queued', 'running') LIMIT 1`,
+			`SELECT 1 FROM flue_agent_submissions WHERE status IN ('queued', 'running', 'terminalizing') LIMIT 1`,
 		);
 		return rows.length > 0;
 	}
@@ -609,7 +631,7 @@ class LibsqlSubmissionStore implements AgentSubmissionStore {
 			     SELECT 1
 			     FROM flue_agent_submissions AS earlier
 			     WHERE earlier.session_key = current_sub.session_key
-			       AND earlier.status IN ('queued', 'running')
+			       AND earlier.status IN ('queued', 'running', 'terminalizing')
 			       AND earlier.sequence < current_sub.sequence
 			   )
 			 ORDER BY current_sub.sequence ASC`,
@@ -845,7 +867,7 @@ class LibsqlSubmissionStore implements AgentSubmissionStore {
 			     SELECT 1
 			     FROM flue_agent_submissions AS earlier
 			     WHERE earlier.session_key = current.session_key
-			       AND earlier.status IN ('queued', 'running')
+			       AND earlier.status IN ('queued', 'running', 'terminalizing')
 			       AND earlier.sequence < current.sequence
 			   )
 			 RETURNING ${submissionColumns}`,
@@ -911,6 +933,25 @@ class LibsqlSubmissionStore implements AgentSubmissionStore {
 			 RETURNING submission_id`,
 			[attempt.submissionId, attempt.attemptId],
 		);
+		return rows.length > 0;
+	}
+
+	async listPendingTerminalOutboxes(): Promise<any[]> {
+		const rows = await this.runner.query(`SELECT submission_id, session_key, attempt_id, terminal_key, terminal_event, terminal_offset FROM flue_agent_submissions WHERE kind = 'direct' AND status = 'terminalizing' ORDER BY sequence ASC`);
+		return rows.map((row) => ({ submissionId: String(row.submission_id), sessionKey: String(row.session_key), attemptId: String(row.attempt_id), eventKey: String(row.terminal_key), event: JSON.parse(String(row.terminal_event)), ...(row.terminal_offset != null ? { offset: String(row.terminal_offset) } : {}) }));
+	}
+	async reserveSubmissionTerminal(attempt: SubmissionAttemptRef, terminal: { eventKey: string; event: unknown }): Promise<any | null> {
+		const data = JSON.stringify(terminal.event);
+		const rows = await this.runner.query(`UPDATE flue_agent_submissions SET status = 'terminalizing', terminal_key = ?, terminal_event = ? WHERE submission_id = ? AND kind = 'direct' AND status = 'running' AND attempt_id = ? AND owner_id IS NOT NULL AND terminal_key IS NULL RETURNING submission_id, session_key, attempt_id, terminal_key, terminal_event, terminal_offset`, [terminal.eventKey, data, attempt.submissionId, attempt.attemptId]);
+		const row = rows[0] ?? (await this.runner.query(`SELECT submission_id, session_key, attempt_id, terminal_key, terminal_event, terminal_offset FROM flue_agent_submissions WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ?`, [attempt.submissionId, attempt.attemptId]))[0];
+		return row?.terminal_key === terminal.eventKey && row?.terminal_event === data ? { submissionId: String(row.submission_id), sessionKey: String(row.session_key), attemptId: String(row.attempt_id), eventKey: String(row.terminal_key), event: JSON.parse(String(row.terminal_event)), ...(row.terminal_offset != null ? { offset: String(row.terminal_offset) } : {}) } : null;
+	}
+	async recordSubmissionTerminalOffset(attempt: SubmissionAttemptRef, eventKey: string, offset: string): Promise<boolean> {
+		const rows = await this.runner.query(`UPDATE flue_agent_submissions SET terminal_offset = COALESCE(terminal_offset, ?) WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ? AND terminal_key = ? AND (terminal_offset IS NULL OR terminal_offset = ?) RETURNING submission_id`, [offset, attempt.submissionId, attempt.attemptId, eventKey, offset]);
+		return rows.length > 0;
+	}
+	async finalizeSubmissionTerminal(attempt: SubmissionAttemptRef, eventKey: string): Promise<boolean> {
+		const rows = await this.runner.query(`UPDATE flue_agent_submissions SET status = 'settled', settled_at = ? WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ? AND terminal_key = ? AND terminal_offset IS NOT NULL RETURNING submission_id`, [Date.now(), attempt.submissionId, attempt.attemptId, eventKey]);
 		return rows.length > 0;
 	}
 
@@ -1109,7 +1150,7 @@ class LibsqlSubmissionStore implements AgentSubmissionStore {
 		await this.runner.transaction(async (tx) => {
 			const active = await tx.query(
 				`SELECT 1 FROM flue_agent_submissions
-				 WHERE session_key = ? AND status IN ('queued', 'running')
+				 WHERE session_key = ? AND status IN ('queued', 'running', 'terminalizing')
 				 LIMIT 1`,
 				[sessionKey],
 			);
@@ -1273,7 +1314,7 @@ function parseSubmission(row: SqlRow, chunks: readonly PersistedChunkRow[]): Age
 		typeof row.session_key !== 'string' ||
 		(row.kind !== 'dispatch' && row.kind !== 'direct') ||
 		typeof row.payload !== 'string' ||
-		(row.status !== 'queued' && row.status !== 'running' && row.status !== 'settled') ||
+		(row.status !== 'queued' && row.status !== 'running' && row.status !== 'terminalizing' && row.status !== 'settled') ||
 		!Number.isFinite(acceptedAt) ||
 		// Status-specific invariants: queued rows must not have running fields,
 		// running rows must have attemptId and startedAt.
@@ -1521,6 +1562,27 @@ class LibsqlEventStreamStore implements EventStreamStore {
 				this.pendingAppends.delete(path);
 			}
 		}
+	}
+
+	async appendEventOnce(path: string, key: string, event: unknown): Promise<string> {
+		const data = JSON.stringify(event);
+		const offset = await this.runner.transaction(async (tx) => {
+			const existing = await tx.query(`SELECT seq, data FROM flue_event_stream_entries WHERE path = ? AND event_key = ? LIMIT 1`, [path, key]);
+			if (existing[0]) {
+				if (existing[0].data !== data) throw new TypeError(`Event key "${key}" has a conflicting payload.`);
+				return Number(existing[0].seq);
+			}
+			const updated = await tx.query(`UPDATE flue_event_streams SET next_offset = next_offset + 1 WHERE path = ? AND closed = 0 RETURNING next_offset`, [path]);
+			if (!updated[0]) {
+				const meta = await this.getStreamMetaFromRunner(tx, path);
+				throw new TypeError(meta ? `Event stream "${path}" is closed.` : `Event stream "${path}" does not exist.`);
+			}
+			const seq = Number(updated[0].next_offset) - 1;
+			await tx.query(`INSERT INTO flue_event_stream_entries (path, seq, data, event_key) VALUES (?, ?, ?, ?)`, [path, seq, data, key]);
+			return seq;
+		});
+		this.notifyListeners(path);
+		return formatOffset(offset);
 	}
 
 	async readEvents(

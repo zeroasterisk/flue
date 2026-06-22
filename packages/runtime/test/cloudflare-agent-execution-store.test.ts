@@ -96,6 +96,9 @@ describe('createSqlAgentExecutionStore()', () => {
 				'timeout_at',
 				'owner_id',
 				'lease_expires_at',
+				'terminal_event_key',
+				'terminal_event_json',
+				'terminal_event_offset',
 			]),
 		);
 		expect(columnNames('flue_agent_turn_journals')).toEqual(

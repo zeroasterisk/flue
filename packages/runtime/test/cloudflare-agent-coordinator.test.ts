@@ -135,9 +135,14 @@ function makeRecoveryContext(options: {
 				},
 			};
 		},
+		createEvent(event: unknown) {
+			return event;
+		},
+		publishEvent() {},
 		emitEvent(event: unknown) {
 			return event;
 		},
+		async flushEventCallbacks() {},
 		subscribeEvent() {
 			return () => {};
 		},
@@ -189,6 +194,7 @@ describe('createCloudflareAgentRuntime()', () => {
 			readEvents: vi.fn(),
 			createStream: vi.fn(),
 			appendEvent: vi.fn(),
+			appendEventOnce: vi.fn(),
 			closeStream: vi.fn(),
 			subscribe: vi.fn(),
 		};
@@ -366,6 +372,14 @@ describe('createCloudflareAgentRuntime()', () => {
 						};
 					},
 					setEventCallback() {},
+					createEvent(event: unknown) {
+						return event;
+					},
+					publishEvent() {},
+					emitEvent(event: unknown) {
+						return event;
+					},
+					async flushEventCallbacks() {},
 					subscribeEvent() {
 						return () => {};
 					},
@@ -462,10 +476,12 @@ describe('createCloudflareAgentRuntime()', () => {
 		});
 		const instance = makeInstance(storage);
 		const executionStore = prepare(runtime, instance);
-		const originalFail = executionStore.submissions.failSubmission.bind(executionStore.submissions);
-		executionStore.submissions.failSubmission = async (attempt, error) => {
+		const originalFinalize = executionStore.submissions.finalizeSubmissionTerminal.bind(
+			executionStore.submissions,
+		);
+		executionStore.submissions.finalizeSubmissionTerminal = async (attempt, eventKey) => {
 			events.push('settle-error');
-			return originalFail(attempt, error);
+			return originalFinalize(attempt, eventKey);
 		};
 		await executionStore.submissions.admitDirect(directInput());
 		const claimed = await executionStore.submissions.claimSubmission({
@@ -633,6 +649,14 @@ describe('createCloudflareAgentRuntime()', () => {
 						};
 					},
 					setEventCallback() {},
+					createEvent(event: unknown) {
+						return event;
+					},
+					publishEvent() {},
+					emitEvent(event: unknown) {
+						return event;
+					},
+					async flushEventCallbacks() {},
 					subscribeEvent() {
 						return () => {};
 					},

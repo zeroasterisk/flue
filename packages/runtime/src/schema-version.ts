@@ -23,7 +23,7 @@ import type { SqlStorage } from './sql-storage.ts';
  * Bump this when a persisted format changes incompatibly, together with
  * `migrate()` logic that brings older stores to the new version.
  */
-export const FLUE_SCHEMA_VERSION = 1;
+export const FLUE_SCHEMA_VERSION = 2;
 
 /**
  * Throw {@link PersistedSchemaVersionError} unless the stored version matches

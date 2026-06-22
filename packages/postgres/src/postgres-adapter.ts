@@ -77,6 +77,14 @@ import {
 
 /** A single row returned from a query. */
 type SqlRow = Record<string, unknown>;
+type SubmissionTerminalOutbox = {
+	submissionId: string;
+	sessionKey: string;
+	attemptId: string;
+	eventKey: string;
+	event: unknown;
+	offset?: string;
+};
 
 /**
  * A query over a configured Postgres driver: a SQL string with numbered `$N`
@@ -233,6 +241,10 @@ async function ensureTables(runner: PostgresRunner): Promise<void> {
 			)
 		`);
 
+		await tx.query(`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_key TEXT`);
+		await tx.query(`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_event TEXT`);
+		await tx.query(`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_offset TEXT`);
+
 		await tx.query(`
 			CREATE TABLE IF NOT EXISTS flue_agent_turn_journals (
 				submission_id TEXT PRIMARY KEY,
@@ -331,6 +343,12 @@ async function ensureTables(runner: PostgresRunner): Promise<void> {
 				data    TEXT NOT NULL,
 				PRIMARY KEY (path, seq)
 			)
+		`);
+		await tx.query(`ALTER TABLE flue_event_stream_entries ADD COLUMN IF NOT EXISTS event_key TEXT`);
+		await tx.query(`
+			CREATE UNIQUE INDEX IF NOT EXISTS flue_event_stream_entries_path_event_key_idx
+			ON flue_event_stream_entries (path, event_key)
+			WHERE event_key IS NOT NULL
 		`);
 	});
 }
@@ -518,7 +536,21 @@ const submissionColumns = [
 	'timeout_at',
 	'owner_id',
 	'lease_expires_at',
+	'terminal_key',
+	'terminal_event',
+	'terminal_offset',
 ].join(', ');
+
+function parseTerminalOutbox(row: SqlRow): SubmissionTerminalOutbox {
+	return {
+		submissionId: String(row.submission_id),
+		sessionKey: String(row.session_key),
+		attemptId: String(row.attempt_id),
+		eventKey: String(row.terminal_key),
+		event: JSON.parse(String(row.terminal_event)),
+		...(row.terminal_offset != null ? { offset: String(row.terminal_offset) } : {}),
+	};
+}
 
 function prefixed(table: string): string {
 	return submissionColumns
@@ -564,7 +596,7 @@ class PgSubmissionStore implements AgentSubmissionStore {
 
 	async hasUnsettledSubmissions(): Promise<boolean> {
 		const rows = await this.runner.query(
-			`SELECT 1 FROM flue_agent_submissions WHERE status IN ('queued', 'running') LIMIT 1`,
+			`SELECT 1 FROM flue_agent_submissions WHERE status IN ('queued', 'running', 'terminalizing') LIMIT 1`,
 		);
 		return rows.length > 0;
 	}
@@ -579,7 +611,7 @@ class PgSubmissionStore implements AgentSubmissionStore {
 			     SELECT 1
 			     FROM flue_agent_submissions AS earlier
 			     WHERE earlier.session_key = current_sub.session_key
-			       AND earlier.status IN ('queued', 'running')
+			       AND earlier.status IN ('queued', 'running', 'terminalizing')
 			       AND earlier.sequence < current_sub.sequence
 			   )
 			 ORDER BY current_sub.sequence ASC`,
@@ -817,7 +849,7 @@ class PgSubmissionStore implements AgentSubmissionStore {
 			     AND NOT EXISTS (
 			       SELECT 1 FROM flue_agent_submissions earlier
 			       WHERE earlier.session_key = s.session_key
-			         AND earlier.status IN ('queued', 'running')
+			         AND earlier.status IN ('queued', 'running', 'terminalizing')
 			         AND earlier.sequence < s.sequence
 			     )
 			 )
@@ -891,6 +923,31 @@ class PgSubmissionStore implements AgentSubmissionStore {
 			 RETURNING submission_id`,
 			[attempt.submissionId, attempt.attemptId],
 		);
+		return rows.length > 0;
+	}
+
+	async listPendingTerminalOutboxes(): Promise<SubmissionTerminalOutbox[]> {
+		const rows = await this.runner.query(`SELECT submission_id, session_key, attempt_id, terminal_key, terminal_event, terminal_offset FROM flue_agent_submissions WHERE kind = 'direct' AND status = 'terminalizing' ORDER BY sequence ASC`);
+		return rows.map(parseTerminalOutbox);
+	}
+
+	async reserveSubmissionTerminal(attempt: SubmissionAttemptRef, terminal: { eventKey: string; event: unknown }): Promise<SubmissionTerminalOutbox | null> {
+		return this.runner.transaction(async (tx) => {
+			const data = JSON.stringify(terminal.event);
+			const rows = await tx.query(`UPDATE flue_agent_submissions SET status = 'terminalizing', terminal_key = $1, terminal_event = $2 WHERE submission_id = $3 AND kind = 'direct' AND status = 'running' AND attempt_id = $4 AND owner_id IS NOT NULL AND terminal_key IS NULL RETURNING submission_id, session_key, attempt_id, terminal_key, terminal_event, terminal_offset`, [terminal.eventKey, data, attempt.submissionId, attempt.attemptId]);
+			if (rows[0]) return parseTerminalOutbox(rows[0]);
+			const existing = await tx.query(`SELECT submission_id, session_key, attempt_id, terminal_key, terminal_event, terminal_offset FROM flue_agent_submissions WHERE submission_id = $1 AND kind = 'direct' AND status = 'terminalizing' AND attempt_id = $2`, [attempt.submissionId, attempt.attemptId]);
+			return existing[0]?.terminal_key === terminal.eventKey && existing[0]?.terminal_event === data ? parseTerminalOutbox(existing[0]) : null;
+		});
+	}
+
+	async recordSubmissionTerminalOffset(attempt: SubmissionAttemptRef, eventKey: string, offset: string): Promise<boolean> {
+		const rows = await this.runner.query(`UPDATE flue_agent_submissions SET terminal_offset = COALESCE(terminal_offset, $1) WHERE submission_id = $2 AND status = 'terminalizing' AND attempt_id = $3 AND terminal_key = $4 AND (terminal_offset IS NULL OR terminal_offset = $1) RETURNING submission_id`, [offset, attempt.submissionId, attempt.attemptId, eventKey]);
+		return rows.length > 0;
+	}
+
+	async finalizeSubmissionTerminal(attempt: SubmissionAttemptRef, eventKey: string): Promise<boolean> {
+		const rows = await this.runner.query(`UPDATE flue_agent_submissions SET status = 'settled', settled_at = $1 WHERE submission_id = $2 AND kind = 'direct' AND status = 'terminalizing' AND attempt_id = $3 AND terminal_key = $4 AND terminal_offset IS NOT NULL RETURNING submission_id`, [Date.now(), attempt.submissionId, attempt.attemptId, eventKey]);
 		return rows.length > 0;
 	}
 
@@ -1100,7 +1157,7 @@ class PgSubmissionStore implements AgentSubmissionStore {
 			await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sessionKey]);
 			const active = await tx.query(
 				`SELECT 1 FROM flue_agent_submissions
-				 WHERE session_key = $1 AND status IN ('queued', 'running')
+				 WHERE session_key = $1 AND status IN ('queued', 'running', 'terminalizing')
 				 LIMIT 1`,
 				[sessionKey],
 			);
@@ -1262,7 +1319,7 @@ function parseSubmission(row: SqlRow, chunks: readonly PersistedChunkRow[]): Age
 		typeof row.session_key !== 'string' ||
 		(row.kind !== 'dispatch' && row.kind !== 'direct') ||
 		typeof row.payload !== 'string' ||
-		(row.status !== 'queued' && row.status !== 'running' && row.status !== 'settled') ||
+		(row.status !== 'queued' && row.status !== 'running' && row.status !== 'terminalizing' && row.status !== 'settled') ||
 		!Number.isFinite(acceptedAt) ||
 		// Status-specific invariants: queued rows must not have running fields,
 		// running rows must have attemptId and startedAt.
@@ -1508,6 +1565,37 @@ class PgEventStreamStore implements EventStreamStore {
 				this.pendingAppends.delete(path);
 			}
 		}
+	}
+
+	async appendEventOnce(path: string, key: string, event: unknown): Promise<string> {
+		const data = JSON.stringify(event);
+		const offset = await this.runner.transaction(async (tx) => {
+			const existing = await tx.query(
+				`SELECT seq, data FROM flue_event_stream_entries WHERE path = $1 AND event_key = $2 LIMIT 1`,
+				[path, key],
+			);
+			if (existing[0]) {
+				if (existing[0].data !== data) throw new TypeError(`Event key "${key}" has a conflicting payload.`);
+				return Number(existing[0].seq);
+			}
+			const updated = await tx.query(
+				`UPDATE flue_event_streams SET next_offset = next_offset + 1
+				 WHERE path = $1 AND closed = FALSE RETURNING next_offset`,
+				[path],
+			);
+			if (!updated[0]) {
+				const meta = await this.getStreamMetaFromRunner(tx, path);
+				throw new TypeError(meta ? `Event stream "${path}" is closed.` : `Event stream "${path}" does not exist.`);
+			}
+			const seq = Number(updated[0].next_offset) - 1;
+			await tx.query(
+				`INSERT INTO flue_event_stream_entries (path, seq, data, event_key) VALUES ($1, $2, $3, $4)`,
+				[path, seq, data, key],
+			);
+			return seq;
+		});
+		this.notifyListeners(path);
+		return formatOffset(offset);
 	}
 
 	async readEvents(

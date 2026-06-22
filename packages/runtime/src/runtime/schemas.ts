@@ -32,12 +32,14 @@ export const ErrorEnvelopeSchema = v.object({
 export const AgentAdmissionResponseSchema = v.object({
 	streamUrl: v.string(),
 	offset: v.string(),
+	submissionId: v.string(),
 });
 
 export const AgentInvocationResponseSchema = v.object({
 	result: v.unknown(),
 	streamUrl: v.string(),
 	offset: v.string(),
+	submissionId: v.string(),
 });
 
 export const WorkflowAdmissionResponseSchema = v.object({

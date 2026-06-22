@@ -289,11 +289,9 @@ class CloudflareAgentCoordinator {
 	): FlueContextInternal {
 		const ctx = this.createContext(request, undefined, dispatchId);
 		const streamPath = agentStreamPath(this.agentName, this.instance.name);
-		ctx.subscribeEvent((event) => {
-			if (isStreamExcludedEvent(event)) return;
-			this.eventStreamStore.appendEvent(streamPath, event).catch((error) => {
-				console.error('[flue:event-stream] appendEvent failed:', error);
-			});
+		ctx.subscribeEvent(async (event) => {
+			if (isStreamExcludedEvent(event) || event.type === 'submission_settled') return;
+			await this.eventStreamStore.appendEvent(streamPath, event);
 		});
 		return ctx;
 	}
@@ -330,6 +328,33 @@ class CloudflareAgentCoordinator {
 		if (!(await this.submissions.hasUnsettledSubmissions())) return false;
 		if (!options.driverAlreadyArmed) await this.restoreSubmissionWake();
 		try {
+			for (const terminal of await this.submissions.listPendingTerminalOutboxes()) {
+				const offset =
+					terminal.offset ??
+					(await this.eventStreamStore.appendEventOnce(
+						agentStreamPath(this.agentName, this.instance.name),
+						terminal.eventKey,
+						terminal.event,
+					));
+				const attempt = { submissionId: terminal.submissionId, attemptId: terminal.attemptId };
+				await this.submissions.recordSubmissionTerminalOffset(attempt, terminal.eventKey, offset);
+				if (await this.submissions.finalizeSubmissionTerminal(attempt, terminal.eventKey)) {
+					const journal = await this.submissions.getTurnJournal(terminal.submissionId);
+					if (journal?.streamKey) await this.submissions.deleteStreamChunkSegments(journal.streamKey);
+					const event = terminal.event as {
+						outcome?: 'completed' | 'failed';
+						result?: unknown;
+						error?: { message?: string };
+					};
+					if (event.outcome === 'completed') this.observers.complete(terminal.submissionId, event.result);
+					if (event.outcome === 'failed') {
+						this.observers.fail(
+							terminal.submissionId,
+							new Error(event.error?.message ?? 'Agent submission failed.'),
+						);
+					}
+				}
+			}
 			// The marker scan is advisory: a fresh marker suppresses
 			// re-reconciling an attempt that may still be running. If the scan
 			// itself fails, degrade to an empty marker set instead of aborting —
@@ -439,6 +464,12 @@ class CloudflareAgentCoordinator {
 				agent,
 				(dispatchId) =>
 					this.createDurableContext(submissionSyntheticRequest(submission.input), dispatchId),
+				(terminal) =>
+					this.eventStreamStore.appendEventOnce(
+						agentStreamPath(this.agentName, this.instance.name),
+						terminal.eventKey,
+						terminal.event,
+					),
 				{ ownerId: this.instance.ctx.id.toString(), leaseExpiresAt: 0 },
 			),
 		);
@@ -553,6 +584,12 @@ class CloudflareAgentCoordinator {
 			createContext: (dispatchId) =>
 				this.createDurableContext(submissionSyntheticRequest(submission.input), dispatchId),
 			observers: this.observers,
+			deliverTerminalEvent: (terminal) =>
+				this.eventStreamStore.appendEventOnce(
+					agentStreamPath(this.agentName, this.instance.name),
+					terminal.eventKey,
+					terminal.event,
+				),
 			onInteractionStart: this.options.onInteractionStart,
 			wrapExecution: (fn) => this.runWithInstanceContext(fn),
 			onSettled: () => {

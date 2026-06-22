@@ -130,6 +130,9 @@ const schemaTables = {
 		'timeout_at',
 		'owner_id',
 		'lease_expires_at',
+		'terminal_key',
+		'terminal_event',
+		'terminal_offset',
 	],
 	flue_agent_turn_journals: [
 		'submission_id',
@@ -166,7 +169,7 @@ const schemaTables = {
 		'error',
 	],
 	flue_event_streams: ['path', 'next_offset', 'closed'],
-	flue_event_stream_entries: ['path', 'seq', 'data'],
+	flue_event_stream_entries: ['path', 'seq', 'data', 'event_key'],
 } as const;
 
 interface SchemaColumn {
@@ -387,7 +390,7 @@ async function ensureTables(runner: MysqlRunner): Promise<void> {
 		`CREATE TABLE IF NOT EXISTS flue_session_entries (session_id VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, entry_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, position INT NOT NULL, data LONGTEXT NOT NULL, PRIMARY KEY (session_id, entry_id), INDEX flue_session_entries_session_position_idx (session_id, position)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_image_chunks (owner_kind VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, owner_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, owner_part VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, image_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, chunk_index INT NOT NULL, chunk_count INT NOT NULL, data LONGTEXT NOT NULL, PRIMARY KEY (owner_kind, owner_id, owner_part, image_id, chunk_index)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_agent_session_locks (session_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY) ENGINE=InnoDB`,
-		`CREATE TABLE IF NOT EXISTS flue_agent_submissions (sequence BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, submission_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL UNIQUE, session_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, payload LONGTEXT NOT NULL, status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, accepted_at BIGINT NOT NULL, attempt_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, input_applied_at BIGINT, recovery_requested_at BIGINT, started_at BIGINT, settled_at BIGINT, error LONGTEXT, attempt_count INT NOT NULL DEFAULT 0, max_retry INT NOT NULL DEFAULT ${DURABILITY_DEFAULT_MAX_ATTEMPTS}, timeout_at BIGINT NOT NULL DEFAULT 0, owner_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, lease_expires_at BIGINT NOT NULL DEFAULT 0, INDEX flue_agent_submissions_status_sequence_idx (status, sequence), INDEX flue_agent_submissions_session_status_sequence_idx (session_key, status, sequence)) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS flue_agent_submissions (sequence BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, submission_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL UNIQUE, session_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, payload LONGTEXT NOT NULL, status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, accepted_at BIGINT NOT NULL, attempt_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, input_applied_at BIGINT, recovery_requested_at BIGINT, started_at BIGINT, settled_at BIGINT, error LONGTEXT, attempt_count INT NOT NULL DEFAULT 0, max_retry INT NOT NULL DEFAULT ${DURABILITY_DEFAULT_MAX_ATTEMPTS}, timeout_at BIGINT NOT NULL DEFAULT 0, owner_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, lease_expires_at BIGINT NOT NULL DEFAULT 0, terminal_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, terminal_event LONGTEXT, terminal_offset VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin, INDEX flue_agent_submissions_status_sequence_idx (status, sequence), INDEX flue_agent_submissions_session_status_sequence_idx (session_key, status, sequence)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_agent_turn_journals (submission_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, session_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, attempt_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, operation_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, turn_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, phase VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, revision INT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, checkpoint_leaf_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, tool_request_json LONGTEXT, stream_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, stream_consumed_at BIGINT, committed TINYINT(1) NOT NULL DEFAULT 0, committed_leaf_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_agent_stream_chunks (stream_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, segment_index INT NOT NULL, body LONGTEXT NOT NULL, PRIMARY KEY (stream_key, segment_index)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_agent_session_deletions (session_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, started_at BIGINT NOT NULL) ENGINE=InnoDB`,
@@ -395,9 +398,17 @@ async function ensureTables(runner: MysqlRunner): Promise<void> {
 		`CREATE TABLE IF NOT EXISTS flue_agent_attempt_markers (submission_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, attempt_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (submission_id, attempt_id)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_runs (run_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, workflow_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, started_at VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, payload LONGTEXT, ended_at VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin, is_error TINYINT(1), duration_ms BIGINT, result LONGTEXT, error LONGTEXT, INDEX flue_runs_status_started_idx (status, started_at DESC, run_id DESC), INDEX flue_runs_workflow_started_idx (workflow_name, started_at DESC, run_id DESC)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_event_streams (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, next_offset BIGINT NOT NULL DEFAULT 0, closed TINYINT(1) NOT NULL DEFAULT 0) ENGINE=InnoDB`,
-		`CREATE TABLE IF NOT EXISTS flue_event_stream_entries (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, seq BIGINT NOT NULL, data LONGTEXT NOT NULL, PRIMARY KEY (path, seq)) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS flue_event_stream_entries (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, seq BIGINT NOT NULL, data LONGTEXT NOT NULL, event_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, PRIMARY KEY (path, seq), UNIQUE INDEX flue_event_stream_entries_path_event_key_idx (path, event_key)) ENGINE=InnoDB`,
 	];
 	for (const statement of ddl) await runner.query(statement);
+	for (const statement of [
+		`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,
+		`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_event LONGTEXT`,
+		`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_offset VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin`,
+		`ALTER TABLE flue_event_stream_entries ADD COLUMN IF NOT EXISTS event_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,
+	]) await runner.query(statement);
+	const eventKeyIndexes = await runner.query(`SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'flue_event_stream_entries' AND INDEX_NAME = 'flue_event_stream_entries_path_event_key_idx'`);
+	if (eventKeyIndexes.length === 0) await runner.query(`CREATE UNIQUE INDEX flue_event_stream_entries_path_event_key_idx ON flue_event_stream_entries (path, event_key)`);
 	const versionRows = await runner.query(
 		`SELECT value FROM flue_meta WHERE \`key\` = 'schema_version'`,
 	);
@@ -724,7 +735,7 @@ class MysqlSubmissionStore implements AgentSubmissionStore {
 
 	async hasUnsettledSubmissions(): Promise<boolean> {
 		const rows = await this.runner.query(
-			`SELECT 1 FROM flue_agent_submissions WHERE status IN ('queued', 'running') LIMIT 1`,
+			`SELECT 1 FROM flue_agent_submissions WHERE status IN ('queued', 'running', 'terminalizing') LIMIT 1`,
 		);
 		return rows.length > 0;
 	}
@@ -739,7 +750,7 @@ class MysqlSubmissionStore implements AgentSubmissionStore {
 			     SELECT 1
 			     FROM flue_agent_submissions AS earlier
 			     WHERE earlier.session_key = current_sub.session_key
-			       AND earlier.status IN ('queued', 'running')
+			       AND earlier.status IN ('queued', 'running', 'terminalizing')
 			       AND earlier.sequence < current_sub.sequence
 			   )
 			 ORDER BY current_sub.sequence ASC`,
@@ -957,7 +968,7 @@ class MysqlSubmissionStore implements AgentSubmissionStore {
 			const row = candidate[0];
 			if (!row || typeof row.session_key !== 'string') return null;
 			const earlier = await tx.query(
-				`SELECT sequence FROM flue_agent_submissions WHERE session_key = ? AND status IN ('queued', 'running') AND sequence < ? LIMIT 1 FOR UPDATE`,
+				`SELECT sequence FROM flue_agent_submissions WHERE session_key = ? AND status IN ('queued', 'running', 'terminalizing') AND sequence < ? LIMIT 1 FOR UPDATE`,
 				[row.session_key, Number(row.sequence)],
 			);
 			if (earlier[0]) return null;
@@ -1024,6 +1035,29 @@ class MysqlSubmissionStore implements AgentSubmissionStore {
 			`UPDATE flue_agent_submissions SET status = 'queued', attempt_id = NULL, recovery_requested_at = NULL, started_at = NULL, owner_id = NULL, lease_expires_at = 0 WHERE submission_id = ? AND status = 'running' AND attempt_id = ? AND input_applied_at IS NULL`,
 			[attempt.submissionId, attempt.attemptId],
 		);
+	}
+
+	async listPendingTerminalOutboxes(): Promise<any[]> {
+		const rows = await this.runner.query(`SELECT submission_id, session_key, attempt_id, terminal_key, terminal_event, terminal_offset FROM flue_agent_submissions WHERE kind = 'direct' AND status = 'terminalizing' ORDER BY sequence ASC`);
+		return rows.map((row) => ({ submissionId: String(row.submission_id), sessionKey: String(row.session_key), attemptId: String(row.attempt_id), eventKey: String(row.terminal_key), event: JSON.parse(String(row.terminal_event)), ...(row.terminal_offset != null ? { offset: String(row.terminal_offset) } : {}) }));
+	}
+	async reserveSubmissionTerminal(attempt: SubmissionAttemptRef, terminal: { eventKey: string; event: unknown }): Promise<any | null> {
+		return this.runner.transaction(async (tx) => {
+			const data = JSON.stringify(terminal.event);
+			const rows = await tx.query(`SELECT submission_id, session_key, attempt_id, status, terminal_key, terminal_event, terminal_offset FROM flue_agent_submissions WHERE submission_id = ? FOR UPDATE`, [attempt.submissionId]);
+			const row = rows[0];
+			if (!row || row.attempt_id !== attempt.attemptId) return null;
+			if (row.status === 'running') {
+				await tx.query(`UPDATE flue_agent_submissions SET status = 'terminalizing', terminal_key = ?, terminal_event = ? WHERE submission_id = ? AND kind = 'direct' AND status = 'running' AND attempt_id = ? AND owner_id IS NOT NULL`, [terminal.eventKey, data, attempt.submissionId, attempt.attemptId]);
+			} else if (row.status !== 'terminalizing' || row.terminal_key !== terminal.eventKey || row.terminal_event !== data) return null;
+			return { submissionId: attempt.submissionId, sessionKey: String(row.session_key), attemptId: attempt.attemptId, eventKey: terminal.eventKey, event: terminal.event, ...(row.terminal_offset != null ? { offset: String(row.terminal_offset) } : {}) };
+		});
+	}
+	async recordSubmissionTerminalOffset(attempt: SubmissionAttemptRef, eventKey: string, offset: string): Promise<boolean> {
+		return updateIfPresent(this.runner, `SELECT submission_id FROM flue_agent_submissions WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ? AND terminal_key = ? AND (terminal_offset IS NULL OR terminal_offset = ?)`, [attempt.submissionId, attempt.attemptId, eventKey, offset], `UPDATE flue_agent_submissions SET terminal_offset = COALESCE(terminal_offset, ?) WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ? AND terminal_key = ?`, [offset, attempt.submissionId, attempt.attemptId, eventKey]);
+	}
+	async finalizeSubmissionTerminal(attempt: SubmissionAttemptRef, eventKey: string): Promise<boolean> {
+		return updateIfPresent(this.runner, `SELECT submission_id FROM flue_agent_submissions WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ? AND terminal_key = ? AND terminal_offset IS NOT NULL`, [attempt.submissionId, attempt.attemptId, eventKey], `UPDATE flue_agent_submissions SET status = 'settled', settled_at = ? WHERE submission_id = ? AND status = 'terminalizing' AND attempt_id = ? AND terminal_key = ? AND terminal_offset IS NOT NULL`, [Date.now(), attempt.submissionId, attempt.attemptId, eventKey]);
 	}
 
 	async completeSubmission(attempt: SubmissionAttemptRef): Promise<boolean> {
@@ -1208,7 +1242,7 @@ class MysqlSubmissionStore implements AgentSubmissionStore {
 			await lockSession(tx, sessionKey);
 			const active = await tx.query(
 				`SELECT 1 FROM flue_agent_submissions
-				 WHERE session_key = ? AND status IN ('queued', 'running')
+				 WHERE session_key = ? AND status IN ('queued', 'running', 'terminalizing')
 				 LIMIT 1`,
 				[sessionKey],
 			);
@@ -1357,7 +1391,7 @@ function parseSubmission(row: SqlRow, chunks: readonly PersistedChunkRow[]): Age
 		typeof row.session_key !== 'string' ||
 		(row.kind !== 'dispatch' && row.kind !== 'direct') ||
 		typeof row.payload !== 'string' ||
-		(row.status !== 'queued' && row.status !== 'running' && row.status !== 'settled') ||
+		(row.status !== 'queued' && row.status !== 'running' && row.status !== 'terminalizing' && row.status !== 'settled') ||
 		!Number.isFinite(acceptedAt) ||
 		(row.status === 'queued' &&
 			(attemptId !== undefined ||
@@ -1592,6 +1626,27 @@ class MysqlEventStreamStore implements EventStreamStore {
 				this.pendingAppends.delete(path);
 			}
 		}
+	}
+
+	async appendEventOnce(path: string, key: string, event: unknown): Promise<string> {
+		const data = JSON.stringify(event);
+		const offset = await this.runner.transaction(async (tx) => {
+			const existing = await tx.query(`SELECT seq, data FROM flue_event_stream_entries WHERE path = ? AND event_key = ? LIMIT 1 FOR UPDATE`, [path, key]);
+			if (existing[0]) {
+				if (existing[0].data !== data) throw new TypeError(`Event key "${key}" has a conflicting payload.`);
+				return Number(existing[0].seq);
+			}
+			const rows = await tx.query(`SELECT next_offset, closed FROM flue_event_streams WHERE path = ? FOR UPDATE`, [path]);
+			const row = rows[0];
+			if (!row) throw new TypeError(`Event stream "${path}" does not exist.`);
+			if (parseMysqlBoolean(row.closed)) throw new TypeError(`Event stream "${path}" is closed.`);
+			const seq = Number(row.next_offset);
+			await tx.query(`UPDATE flue_event_streams SET next_offset = next_offset + 1 WHERE path = ? AND closed = 0`, [path]);
+			await tx.query(`INSERT INTO flue_event_stream_entries (path, seq, data, event_key) VALUES (?, ?, ?, ?)`, [path, seq, data, key]);
+			return seq;
+		});
+		this.notifyListeners(path);
+		return formatOffset(offset);
 	}
 
 	async readEvents(

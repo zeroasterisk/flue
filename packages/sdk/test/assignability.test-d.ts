@@ -19,9 +19,10 @@ import {
 // it is never persisted to durable streams or served over HTTP, so the SDK
 // wire union deliberately omits it.
 type MessageSnapshotEvent = { type: 'message_start' | 'message_end' };
-const _: Exclude<SdkFlueEvent, MessageSnapshotEvent> = {} as Exclude<
+type CheckpointOneSettlementEvent = { type: 'submission_settled' };
+const _: Exclude<SdkFlueEvent, MessageSnapshotEvent | CheckpointOneSettlementEvent> = {} as Exclude<
 	RuntimeFlueEvent,
-	{ type: 'turn_request' } | MessageSnapshotEvent
+	{ type: 'turn_request' } | MessageSnapshotEvent | CheckpointOneSettlementEvent
 >;
 void _;
 
@@ -32,6 +33,19 @@ const _snapshotTurnId: Extract<SdkFlueEvent, MessageSnapshotEvent>['turnId'] = {
 >['turnId'];
 void _snapshot;
 void _snapshotTurnId;
+
+type _SettlementResult = Extract<
+	SdkFlueEvent,
+	CheckpointOneSettlementEvent
+>['result'];
+type _SettlementError = Extract<
+	SdkFlueEvent,
+	CheckpointOneSettlementEvent
+>['error'];
+const _settlementResult: _SettlementResult = {} as unknown;
+const _settlementError: _SettlementError = { message: 'failed' };
+void _settlementResult;
+void _settlementError;
 
 type ExpectNever<T extends never> = T;
 type _SdkMessageUpdateIsAbsent = ExpectNever<Extract<SdkFlueEvent, { type: 'message_update' }>>;

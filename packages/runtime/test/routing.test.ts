@@ -1130,6 +1130,53 @@ describe('flue()', () => {
 		});
 	});
 
+	it('temporarily exposes route-free agents and workflows without authored middleware', async () => {
+		const seen: string[] = [];
+		configureFlueRuntime(nodeRuntime({
+			temporaryLocalExposure: true,
+			agents: [agentRecord('assistant')],
+			workflows: [
+				workflowRecord(
+					'internal-report',
+					defineWorkflow({
+						agent: defineAgent(() => ({ model: false })),
+						run: async () => {
+							seen.push('workflow');
+							return 'done';
+						},
+					}),
+				),
+			],
+			createAgentAdmission: (_agentName, id) => async () => ({
+				submissionId: 'submission-1',
+				result: { id },
+			}),
+			createWorkflowContext: createTestContext,
+		}));
+		const app = new Hono();
+		app.use('/api/*', async (_c, next) => {
+			seen.push('outer');
+			await next();
+		});
+		app.route('/api', flue());
+
+		const agentResponse = await app.fetch(
+			new Request('http://localhost/api/agents/assistant/customer-123', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ message: 'hello' }),
+			}),
+		);
+		const workflowResponse = await app.fetch(
+			new Request('http://localhost/api/workflows/internal-report?wait=result', { method: 'POST' }),
+		);
+
+		expect(agentResponse.status).toBe(202);
+		expect(workflowResponse.status).toBe(200);
+		expect(await workflowResponse.json()).toMatchObject({ result: 'done' });
+		expect(seen).toEqual(['outer', 'outer', 'workflow']);
+	});
+
 	it('renders a non-HTTP workflow as workflow_not_found when probed over HTTP', async () => {
 		configureFlueRuntime(nodeRuntime({
 			target: 'node',

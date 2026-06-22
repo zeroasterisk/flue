@@ -67,6 +67,7 @@ import {
 	acquireGenerationScript,
 	admitSubmissionScript,
 	appendEventScript,
+	appendEventOnceScript,
 	claimSubmissionScript,
 	closeEventScript,
 	createRunScript,
@@ -77,6 +78,9 @@ import {
 	lifecycleScript,
 	publishChunksScript,
 	publishGenerationScript,
+	prepareTerminalScript,
+	recordTerminalOffsetScript,
+	finalizeTerminalScript,
 	quarantineSubmissionScript,
 	reclaimGenerationsScript,
 	releaseGenerationScript,
@@ -503,6 +507,9 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 				0 ||
 			integer(
 				await this.backend.command('ZCARD', [this.backend.keys.submissionStatus('running')]),
+			) > 0 ||
+			integer(
+				await this.backend.command('ZCARD', [this.backend.keys.submissionStatus('terminalizing')]),
 			) > 0
 		);
 	}
@@ -725,6 +732,31 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 
 	requeueSubmissionBeforeInputApplied(attempt: SubmissionAttemptRef): Promise<boolean> {
 		return this.lifecycle(attempt, 'requeue', Date.now());
+	}
+
+	async listPendingTerminalOutboxes(): Promise<any[]> {
+		const output = [];
+		for (const id of await this.backend.zrange(this.backend.keys.submissionStatus('terminalizing'))) {
+			const row = await this.backend.hgetall(this.backend.keys.submission(id));
+			if (row.kind === 'direct' && row.status === 'terminalizing') output.push({ submissionId: id, sessionKey: required(row.sessionKey, 'Persisted Redis terminal session is missing.'), attemptId: required(row.attemptId, 'Persisted Redis terminal attempt is missing.'), eventKey: required(row.terminalKey, 'Persisted Redis terminal key is missing.'), event: JSON.parse(required(row.terminalEvent, 'Persisted Redis terminal event is missing.')), ...(row.terminalOffset ? { offset: row.terminalOffset } : {}) });
+		}
+		return output;
+	}
+	async reserveSubmissionTerminal(attempt: SubmissionAttemptRef, terminal: { eventKey: string; event: unknown }): Promise<any | null> {
+		const id = attempt.submissionId;
+		const row = await this.backend.hgetall(this.backend.keys.submission(id));
+		if (!row.sessionKey) return null;
+		await this.backend.eval(prepareTerminalScript, [this.backend.keys.submission(id), this.backend.keys.submissionStatus('running'), this.backend.keys.submissionStatus('terminalizing'), this.backend.keys.sessionUnsettled(row.sessionKey)], [attempt.attemptId, id, terminal.eventKey, json(terminal.event)]);
+		const current = await this.backend.hgetall(this.backend.keys.submission(id));
+		return current.status === 'terminalizing' && current.attemptId === attempt.attemptId && current.terminalKey === terminal.eventKey && current.terminalEvent === json(terminal.event) ? { submissionId: id, sessionKey: current.sessionKey, attemptId: attempt.attemptId, eventKey: terminal.eventKey, event: terminal.event, ...(current.terminalOffset ? { offset: current.terminalOffset } : {}) } : null;
+	}
+	async recordSubmissionTerminalOffset(attempt: SubmissionAttemptRef, eventKey: string, offset: string): Promise<boolean> {
+		return integer(await this.backend.eval(recordTerminalOffsetScript, [this.backend.keys.submission(attempt.submissionId)], [attempt.attemptId, eventKey, offset])) === 1;
+	}
+	async finalizeSubmissionTerminal(attempt: SubmissionAttemptRef, eventKey: string): Promise<boolean> {
+		const row = await this.backend.hgetall(this.backend.keys.submission(attempt.submissionId));
+		if (!row.sessionKey || row.attemptId !== attempt.attemptId || row.terminalKey !== eventKey || !row.terminalOffset) return false;
+		return integer(await this.backend.eval(finalizeTerminalScript, [this.backend.keys.submission(attempt.submissionId), this.backend.keys.submissionStatus('terminalizing'), this.backend.keys.sessionUnsettled(row.sessionKey)], [attempt.submissionId, Date.now(), row.terminalOffset])) === 1;
 	}
 
 	completeSubmission(attempt: SubmissionAttemptRef): Promise<boolean> {
@@ -982,7 +1014,7 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 		const row = await this.backend.hgetall(this.backend.keys.submission(id));
 		if (!row.submissionId || !row.sessionKey || !row.status || !row.sequence) return;
 		const sequence = integer(row.sequence);
-		const commands = ['queued', 'running', 'settled'].map((status) => ({
+		const commands = ['queued', 'running', 'terminalizing', 'settled'].map((status) => ({
 			command: status === row.status ? 'ZADD' : 'ZREM',
 			args:
 				status === row.status
@@ -1377,6 +1409,18 @@ class RedisEventStreamStore implements EventStreamStore {
 		);
 		if (result[0] === 'missing') throw new TypeError(`Event stream "${path}" does not exist.`);
 		if (result[0] === 'closed') throw new TypeError(`Event stream "${path}" is closed.`);
+		this.notify(path);
+		return formatOffset(integer(result[1]));
+	}
+
+	async appendEventOnce(path: string, key: string, event: unknown): Promise<string> {
+		const result = strings(await this.backend.eval(appendEventOnceScript, [
+			this.backend.keys.event(path), this.backend.keys.eventEntries(path),
+			this.backend.keys.eventOrder(path), this.backend.keys.eventKeys(path),
+		], [key, json(event)]));
+		if (result[0] === 'missing') throw new TypeError(`Event stream "${path}" does not exist.`);
+		if (result[0] === 'closed') throw new TypeError(`Event stream "${path}" is closed.`);
+		if (result[0] === 'conflict') throw new TypeError(`Event key "${key}" has a conflicting payload.`);
 		this.notify(path);
 		return formatOffset(integer(result[1]));
 	}

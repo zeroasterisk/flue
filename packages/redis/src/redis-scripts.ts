@@ -298,6 +298,61 @@ redis.call('HSET', KEYS[1], 'nextOffset', seq + 1)
 return {'appended', tostring(seq)}
 `;
 
+export const appendEventOnceScript = `${guard}
+require_type(KEYS[1], 'hash')
+require_type(KEYS[2], 'hash')
+require_type(KEYS[3], 'zset')
+require_type(KEYS[4], 'hash')
+local existing = redis.call('HGET', KEYS[4], ARGV[1])
+if existing then
+  local separator = string.find(existing, ':')
+  local seq = string.sub(existing, 1, separator - 1)
+  local data = string.sub(existing, separator + 1)
+  if data ~= ARGV[2] then return {'conflict'} end
+  return {'appended', seq}
+end
+if redis.call('EXISTS', KEYS[1]) == 0 then return {'missing'} end
+if redis.call('HGET', KEYS[1], 'closed') == '1' then return {'closed'} end
+local seq = tonumber(redis.call('HGET', KEYS[1], 'nextOffset') or '0')
+redis.call('HSET', KEYS[2], tostring(seq), ARGV[2])
+redis.call('ZADD', KEYS[3], seq, tostring(seq))
+redis.call('HSET', KEYS[4], ARGV[1], tostring(seq) .. ':' .. ARGV[2])
+redis.call('HSET', KEYS[1], 'nextOffset', seq + 1)
+return {'appended', tostring(seq)}
+`;
+
+export const prepareTerminalScript = `${guard}
+require_type(KEYS[1], 'hash')
+for i = 2, 4 do require_type(KEYS[i], 'zset') end
+if redis.call('HGET', KEYS[1], 'kind') ~= 'direct' or redis.call('HGET', KEYS[1], 'status') ~= 'running' or redis.call('HGET', KEYS[1], 'attemptId') ~= ARGV[1] or not redis.call('HGET', KEYS[1], 'ownerId') or redis.call('HEXISTS', KEYS[1], 'terminalKey') == 1 then return 0 end
+local sequence = redis.call('HGET', KEYS[1], 'sequence')
+redis.call('ZREM', KEYS[2], ARGV[2])
+redis.call('ZADD', KEYS[3], sequence, ARGV[2])
+redis.call('ZADD', KEYS[4], sequence, ARGV[2])
+redis.call('HSET', KEYS[1], 'status', 'terminalizing', 'terminalKey', ARGV[3], 'terminalEvent', ARGV[4])
+return 1
+`;
+
+export const recordTerminalOffsetScript = `${guard}
+require_type(KEYS[1], 'hash')
+if redis.call('HGET', KEYS[1], 'status') ~= 'terminalizing' or redis.call('HGET', KEYS[1], 'attemptId') ~= ARGV[1] or redis.call('HGET', KEYS[1], 'terminalKey') ~= ARGV[2] then return 0 end
+local existing = redis.call('HGET', KEYS[1], 'terminalOffset')
+if existing and existing ~= ARGV[3] then return 0 end
+redis.call('HSET', KEYS[1], 'terminalOffset', ARGV[3])
+return 1
+`;
+
+export const finalizeTerminalScript = `${guard}
+require_type(KEYS[1], 'hash')
+require_type(KEYS[2], 'zset')
+require_type(KEYS[3], 'zset')
+if redis.call('HGET', KEYS[1], 'kind') ~= 'direct' or redis.call('HGET', KEYS[1], 'status') ~= 'terminalizing' then return 0 end
+redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('ZREM', KEYS[3], ARGV[1])
+redis.call('HSET', KEYS[1], 'status', 'settled', 'settledAt', ARGV[2], 'terminalOffset', ARGV[3])
+return 1
+`;
+
 export const closeEventScript = `${guard}
 require_type(KEYS[1], 'hash')
 if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('HSET', KEYS[1], 'closed', 1) end

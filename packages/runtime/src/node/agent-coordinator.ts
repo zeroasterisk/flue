@@ -171,11 +171,9 @@ export function createNodeAgentCoordinator(options: {
 			// Subscribe to events for durable agent event persistence.
 			// createStream is called before processSubmission (see spawnSubmissionTask).
 			const streamPath = agentStreamPath(input.agent, input.id);
-			ctx.subscribeEvent((event) => {
-				if (isStreamExcludedEvent(event)) return;
-				eventStreamStore.appendEvent(streamPath, event).catch((error) => {
-					console.error('[flue:event-stream] appendEvent failed:', error);
-				});
+			ctx.subscribeEvent(async (event) => {
+				if (isStreamExcludedEvent(event) || event.type === 'submission_settled') return;
+				await eventStreamStore.appendEvent(streamPath, event);
 			});
 			return ctx;
 		};
@@ -207,6 +205,12 @@ export function createNodeAgentCoordinator(options: {
 				resolveAgent,
 				createContext: makeSubmissionContext(claimed.input),
 				observers,
+				deliverTerminalEvent: (terminal) =>
+					eventStreamStore.appendEventOnce(
+						agentStreamPath(claimed.input.agent, claimed.input.id),
+						terminal.eventKey,
+						terminal.event,
+					),
 				onInteractionStart,
 				signal: controller.signal,
 				isShutdownAbort: (error) =>
@@ -399,6 +403,28 @@ export function createNodeAgentCoordinator(options: {
 	}
 
 	async function runReconciliationPass(): Promise<void> {
+		for (const terminal of await submissions.listPendingTerminalOutboxes()) {
+			const submission = await submissions.getSubmission(terminal.submissionId);
+			if (!submission || submission.kind !== 'direct') continue;
+			const streamPath = agentStreamPath(submission.input.agent, submission.input.id);
+			await eventStreamStore.createStream(streamPath);
+			const offset = terminal.offset ?? (await eventStreamStore.appendEventOnce(streamPath, terminal.eventKey, terminal.event));
+			const attempt = { submissionId: terminal.submissionId, attemptId: terminal.attemptId };
+			await submissions.recordSubmissionTerminalOffset(attempt, terminal.eventKey, offset);
+			if (await submissions.finalizeSubmissionTerminal(attempt, terminal.eventKey)) {
+				const journal = await submissions.getTurnJournal(terminal.submissionId);
+				if (journal?.streamKey) await submissions.deleteStreamChunkSegments(journal.streamKey);
+				const event = terminal.event as {
+					outcome?: 'completed' | 'failed';
+					result?: unknown;
+					error?: { message?: string };
+				};
+				if (event.outcome === 'completed') observers.complete(terminal.submissionId, event.result);
+				if (event.outcome === 'failed') {
+					observers.fail(terminal.submissionId, new Error(event.error?.message ?? 'Agent submission failed.'));
+				}
+			}
+		}
 		for (const submission of await submissions.listExpiredSubmissions()) {
 			// Skip submissions still actively processing in this coordinator
 			// (possible when heartbeat renewals fail transiently and the lease
@@ -432,6 +458,12 @@ export function createNodeAgentCoordinator(options: {
 					submission,
 					agent,
 					makeSubmissionContext(submission.input),
+					(terminal) =>
+						eventStreamStore.appendEventOnce(
+							agentStreamPath(submission.input.agent, submission.input.id),
+							terminal.eventKey,
+							terminal.event,
+						),
 					{ ownerId, leaseExpiresAt: Date.now() + LEASE_DURATION_MS },
 				);
 				if (reconciled.disposition === 'replacement') {
