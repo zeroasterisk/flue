@@ -150,6 +150,8 @@ describe('flue run', () => {
 
 		assert.equal(exitCode, 0, stderr);
 		assert.deepEqual(JSON.parse(stdout), { value: 'weekly', nested: { count: 3 } });
+		assert.match(stderr, /authored module log/);
+		assert.match(stderr, /authored workflow log/);
 	});
 
 	it('runs a route-free agent over HTTP and prints its generated instance ID', async () => {
@@ -183,6 +185,36 @@ describe('flue run', () => {
 		assert.match(stderr, /id\s+[0-9A-HJKMNP-TV-Z]{26}/);
 		assert.match(stderr, /No model is configured/);
 		assert.equal(stdout, '');
+	});
+
+	it('runs a Node fixture with a project dependency without writing runtime artifacts', async () => {
+		const root = createWorkflowFixture();
+		const temporaryEntriesBefore = new Set(
+			fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith('flue-run-')),
+		);
+		const child = spawn(
+			process.execPath,
+			[cli.pathname, 'run', 'inspect-input', '--input', '{"value":"diskless","nested":{"count":1}}'],
+			{ cwd: root, stdio: ['ignore', 'pipe', 'pipe'] },
+		);
+		let stderr = '';
+		child.stderr.setEncoding('utf8');
+		child.stderr.on('data', (chunk) => {
+			stderr += chunk;
+		});
+		const [exitCode] = await once(child, 'exit');
+		const temporaryEntriesAfter = fs
+			.readdirSync(os.tmpdir())
+			.filter((entry) => entry.startsWith('flue-run-'));
+
+		assert.equal(exitCode, 0, stderr);
+		assert.equal(fs.existsSync(path.join(root, 'dist')), false);
+		assert.equal(fs.existsSync(path.join(root, '.flue-vite')), false);
+		assert.equal(fs.existsSync(path.join(root, 'node_modules', '.vite')), false);
+		assert.deepEqual(
+			temporaryEntriesAfter.filter((entry) => !temporaryEntriesBefore.has(entry)),
+			[],
+		);
 	});
 
 	it('represents omitted CLI input as undefined for a workflow with schema defaults', async () => {
@@ -324,12 +356,13 @@ function createWorkflowFixture(optionalInput = false) {
 		path.join(root, 'workflows', 'inspect-input.mjs'),
 		`import * as v from 'valibot';\n` +
 			`import { defineAgent, defineWorkflow } from '@flue/runtime';\n` +
+			`console.log('authored module log');\n` +
 			`const agent = defineAgent(() => ({ model: false }));\n` +
 			`export default defineWorkflow({\n` +
 			`  agent,\n` +
 			(optionalInput
 				? `  input: v.object({ value: v.optional(v.string(), 'default') }),\n  async run({ input }) { return input; },\n`
-				: `  input: v.object({ value: v.string(), nested: v.object({ count: v.number() }) }),\n  async run({ input }) { return input; },\n`) +
+				: `  input: v.object({ value: v.string(), nested: v.object({ count: v.number() }) }),\n  async run({ input }) { console.log('authored workflow log'); return input; },\n`) +
 			`});\n`,
 	);
 	const valibotPath = path.join(repositoryRoot, 'node_modules', 'valibot');

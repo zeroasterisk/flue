@@ -4,9 +4,14 @@ import * as path from 'node:path';
 import {
 	build,
 	cloudflareViteConfigPath,
+	createBuildContext,
 	createCloudflareViteConfig,
+	createSharedViteConfig,
+	viteGeneratedEntryDependencyResolver,
 	viteInputDir,
 } from './build.ts';
+import { NodePlugin } from './build-plugin-node.ts';
+import { withScopedConsoleCapture } from './scoped-console-capture.ts';
 import type { BuildOptions } from './types.ts';
 
 export interface LocalHttpRuntimeOutput {
@@ -69,16 +74,21 @@ export async function startLocalHttpRuntime(
 ): Promise<LocalHttpRuntime> {
 	const root = path.resolve(options.root);
 	const sourceRoot = path.resolve(options.sourceRoot);
-	const output = path.resolve(options.output ?? path.join(root, 'dist'));
 	throwIfAborted(options.signal);
 	const port = options.port ?? (await selectAvailablePort());
 	throwIfAborted(options.signal);
+	if (options.target === 'node') {
+		const runtime = await startInMemoryNodeRuntime({ ...options, root, sourceRoot, port });
+		options.onBuildComplete?.();
+		return { target: 'node', ...runtime };
+	}
+	const output = path.resolve(options.output ?? path.join(root, 'dist'));
 	const buildOptions: BuildOptions = {
 		root,
 		sourceRoot,
 		output,
 		target: options.target,
-		mode: options.target === 'cloudflare' ? 'development' : 'build',
+		mode: 'development',
 		log: 'silent',
 		configFile: options.configFile,
 		envFile: options.envFile,
@@ -87,13 +97,109 @@ export async function startLocalHttpRuntime(
 	await build(buildOptions);
 	options.onBuildComplete?.();
 	throwIfAborted(options.signal);
-	return startBuiltLocalHttpRuntime({
-		...options,
-		root,
-		output,
-		port,
-		watch: false,
+	return startBuiltLocalHttpRuntime({ ...options, root, output, port, watch: false });
+}
+
+async function startInMemoryNodeRuntime(
+	options: StartLocalHttpRuntimeOptions & { root: string; sourceRoot: string; port: number },
+): Promise<StartedRuntime> {
+	const { createServer } = await import('vite');
+	const virtualEntry = 'virtual:flue/node-local-bootstrap';
+	const resolvedEntry = '\0virtual:flue/node-local-bootstrap';
+	const ctx = createBuildContext({
+		root: options.root,
+		sourceRoot: options.sourceRoot,
+		output: options.root,
+		target: 'node',
+		temporaryLocalExposure: true,
 	});
+	if (ctx.agents.length === 0 && ctx.workflows.length === 0) {
+		throw new Error(`[flue] No agent or workflow files found.\n\nExpected at: ${path.join(options.sourceRoot, 'agents')}/ or ${path.join(options.sourceRoot, 'workflows')}/\nAdd at least one agent or workflow file.`);
+	}
+	const code = new NodePlugin().generateRuntimeEntryPoint(ctx);
+	const shared = createSharedViteConfig(options.root, [], [resolvedEntry]);
+	const server = await createServer({
+		...shared,
+		appType: 'custom',
+		logLevel: 'silent',
+		resolve: { preserveSymlinks: true },
+		optimizeDeps: { noDiscovery: true, include: [] },
+		server: { middlewareMode: true, hmr: false, watch: null },
+		plugins: [
+			...shared.plugins,
+			{
+				name: 'flue-node-local-bootstrap',
+				resolveId(id: string) {
+					if (id === virtualEntry) return resolvedEntry;
+				},
+				load(id: string) {
+					if (id === resolvedEntry) return code;
+				},
+			},
+			viteGeneratedEntryDependencyResolver(options.root, { external: true }),
+		],
+	});
+	let lifecycle: { stop(): Promise<void>; closeSync(): void } | undefined;
+	try {
+		throwIfAborted(options.signal);
+		const loaded = (await withScopedConsoleCapture(options.onOutput, () =>
+			server.ssrLoadModule(virtualEntry),
+		)) as {
+			startFlueNodeServer(options: object): Promise<{ stop(): Promise<void>; closeSync(): void }>;
+		};
+		throwIfAborted(options.signal);
+		lifecycle = await loaded.startFlueNodeServer({
+			port: options.port,
+			hostname: '127.0.0.1',
+			local: true,
+			quiet: true,
+			env: { ...process.env, ...options.env },
+			onOutput: options.onOutput,
+			signal: options.signal,
+		});
+		throwIfAborted(options.signal);
+	} catch (error) {
+		const cleanupErrors: unknown[] = [];
+		if (lifecycle) {
+			try {
+				await lifecycle.stop();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+				lifecycle.closeSync();
+			}
+		}
+		try {
+			await server.close();
+		} catch (cleanupError) {
+			cleanupErrors.push(cleanupError);
+		}
+		if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], 'Node runtime startup failed.');
+		throw error;
+	}
+	return {
+		port: options.port,
+		url: `http://127.0.0.1:${options.port}`,
+		async reload() {},
+		async stop() {
+			const errors: unknown[] = [];
+			try {
+				await lifecycle?.stop();
+			} catch (error) {
+				errors.push(error);
+			} finally {
+				try {
+					await server.close();
+				} catch (error) {
+					errors.push(error);
+				}
+			}
+			if (errors.length === 1) throw errors[0];
+			if (errors.length > 1) throw new AggregateError(errors, 'Node runtime shutdown failed.');
+		},
+		killSync() {
+			lifecycle?.closeSync();
+		},
+	};
 }
 
 export async function startBuiltLocalHttpRuntime(

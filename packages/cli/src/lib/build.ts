@@ -57,13 +57,8 @@ async function buildApplication(options: BuildOptions): Promise<BuildResult> {
 	};
 
 	const sourceRoot = path.resolve(options.sourceRoot);
-
-	const agents = discoverAgents(sourceRoot);
-	const workflows = discoverWorkflows(sourceRoot);
-	const channels = discoverChannels(sourceRoot);
-	const appEntry = discoverOptionalEntry(sourceRoot, 'app');
-	const cloudflareEntry = discoverOptionalEntry(sourceRoot, 'cloudflare');
-	const dbEntry = discoverOptionalEntry(sourceRoot, 'db');
+	const ctx = createBuildContext({ ...options, root, output, sourceRoot });
+	const { agents, workflows, channels, appEntry, cloudflareEntry, dbEntry } = ctx;
 
 	if (verbose) {
 		brandRows('flue build', [
@@ -105,19 +100,6 @@ async function buildApplication(options: BuildOptions): Promise<BuildResult> {
 	fs.mkdirSync(output, { recursive: true });
 
 	let anyChanged = false;
-
-	const ctx: BuildContext = {
-		agents,
-		workflows,
-		channels,
-		root,
-		output,
-		appEntry,
-		cloudflareEntry,
-		dbEntry,
-		runtimeVersion: readRuntimeVersion(root),
-		temporaryLocalExposure: options.temporaryLocalExposure === true,
-	};
 
 	const serverCode = await plugin.generateEntryPoint(ctx);
 	const bundleStrategy = plugin.bundle;
@@ -277,6 +259,23 @@ function resolvePlugin(options: BuildOptions): BuildPlugin {
 	}
 }
 
+export function createBuildContext(options: BuildOptions & { output: string }): BuildContext {
+	const root = path.resolve(options.root);
+	const sourceRoot = path.resolve(options.sourceRoot);
+	return {
+		agents: discoverAgents(sourceRoot),
+		workflows: discoverWorkflows(sourceRoot),
+		channels: discoverChannels(sourceRoot),
+		root,
+		output: path.resolve(options.output),
+		appEntry: discoverOptionalEntry(sourceRoot, 'app'),
+		cloudflareEntry: discoverOptionalEntry(sourceRoot, 'cloudflare'),
+		dbEntry: discoverOptionalEntry(sourceRoot, 'db'),
+		runtimeVersion: readRuntimeVersion(root),
+		temporaryLocalExposure: options.temporaryLocalExposure === true,
+	};
+}
+
 export function discoverAgents(sourceRoot: string): AgentInfo[] {
 	return discoverModules(sourceRoot, 'agent');
 }
@@ -356,11 +355,15 @@ export function cloudflareViteConfigPath(root: string): string {
 	return path.join(root, '.flue-vite.wrangler.jsonc');
 }
 
-function createSharedViteConfig(root: string, bootstrapEntries: readonly string[] = []) {
+export function createSharedViteConfig(
+	root: string,
+	bootstrapEntries: readonly string[] = [],
+	trustedVirtualBootstrapIds: readonly string[] = [],
+) {
 	return {
 		configFile: false as const,
 		root,
-		plugins: [importAttributePlugin({ bootstrapEntries })],
+		plugins: [importAttributePlugin({ bootstrapEntries, trustedVirtualBootstrapIds })],
 	};
 }
 
@@ -385,14 +388,26 @@ export function createCloudflareViteConfig(
 	};
 }
 
-function viteGeneratedEntryDependencyResolver(root: string) {
+export function viteGeneratedEntryDependencyResolver(
+	root: string,
+	options: { external?: boolean; importers?: readonly string[] } = {},
+) {
 	const resolvers = [...collectNodePaths(root)].map((nodePath) =>
-		createRequire(path.join(nodePath, '__flue_vite_resolve__.cjs')),
+		createRequire(path.join(nodePath, '__flue_vite_resolve__.mjs')),
 	);
 	return {
 		name: 'flue-generated-entry-dependency-resolver',
 		enforce: 'pre' as const,
-		resolveId(source: string) {
+		async resolveId(source: string, importer?: string) {
+			if (
+				options.importers &&
+				(!importer || !options.importers.includes(importer)) &&
+				source !== '@flue/runtime' &&
+				!source.startsWith('@flue/runtime/') &&
+				source !== '@hono/node-server' &&
+				source !== 'debug'
+			)
+				return null;
 			if (
 				source.startsWith('.') ||
 				source.startsWith('/') ||
@@ -401,9 +416,18 @@ function viteGeneratedEntryDependencyResolver(root: string) {
 				source.startsWith('node:')
 			)
 				return null;
+			if (source === '@hono/node-server' && options.external) {
+				for (const nodePath of collectNodePaths(root)) {
+					const packageDir = path.join(nodePath, '@hono', 'node-server');
+					if (fs.existsSync(packageDir)) {
+						return { id: path.join(packageDir, 'dist', 'index.mjs'), external: true };
+					}
+				}
+			}
 			for (const resolve of resolvers) {
 				try {
-					return resolve.resolve(source);
+					const id = resolve.resolve(source);
+					return options.external ? { id, external: true } : id;
 				} catch {}
 			}
 			return null;

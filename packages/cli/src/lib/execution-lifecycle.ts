@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createFlueClient, type FlueClient } from '@flue/sdk';
 import { ulid } from 'ulidx';
@@ -64,7 +63,6 @@ export function createExecutionLifecycle(options: ExecutionLifecycleOptions): Ex
 	const controller = new AbortController();
 	let runtime: LocalHttpRuntime | undefined;
 	let application: LocalApplication | undefined;
-	let temporaryOutput: string | undefined;
 	let cloudflareScratch: Map<string, string | undefined> | undefined;
 	let cloudflareInputDirExisted = true;
 	let prepared: Promise<PreparedExecution> | undefined;
@@ -82,7 +80,6 @@ export function createExecutionLifecycle(options: ExecutionLifecycleOptions): Ex
 				if (fs.readdirSync(inputDir).length === 0) fs.rmdirSync(inputDir);
 			} catch {}
 		}
-		if (temporaryOutput) fs.rmSync(temporaryOutput, { recursive: true, force: true });
 		application?.envLoader.restore();
 	};
 	const forceCloseSync = () => {
@@ -183,7 +180,6 @@ export function createExecutionLifecycle(options: ExecutionLifecycleOptions): Ex
 
 	async function startLocalRuntime(): Promise<void> {
 		if (!application) throw new Error('[flue] Local application was not resolved.');
-		temporaryOutput = fs.mkdtempSync(path.join(os.tmpdir(), 'flue-run-'));
 		options.onStatus?.('building');
 		if (application.cfg.target === 'cloudflare') {
 			cloudflareInputDirExisted = fs.existsSync(path.join(application.cfg.root, '.flue-vite'));
@@ -195,7 +191,7 @@ export function createExecutionLifecycle(options: ExecutionLifecycleOptions): Ex
 		runtime = await startLocalHttpRuntime({
 			root: application.cfg.root,
 			sourceRoot: application.cfg.sourceRoot,
-			output: temporaryOutput,
+			output: application.cfg.target === 'cloudflare' ? application.cfg.output : undefined,
 			target: application.cfg.target,
 			configFile: application.configPath,
 			envFile: application.envFile,

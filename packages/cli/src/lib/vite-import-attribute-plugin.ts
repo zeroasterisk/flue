@@ -25,6 +25,7 @@ const SENSITIVE_FILE_PATTERNS = [/\.key$/i, /\.pem$/i, /\.p12$/i, /\.pfx$/i, /^s
 
 export interface ImportAttributePluginOptions {
 	bootstrapEntries?: readonly string[];
+	trustedVirtualBootstrapIds?: readonly string[];
 }
 
 /**
@@ -38,6 +39,7 @@ export function importAttributePlugin(options: ImportAttributePluginOptions): Pl
 	const bootstrapEntries = new Set(
 		(options.bootstrapEntries ?? []).map((entry) => canonicalPath(path.resolve(entry))),
 	);
+	const trustedVirtualBootstrapIds = new Set(options.trustedVirtualBootstrapIds ?? []);
 	const internalModuleToken = randomUUID();
 	const internalSkillModulePrefix = `${SKILL_MODULE_PREFIX}${internalModuleToken}:`;
 	const encodedInternalSkillModulePrefix = `__x00__flue-skill:${internalModuleToken}:`;
@@ -126,7 +128,7 @@ export function importAttributePlugin(options: ImportAttributePluginOptions): Pl
 		resolveId(source, importer) {
 			if (source.startsWith(MARKDOWN_MODULE_PREFIX)) return source;
 			if (source === PACKAGED_SKILLS_MODULE_ID) {
-				if (!isAuthorizedPackagedStoreImporter(importer, bootstrapEntries)) {
+				if (!isAuthorizedPackagedStoreImporter(importer, bootstrapEntries, trustedVirtualBootstrapIds)) {
 					throw new Error(
 						"[flue] Packaged skill contents are runtime-owned and cannot be imported from application modules. Import SKILL.md with { type: 'skill' }.",
 					);
@@ -348,9 +350,11 @@ function decodeSkillModuleId(
 function isAuthorizedPackagedStoreImporter(
 	importer: string | undefined,
 	bootstrapEntries: Set<string>,
+	trustedVirtualBootstrapIds: Set<string>,
 ): boolean {
 	if (!importer) return false;
 	if (importer.startsWith(SKILL_MODULE_PREFIX)) return true;
+	if (trustedVirtualBootstrapIds.has(importer)) return true;
 	return bootstrapEntries.has(canonicalPath(importer.split('?')[0] ?? importer));
 }
 
