@@ -7,10 +7,7 @@ export interface RuntimeActivityLease {
 export interface RuntimeActivityGate {
 	enter(): RuntimeActivityLease;
 	pause(): void;
-	resume(): void;
 	waitForIdle(): Promise<void>;
-	readonly active: number;
-	readonly paused: boolean;
 }
 
 export function createRuntimeActivityGate(): RuntimeActivityGate {
@@ -42,18 +39,9 @@ export function createRuntimeActivityGate(): RuntimeActivityGate {
 		pause() {
 			isPaused = true;
 		},
-		resume() {
-			isPaused = false;
-		},
 		waitForIdle() {
 			if (active === 0) return Promise.resolve();
 			return new Promise<void>((resolve) => idleWaiters.push(resolve));
-		},
-		get active() {
-			return active;
-		},
-		get paused() {
-			return isPaused;
 		},
 	};
 }

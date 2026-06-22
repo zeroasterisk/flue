@@ -54,7 +54,7 @@ describe('createStableNodeListener()', () => {
 		const accepted = fetch(listener.url);
 		await didEnter;
 
-		listener.beginDrain();
+		listener.setUnavailable('draining');
 		const rejected = await fetch(listener.url);
 		release();
 
@@ -70,7 +70,6 @@ function application(
 		fetch,
 		enterActivity: () => ({ release() {} }),
 		pauseAdmissions() {},
-		resumeAdmissions() {},
 		waitForIdle: async () => undefined,
 		stop: async () => undefined,
 		closeSync() {},

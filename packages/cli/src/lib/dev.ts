@@ -25,7 +25,7 @@ import pc from 'picocolors';
 import { createEnvLoader, type EnvLoader, selectEnvFile } from './env.ts';
 import {
 	type LocalHttpRuntime,
-	startBuiltLocalHttpRuntime,
+	startCloudflareLocalRuntime,
 } from './local-http-runtime.ts';
 import { createNodeLocalRuntime, type NodeLocalRuntime } from './node-local-runtime.ts';
 import { devLog, devServerBanner, error, note } from './terminal.ts';
@@ -131,7 +131,7 @@ export async function dev(options: DevOptions): Promise<void> {
 	}
 	const reloader: DevReloader =
 		options.target === 'node'
-			? new NodeReloader({ root, sourceRoot, port, envLoader })
+			? new NodeReloader({ root, sourceRoot, port })
 			: new CloudflareReloader({ root, sourceRoot, port });
 
 	await reloader.start();
@@ -411,14 +411,12 @@ class NodeReloader implements DevReloader {
 	private readonly root: string;
 	private readonly sourceRoot: string;
 	private readonly port: number;
-	private readonly envLoader: EnvLoader;
 	url: string;
 
-	constructor(opts: { root: string; sourceRoot: string; port: number; envLoader: EnvLoader }) {
+	constructor(opts: { root: string; sourceRoot: string; port: number }) {
 		this.root = opts.root;
 		this.sourceRoot = opts.sourceRoot;
 		this.port = opts.port;
-		this.envLoader = opts.envLoader;
 		this.url = `http://localhost:${this.port}`;
 	}
 
@@ -488,15 +486,14 @@ class CloudflareReloader implements DevReloader {
 	}
 
 	async start(): Promise<void> {
-		this.runtime = await startBuiltLocalHttpRuntime({
-			target: 'cloudflare',
+		const started = await startCloudflareLocalRuntime({
 			root: this.root,
-			output: path.join(this.root, 'dist'),
 			port: this.port,
 			watch: true,
 			cloudflareLogLevel: 'info',
 		});
-		this.url = this.runtime.url;
+		this.runtime = { target: 'cloudflare', ...started };
+		this.url = started.url;
 	}
 
 	shouldRebuildOn(relPath: string): boolean {

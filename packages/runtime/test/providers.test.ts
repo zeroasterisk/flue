@@ -5,12 +5,11 @@ import { createFlueContext, InMemorySessionStore, resolveModel } from '../src/in
 import {
 	registerProvider,
 	resetProviderRuntime,
-	resetProvidersForTests,
 } from '../src/runtime/providers.ts';
 import { createNoopSessionEnv } from './fixtures/session-env.ts';
 
 afterEach(() => {
-	resetProvidersForTests();
+	resetProviderRuntime();
 	vi.unstubAllGlobals();
 });
 

@@ -41,7 +41,7 @@ describe('package entrypoints', () => {
 		});
 		expect(runtime).not.toHaveProperty('Type');
 		expect(runtime).not.toHaveProperty('resetFlueRuntimeForTests');
-		expect(runtime).not.toHaveProperty('resetProvidersForTests');
+		expect(runtime).not.toHaveProperty('resetProviderRuntime');
 	});
 
 	it('keeps child session persistence types adapter-only', () => {

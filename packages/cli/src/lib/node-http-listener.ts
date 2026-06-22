@@ -1,28 +1,23 @@
 import { createAdaptorServer } from '@hono/node-server';
 import { RuntimeUnavailableError, toHttpResponse } from '@flue/runtime/internal';
 
-export type NodeRuntimeStatus = 'loading' | 'ready' | 'draining' | 'failed' | 'closed';
+type NodeRuntimeStatus = 'loading' | 'ready' | 'draining' | 'failed' | 'closed';
 
 export interface LoadedNodeApplication {
 	fetch(request: Request, env?: unknown): Response | Promise<Response>;
 	enterActivity(): { release(): void };
 	pauseAdmissions(): void;
-	resumeAdmissions(): void;
 	waitForIdle(): Promise<void>;
-	stop(options?: { abort?: boolean; timeoutMs?: number }): Promise<void>;
+	stop(timeoutMs?: number): Promise<void>;
 	closeSync(): void;
 }
 
 export interface StableNodeListener {
 	readonly port: number;
 	readonly url: string;
-	readonly status: NodeRuntimeStatus;
 	listen(): Promise<void>;
 	install(application: LoadedNodeApplication): void;
-	beginDrain(): LoadedNodeApplication | undefined;
-	setLoading(): void;
-	setFailed(): void;
-	closeConnections(): void;
+	setUnavailable(status: Exclude<NodeRuntimeStatus, 'ready' | 'closed'>): void;
 	stop(): Promise<void>;
 	closeSync(): void;
 }
@@ -98,9 +93,6 @@ export function createStableNodeListener(options: {
 			const port = address && typeof address === 'object' ? address.port : options.port;
 			return `http://${options.hostname ?? 'localhost'}:${port}`;
 		},
-		get status() {
-			return status;
-		},
 		listen() {
 			if (listening) return listening;
 			listening = new Promise<void>((resolve, reject) => {
@@ -146,23 +138,11 @@ export function createStableNodeListener(options: {
 		},
 		install(next) {
 			application = next;
-			next.resumeAdmissions();
 			status = 'ready';
 		},
-		beginDrain() {
-			status = 'draining';
-			application?.pauseAdmissions();
-			return application;
-		},
-		setLoading() {
-			status = 'loading';
+		setUnavailable(nextStatus) {
+			status = nextStatus;
 			application = undefined;
-		},
-		setFailed() {
-			status = 'failed';
-		},
-		closeConnections() {
-			if (server && 'closeAllConnections' in server) server.closeAllConnections();
 		},
 		stop() {
 			if (stopping) return stopping;

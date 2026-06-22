@@ -157,10 +157,6 @@ export function resetProviderRuntime(): void {
 	resetApiProviders();
 }
 
-export function resetProvidersForTests(): void {
-	resetProviderRuntime();
-}
-
 /** Whether a provider ID has already been registered. */
 export function hasRegisteredProvider(providerId: string): boolean {
 	return providersById.has(providerId);
@@ -181,7 +177,7 @@ export function getRegisteredStoreResponses(providerId: string): boolean {
 }
 
 /**
- * Re-export of pi-ai's `registerApiProvider`. Use to register a brand-new
+ * Register a brand-new pi-ai wire-protocol handler. Use this before
  * wire-protocol handler for an `api` slug pi-ai doesn't ship. Then call
  * {@link registerProvider} to associate a provider ID with that api.
  *

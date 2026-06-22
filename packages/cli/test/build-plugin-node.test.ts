@@ -92,7 +92,6 @@ describe('NodePlugin', () => {
 		);
 
 		expect(entry).toContain('temporaryLocalExposure: true');
-		expect(entry).toContain("process.env.FLUE_INTERNAL_LOCAL_ONLY === '1'");
 	});
 
 	it('keeps process lifecycle handlers out of the reusable local runtime', () => {
@@ -110,10 +109,9 @@ describe('NodePlugin', () => {
 		expect(deploymentEntry).toContain('process.exit(');
 	});
 
-	it('rejects listener startup errors and restores scoped output on shutdown', () => {
+	it('restores scoped output and aggregates application cleanup failures', () => {
 		const entry = new NodePlugin().generateRuntimeEntryPoint(testBuildContext());
 
-		expect(entry).toContain("server.once('error', onServerError)");
 		expect(entry).toContain('outputContext.exit(() => options.onOutput');
 		expect(entry).toContain('restoreOutput();');
 		expect(entry).toContain('new AggregateError(errors');

@@ -118,11 +118,8 @@ export function createNodeAgentCoordinator(options: {
 	// ── Concurrent claim loop state ──────────────────────────────────────
 
 	/** Submissions currently being processed, keyed by submissionId. */
-	const activeSubmissions = new Map<
-		string,
-		{ task: Promise<void>; abort: AbortController; activityLease?: RuntimeActivityLease }
-	>();
-	const admittedActivityLeases = new Map<string, RuntimeActivityLease>();
+	const activeSubmissions = new Map<string, { task: Promise<void>; abort: AbortController }>();
+	const activityLeases = new Map<string, RuntimeActivityLease>();
 
 	/**
 	 * Wake signal. The claim loop sleeps on `wakePromise` when there is
@@ -197,11 +194,7 @@ export function createNodeAgentCoordinator(options: {
 	 * wakes the claim loop so it can pick up newly-runnable work (e.g.
 	 * the next queued submission for the same session).
 	 */
-	function spawnSubmissionTask(
-		claimed: AgentSubmission,
-		activityLease = admittedActivityLeases.get(claimed.submissionId),
-	): void {
-		admittedActivityLeases.delete(claimed.submissionId);
+	function spawnSubmissionTask(claimed: AgentSubmission): void {
 		const controller = new AbortController();
 		const task = (async () => {
 			// Ensure the agent event stream exists before processing.
@@ -242,10 +235,11 @@ export function createNodeAgentCoordinator(options: {
 			})
 			.finally(() => {
 				activeSubmissions.delete(claimed.submissionId);
-				activityLease?.release();
+				activityLeases.get(claimed.submissionId)?.release();
+				activityLeases.delete(claimed.submissionId);
 				wake();
 			});
-		activeSubmissions.set(claimed.submissionId, { task, abort: controller, activityLease });
+		activeSubmissions.set(claimed.submissionId, { task, abort: controller });
 	}
 
 	// ── Claim loop ───────────────────────────────────────────────────────
@@ -555,7 +549,7 @@ export function createNodeAgentCoordinator(options: {
 					return admission;
 				}
 
-				if (activityLease) admittedActivityLeases.set(admission.submission.submissionId, activityLease);
+				if (activityLease) activityLeases.set(admission.submission.submissionId, activityLease);
 				ensureClaimLoop();
 				wake();
 				return admission;
@@ -588,7 +582,7 @@ export function createNodeAgentCoordinator(options: {
 				const attachment = observers.attach(input.submissionId, { onEvent });
 				try {
 					await submissions.admitDirect(input);
-					if (activityLease) admittedActivityLeases.set(input.submissionId, activityLease);
+					if (activityLease) activityLeases.set(input.submissionId, activityLease);
 					ensureClaimLoop();
 					wake();
 					if (!waitForResult) return { submissionId: input.submissionId };

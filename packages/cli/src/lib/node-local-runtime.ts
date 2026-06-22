@@ -1,23 +1,18 @@
 import { resetProviderRuntime } from '@flue/runtime/internal';
 import { createNodeApplicationLoader, type NodeApplicationLoader } from './node-application-loader.ts';
-import {
-	createStableNodeListener,
-	type LoadedNodeApplication,
-	type NodeRuntimeStatus,
-} from './node-http-listener.ts';
+import { createStableNodeListener, type LoadedNodeApplication } from './node-http-listener.ts';
 import type { LocalHttpRuntimeOutput } from './local-http-runtime.ts';
 
 export interface NodeLocalRuntime {
 	readonly port: number;
 	readonly url: string;
-	readonly status: NodeRuntimeStatus;
 	start(): Promise<void>;
 	reload(): Promise<void>;
 	stop(): Promise<void>;
 	closeSync(): void;
 }
 
-export async function createNodeLocalRuntime(options: {
+interface NodeLocalRuntimeOptions {
 	root: string;
 	sourceRoot: string;
 	port: number;
@@ -27,90 +22,81 @@ export async function createNodeLocalRuntime(options: {
 	onOutput?: (output: LocalHttpRuntimeOutput) => void;
 	internalDevLogs?: boolean;
 	reloadTimeoutMs?: number;
-}): Promise<NodeLocalRuntime> {
+	createLoader?: () => Promise<NodeApplicationLoader>;
+}
+
+export async function createNodeLocalRuntime(options: NodeLocalRuntimeOptions): Promise<NodeLocalRuntime> {
 	const listener = createStableNodeListener({ port: options.port, hostname: options.hostname });
 	let loader: NodeApplicationLoader | undefined;
 	let application: LoadedNodeApplication | undefined;
-	let starting: Promise<void> | undefined;
-	let reloading: Promise<void> | undefined;
-	let reloadQueued = false;
-	let stopping: Promise<void> | undefined;
+	let lifecycle = Promise.resolve();
+	let startPromise: Promise<void> | undefined;
+	let stopPromise: Promise<void> | undefined;
+	let stopped = false;
 
 	async function loadApplication(): Promise<LoadedNodeApplication> {
 		resetProviderRuntime();
-		loader ??= await createNodeApplicationLoader(options);
+		loader ??= options.createLoader
+			? await options.createLoader()
+			: await createNodeApplicationLoader(options);
 		return loader.load();
 	}
 
-	async function start(): Promise<void> {
-		if (starting) return starting;
-		starting = (async () => {
+	function enqueue(operation: () => Promise<void>): Promise<void> {
+		const next = lifecycle.then(operation, operation);
+		lifecycle = next.catch(() => undefined);
+		return next;
+	}
+
+	function start(): Promise<void> {
+		if (startPromise) return startPromise;
+		startPromise = enqueue(async () => {
+			if (stopped) throw new Error('Node local runtime is closed.');
 			await listener.listen();
 			try {
-				application = await loadApplication();
-				listener.install(application);
+				const loaded = await loadApplication();
+				if (stopped) {
+					await loaded.stop();
+					return;
+				}
+				application = loaded;
+				listener.install(loaded);
 			} catch (error) {
 				await listener.stop();
 				throw error;
 			}
-		})();
-		return starting;
+		});
+		return startPromise;
 	}
 
-	async function runReload(): Promise<void> {
+	async function reloadApplication(): Promise<void> {
+		if (stopped) return;
 		const current = application;
-		listener.beginDrain();
 		current?.pauseAdmissions();
-		if (!current) {
-			listener.setLoading();
+		listener.setUnavailable('draining');
+		if (current) {
 			try {
-				application = await loadApplication();
-				listener.install(application);
+				await withTimeout(current.waitForIdle(), options.reloadTimeoutMs ?? 30_000);
 			} catch (error) {
-				listener.setFailed();
+				listener.setUnavailable('failed');
 				throw error;
 			}
-			return;
+			await current.stop();
+			if (application === current) application = undefined;
 		}
+		listener.setUnavailable('loading');
 		try {
-			await withTimeout(current.waitForIdle(), options.reloadTimeoutMs ?? 30_000);
+			const loaded = await loadApplication();
+			if (stopped) {
+				await loaded.stop();
+				return;
+			}
+			application = loaded;
+			listener.install(loaded);
 		} catch (error) {
-			listener.setFailed();
-			void current.waitForIdle().then(async () => {
-				try {
-					await current.stop();
-				} finally {
-					if (application === current) application = undefined;
-				}
-			}).catch(() => undefined);
+			listener.setUnavailable('failed');
 			throw error;
 		}
-		await current.stop();
-		application = undefined;
-		listener.setLoading();
-		try {
-			application = await loadApplication();
-			listener.install(application);
-		} catch (error) {
-			listener.setFailed();
-			throw error;
-		}
-	}
-
-	async function reload(): Promise<void> {
-		if (reloading) {
-			reloadQueued = true;
-			return reloading;
-		}
-		reloading = (async () => {
-			do {
-				reloadQueued = false;
-				await runReload();
-			} while (reloadQueued);
-		})().finally(() => {
-			reloading = undefined;
-		});
-		return reloading;
 	}
 
 	return {
@@ -120,21 +106,23 @@ export async function createNodeLocalRuntime(options: {
 		get url() {
 			return listener.url;
 		},
-		get status() {
-			return listener.status;
-		},
 		start,
-		reload,
+		reload() {
+			return enqueue(reloadApplication);
+		},
 		stop() {
-			if (stopping) return stopping;
-			stopping = (async () => {
+			if (stopPromise) return stopPromise;
+			stopped = true;
+			stopPromise = enqueue(async () => {
 				const errors: unknown[] = [];
-				listener.beginDrain();
+				application?.pauseAdmissions();
+				listener.setUnavailable('draining');
 				try {
-					await application?.stop({ abort: true, timeoutMs: 30_000 });
+					await application?.stop(30_000);
 				} catch (error) {
 					errors.push(error);
 				}
+				application = undefined;
 				try {
 					await loader?.close();
 				} catch (error) {
@@ -147,10 +135,11 @@ export async function createNodeLocalRuntime(options: {
 				}
 				if (errors.length === 1) throw errors[0];
 				if (errors.length > 1) throw new AggregateError(errors, 'Node local runtime shutdown failed.');
-			})();
-			return stopping;
+			});
+			return stopPromise;
 		},
 		closeSync() {
+			stopped = true;
 			application?.closeSync();
 			listener.closeSync();
 		},

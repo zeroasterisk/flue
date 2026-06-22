@@ -9,7 +9,6 @@ describe('RuntimeActivityGate', () => {
 		gate.pause();
 
 		expect(() => gate.enter()).toThrow(RuntimeUnavailableError);
-		expect(gate.active).toBe(0);
 	});
 
 	it('waits for leases acquired before admissions pause', async () => {
@@ -26,17 +25,5 @@ describe('RuntimeActivityGate', () => {
 		lease.release();
 		await waiting;
 		expect(idle).toBe(true);
-	});
-
-	it('accepts new leases after admissions resume', () => {
-		const gate = createRuntimeActivityGate();
-		gate.pause();
-		gate.resume();
-
-		const lease = gate.enter();
-
-		expect(gate.active).toBe(1);
-		lease.release();
-		expect(gate.active).toBe(0);
 	});
 });
