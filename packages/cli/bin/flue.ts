@@ -908,6 +908,8 @@ async function run(args: RunArgs) {
 	const presenter = createLineEventPresenter({
 		write: (line) => console.error(line),
 		dim: pc.dim,
+		textHeading: pc.bold('assistant'),
+		textIndent: '  ',
 	});
 	try {
 		const execution = await lifecycle.start();
@@ -942,6 +944,12 @@ async function run(args: RunArgs) {
 						input: parseAgentInput(input),
 					}
 				: { kind: 'workflow' as const, name: execution.resource.name, input };
+		if (target.kind === 'agent') {
+			console.error('');
+			console.error(pc.bold('user'));
+			for (const line of target.input.message.split('\n')) console.error(`  ${line}`);
+			console.error('');
+		}
 		let runIdShown = false;
 		const completed = await runTarget(
 			execution.client,
@@ -959,7 +967,8 @@ async function run(args: RunArgs) {
 		presenter.flush();
 		if (completed.kind === 'workflow' && !runIdShown) row('run', completed.runId);
 		if (completed.result !== undefined && completed.result !== null) {
-			console.log(JSON.stringify(completed.result, null, 2));
+			console.error('');
+			console.log(JSON.stringify(completed.result));
 		}
 		success(`${execution.resource.kind} completed`);
 	} catch (err) {

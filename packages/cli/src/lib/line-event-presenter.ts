@@ -3,6 +3,8 @@ import type { FlueEvent } from '@flue/sdk';
 export interface LineEventPresenterOptions {
 	write(line: string): void;
 	dim?: (value: string) => string;
+	textHeading?: string;
+	textIndent?: string;
 }
 
 export interface LineEventPresenter {
@@ -12,11 +14,19 @@ export interface LineEventPresenter {
 
 export function createLineEventPresenter(options: LineEventPresenterOptions): LineEventPresenter {
 	const dim = options.dim ?? ((value: string) => value);
+	const textIndent = options.textIndent ?? '  ';
 	let textBuffer = '';
 	let thinkingBuffer = '';
+	let textStarted = false;
+	const beginText = () => {
+		if (textStarted) return;
+		textStarted = true;
+		if (options.textHeading) options.write(options.textHeading);
+	};
 	const flushText = () => {
 		if (!textBuffer) return;
-		writeLines(textBuffer, (line) => `  ${line}`, options.write);
+		beginText();
+		writeLines(textBuffer, (line) => `${textIndent}${line}`, options.write);
 		textBuffer = '';
 	};
 	const flushThinking = () => {
@@ -35,7 +45,12 @@ export function createLineEventPresenter(options: LineEventPresenterOptions): Li
 			switch (event.type) {
 				case 'text_delta':
 					flushThinking();
-					textBuffer = consumeCompleteLines(textBuffer + event.text, options.write, (line) => `  ${line}`);
+					beginText();
+					textBuffer = consumeCompleteLines(
+						textBuffer + event.text,
+						options.write,
+						(line) => `${textIndent}${line}`,
+					);
 					break;
 				case 'thinking_start':
 					flushText();
