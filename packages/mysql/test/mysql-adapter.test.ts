@@ -1,5 +1,6 @@
 import { PersistedSchemaVersionError, type SessionData } from '@flue/runtime/adapter';
 import {
+	defineConversationStreamStoreContractTests,
 	defineEventStreamStoreContractTests,
 	defineRunStoreContractTests,
 	defineStoreContractTests,
@@ -81,6 +82,27 @@ function defineContracts(): void {
 				adapter = mysql((await createMysqlRunner()).runner);
 				await adapter.migrate?.();
 				return (await adapter.connect()).runStore;
+			},
+			async cleanup() {
+				await adapter?.close?.();
+				adapter = undefined;
+			},
+		});
+	}
+	{
+		let adapter: ReturnType<typeof mysql> | undefined;
+		defineConversationStreamStoreContractTests('MySQL ConversationStreamStore', {
+			async create() {
+				adapter = mysql((await createMysqlRunner()).runner);
+				await adapter.migrate?.();
+				const stores = await adapter.connect();
+				if (!stores.conversationStreamStore || !stores.conversationSnapshotStore) {
+					throw new Error('Expected MySQL conversation stores.');
+				}
+				return {
+					stream: stores.conversationStreamStore,
+					snapshots: stores.conversationSnapshotStore,
+				};
 			},
 			async cleanup() {
 				await adapter?.close?.();

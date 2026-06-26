@@ -1,3 +1,4 @@
+import type { WorkflowRunPointer } from '@flue/runtime';
 import type {
 	AgentAttemptMarker,
 	AgentDispatchAdmission,
@@ -29,7 +30,6 @@ import type {
 	SubmissionAttemptRef,
 	SubmissionClaimRef,
 } from '@flue/runtime/adapter';
-import type { WorkflowRunPointer } from '@flue/runtime';
 import {
 	assertSupportedFlueSchemaVersion,
 	clampLimit,
@@ -61,6 +61,10 @@ import {
 	sessionEntryChunkOwner,
 	submissionChunkOwner,
 } from '@flue/runtime/adapter';
+import {
+	MysqlConversationSnapshotStore,
+	MysqlConversationStreamStore,
+} from './mysql-conversation-store.ts';
 
 type SqlRow = Record<string, unknown>;
 
@@ -87,6 +91,8 @@ export function mysql(runner: MysqlRunner): PersistenceAdapter {
 				},
 				runStore: new MysqlRunStore(runner),
 				eventStreamStore: new MysqlEventStreamStore(runner),
+				conversationStreamStore: new MysqlConversationStreamStore(runner),
+				conversationSnapshotStore: new MysqlConversationSnapshotStore(runner),
 			};
 		},
 		async close() {
@@ -172,6 +178,27 @@ const schemaTables = {
 	],
 	flue_event_streams: ['path', 'next_offset', 'closed'],
 	flue_event_stream_entries: ['path', 'seq', 'data', 'event_key'],
+	flue_conversation_streams: [
+		'path',
+		'identity_json',
+		'next_offset',
+		'closed',
+		'producer_id',
+		'producer_epoch',
+		'next_producer_sequence',
+		'incarnation',
+	],
+	flue_conversation_stream_batches: [
+		'path',
+		'seq',
+		'producer_id',
+		'producer_epoch',
+		'producer_sequence',
+		'data',
+		'submission_id',
+		'attempt_id',
+	],
+	flue_conversation_snapshots: ['path', 'reducer_version', 'stream_offset', 'data', 'created_at'],
 } as const;
 
 interface SchemaColumn {
@@ -284,6 +311,13 @@ const criticalColumns: Record<string, SchemaColumn> = {
 		nullable: false,
 	},
 	'flue_event_stream_entries.seq': { type: 'bigint', nullable: false },
+	'flue_conversation_streams.path': { type: 'varchar(512)', collation: 'utf8mb4_bin', nullable: false },
+	'flue_conversation_streams.next_offset': { type: 'bigint', nullable: false, default: '0' },
+	'flue_conversation_streams.closed': { type: 'tinyint(1)', nullable: false, default: '0' },
+	'flue_conversation_stream_batches.path': { type: 'varchar(255)', collation: 'utf8mb4_bin', nullable: false },
+	'flue_conversation_stream_batches.seq': { type: 'bigint', nullable: false },
+	'flue_conversation_stream_batches.producer_id': { type: 'varchar(128)', collation: 'utf8mb4_bin', nullable: false },
+	'flue_conversation_snapshots.path': { type: 'varchar(512)', collation: 'utf8mb4_bin', nullable: false },
 };
 
 const longtextColumns = [
@@ -299,6 +333,9 @@ const longtextColumns = [
 	'flue_runs.result',
 	'flue_runs.error',
 	'flue_event_stream_entries.data',
+	'flue_conversation_streams.identity_json',
+	'flue_conversation_stream_batches.data',
+	'flue_conversation_snapshots.data',
 ];
 
 const requiredIndexes = [
@@ -371,6 +408,19 @@ const requiredIndexes = [
 		columns: ['path', 'seq'],
 		nonUnique: false,
 	},
+	{ table: 'flue_conversation_streams', name: 'PRIMARY', columns: ['path'], nonUnique: false },
+	{
+		table: 'flue_conversation_stream_batches',
+		name: 'PRIMARY',
+		columns: ['path', 'seq'],
+		nonUnique: false,
+	},
+	{
+		table: 'flue_conversation_stream_batches',
+		columns: ['path', 'producer_id', 'producer_epoch', 'producer_sequence'],
+		nonUnique: false,
+	},
+	{ table: 'flue_conversation_snapshots', name: 'PRIMARY', columns: ['path'], nonUnique: false },
 ];
 
 function invalidMysqlSchema(subject: string): Error {
@@ -405,17 +455,28 @@ async function ensureTables(runner: MysqlRunner): Promise<void> {
 		`CREATE TABLE IF NOT EXISTS flue_agent_attempt_markers (submission_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, attempt_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (submission_id, attempt_id)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_runs (run_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, workflow_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, started_at VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, payload LONGTEXT, traceparent VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin, tracestate LONGTEXT, ended_at VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin, is_error TINYINT(1), duration_ms BIGINT, result LONGTEXT, error LONGTEXT, INDEX flue_runs_status_started_idx (status, started_at DESC, run_id DESC), INDEX flue_runs_workflow_started_idx (workflow_name, started_at DESC, run_id DESC)) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS flue_event_streams (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, next_offset BIGINT NOT NULL DEFAULT 0, closed TINYINT(1) NOT NULL DEFAULT 0) ENGINE=InnoDB`,
-		`CREATE TABLE IF NOT EXISTS flue_event_stream_entries (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, seq BIGINT NOT NULL, data LONGTEXT NOT NULL, event_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, PRIMARY KEY (path, seq), UNIQUE INDEX flue_event_stream_entries_path_event_key_idx (path, event_key)) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS flue_event_stream_entries (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, seq BIGINT NOT NULL, data LONGTEXT NOT NULL, event_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, PRIMARY KEY (path, seq), UNIQUE INDEX flue_event_stream_entries_path_event_key_idx (path, event_key)) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS flue_conversation_streams (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, identity_json LONGTEXT NOT NULL, next_offset BIGINT NOT NULL DEFAULT 0, closed TINYINT(1) NOT NULL DEFAULT 0, producer_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, producer_epoch BIGINT NOT NULL DEFAULT 0, next_producer_sequence BIGINT NOT NULL DEFAULT 0, incarnation VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS flue_conversation_stream_batches (path VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, seq BIGINT NOT NULL, producer_id VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, producer_epoch BIGINT NOT NULL, producer_sequence BIGINT NOT NULL, data LONGTEXT NOT NULL, submission_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, attempt_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, PRIMARY KEY (path, seq), UNIQUE INDEX flue_conversation_stream_batches_producer_idx (path, producer_id, producer_epoch, producer_sequence)) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS flue_conversation_snapshots (path VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, reducer_version INT NOT NULL, stream_offset VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, data LONGTEXT NOT NULL, created_at VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL) ENGINE=InnoDB`,
 	];
 	for (const statement of ddl) await runner.query(statement);
-	for (const statement of [
-		`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,
-		`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_event LONGTEXT`,
-		`ALTER TABLE flue_agent_submissions ADD COLUMN IF NOT EXISTS terminal_offset VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin`,
-		`ALTER TABLE flue_event_stream_entries ADD COLUMN IF NOT EXISTS event_key VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,
-		`ALTER TABLE flue_runs ADD COLUMN IF NOT EXISTS traceparent VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin`,
-		`ALTER TABLE flue_runs ADD COLUMN IF NOT EXISTS tracestate LONGTEXT`,
-	]) await runner.query(statement);
+	for (const repair of [
+		{ table: 'flue_agent_submissions', column: 'terminal_key', definition: 'VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin' },
+		{ table: 'flue_agent_submissions', column: 'terminal_event', definition: 'LONGTEXT' },
+		{ table: 'flue_agent_submissions', column: 'terminal_offset', definition: 'VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin' },
+		{ table: 'flue_event_stream_entries', column: 'event_key', definition: 'VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin' },
+		{ table: 'flue_runs', column: 'traceparent', definition: 'VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin' },
+		{ table: 'flue_runs', column: 'tracestate', definition: 'LONGTEXT' },
+	]) {
+		const existing = await runner.query(
+			`SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+			[repair.table, repair.column],
+		);
+		if (existing.length === 0) {
+			await runner.query(`ALTER TABLE ${repair.table} ADD COLUMN ${repair.column} ${repair.definition}`);
+		}
+	}
 	const eventKeyIndexes = await runner.query(`SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'flue_event_stream_entries' AND INDEX_NAME = 'flue_event_stream_entries_path_event_key_idx'`);
 	if (eventKeyIndexes.length === 0) await runner.query(`CREATE UNIQUE INDEX flue_event_stream_entries_path_event_key_idx ON flue_event_stream_entries (path, event_key)`);
 	const versionRows = await runner.query(
