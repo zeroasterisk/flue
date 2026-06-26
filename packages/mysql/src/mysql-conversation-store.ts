@@ -108,11 +108,12 @@ export class MysqlConversationStreamStore implements ConversationStreamStore {
 	}
 
 	async getMeta(path: string): Promise<ConversationStreamMeta | null> {
-		const rows = await this.runner.query('SELECT identity_json, next_offset, closed, producer_id, producer_epoch, next_producer_sequence FROM flue_conversation_streams WHERE path = ?', [path]);
+		const rows = await this.runner.query('SELECT identity_json, next_offset, closed, producer_id, producer_epoch, next_producer_sequence, incarnation FROM flue_conversation_streams WHERE path = ?', [path]);
 		const row = rows[0];
 		if (!row) return null;
 		return {
 			identity: JSON.parse(String(row.identity_json)) as ConversationStreamIdentity,
+			incarnation: String(row.incarnation),
 			nextOffset: formatOffset(Number(row.next_offset) - 1),
 			closed: Number(row.closed) !== 0,
 			producerId: row.producer_id == null ? null : String(row.producer_id),
@@ -165,9 +166,10 @@ export class MysqlConversationSnapshotStore<State = unknown> implements Conversa
 
 	async save(path: string, snapshot: ConversationSnapshot<State>): Promise<void> {
 		await this.runner.transaction(async (tx) => {
-			const rows = await tx.query('SELECT next_offset FROM flue_conversation_streams WHERE path = ? FOR UPDATE', [path]);
+			const rows = await tx.query('SELECT next_offset, incarnation FROM flue_conversation_streams WHERE path = ? FOR UPDATE', [path]);
 			const meta = rows[0];
 			if (!meta) throw failure(path, 'Stream does not exist.');
+			if (snapshot.streamIncarnation !== meta.incarnation) throw failure(path, 'Snapshot stream incarnation is stale.');
 			if (parseOffset(snapshot.streamOffset) > Number(meta.next_offset) - 1) throw failure(path, 'Snapshot offset is beyond the stream head.');
 			await tx.query(
 				`INSERT INTO flue_conversation_snapshots (path, reducer_version, stream_offset, data, created_at)

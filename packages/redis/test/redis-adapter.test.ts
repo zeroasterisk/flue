@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PersistedSchemaVersionError, type SessionData } from '@flue/runtime/adapter';
 import {
+	defineConversationStreamStoreContractTests,
 	defineEventStreamStoreContractTests,
 	defineRunStoreContractTests,
 	defineStoreContractTests,
@@ -81,6 +82,19 @@ describeRedis('Redis shared contracts', () => {
 	defineEventStreamStoreContractTests('Redis EventStreamStore', {
 		async create() {
 			return (await createHarness()).eventStreamStore;
+		},
+		cleanup: cleanupHarness,
+	});
+	defineConversationStreamStoreContractTests('Redis ConversationStreamStore', {
+		async create() {
+			const connected = await createHarness();
+			if (!connected.conversationStreamStore || !connected.conversationSnapshotStore) {
+				throw new Error('Expected Redis conversation stores.');
+			}
+			return {
+				stream: connected.conversationStreamStore,
+				snapshots: connected.conversationSnapshotStore,
+			};
 		},
 		cleanup: cleanupHarness,
 	});

@@ -181,10 +181,13 @@ export function defineConversationStreamStoreContractTests(
 				agentName: 'echo',
 				instanceId: 'contract',
 			});
+			const meta = await stream.getMeta('agents/echo/contract');
+			if (!meta) throw new Error('Expected canonical stream metadata.');
 			await snapshots.save('agents/echo/contract', {
 				version: 1,
 				reducerVersion: 1,
 				streamOffset: '-1',
+				streamIncarnation: meta.incarnation,
 				state: {},
 				createdAt: '2026-06-25T00:00:00.000Z',
 			});

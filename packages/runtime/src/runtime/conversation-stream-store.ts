@@ -33,6 +33,7 @@ export interface ConversationStreamReadResult {
 
 export interface ConversationStreamMeta {
 	identity: ConversationStreamIdentity;
+	incarnation: string;
 	nextOffset: string;
 	closed: boolean;
 	producerId: string | null;
@@ -44,6 +45,7 @@ export interface ConversationSnapshot<State = unknown> {
 	version: number;
 	reducerVersion: number;
 	streamOffset: string;
+	streamIncarnation: string;
 	state: State;
 	createdAt: string;
 }
@@ -299,7 +301,7 @@ export class SqliteConversationStreamStore implements ConversationStreamStore {
 	async getMeta(path: string): Promise<ConversationStreamMeta | null> {
 		const row = this.sql
 			.exec(
-				`SELECT identity_json, next_offset, closed, producer_id, producer_epoch, next_producer_sequence
+				`SELECT identity_json, next_offset, closed, producer_id, producer_epoch, next_producer_sequence, incarnation
 				 FROM flue_conversation_streams WHERE path = ?`,
 				path,
 			)
@@ -307,6 +309,7 @@ export class SqliteConversationStreamStore implements ConversationStreamStore {
 		if (!row) return null;
 		return {
 			identity: JSON.parse(row.identity_json as string) as ConversationStreamIdentity,
+			incarnation: row.incarnation as string,
 			nextOffset: formatOffset((row.next_offset as number) - 1),
 			closed: row.closed === 1,
 			producerId: (row.producer_id as string | null) ?? null,
@@ -431,9 +434,12 @@ export class SqliteConversationSnapshotStore<State = unknown>
 		const data = JSON.stringify(snapshot);
 		this.runTransaction(() => {
 			const meta = this.sql
-				.exec('SELECT next_offset FROM flue_conversation_streams WHERE path = ?', path)
+				.exec('SELECT next_offset, incarnation FROM flue_conversation_streams WHERE path = ?', path)
 				.toArray()[0];
 			if (!meta) throw new ConversationStreamStoreError({ operation: 'save_snapshot', path, reason: 'Stream does not exist.' });
+			if (snapshot.streamIncarnation !== meta.incarnation) {
+				throw new ConversationStreamStoreError({ operation: 'save_snapshot', path, reason: 'Snapshot stream incarnation is stale.' });
+			}
 			if (parseOffset(snapshot.streamOffset) > (meta.next_offset as number) - 1) {
 				throw new ConversationStreamStoreError({ operation: 'save_snapshot', path, reason: 'Snapshot offset is beyond the stream head.' });
 			}

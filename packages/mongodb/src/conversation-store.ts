@@ -111,7 +111,7 @@ export class MongoConversationStreamStore implements ConversationStreamStore {
 	async getMeta(path: string): Promise<ConversationStreamMeta | null> {
 		const row = await this.streams().findOne({ _id: path });
 		if (!row) return null;
-		return { identity: row.identity as ConversationStreamIdentity, nextOffset: formatOffset(Number(row.nextOffset) - 1), closed: Boolean(row.closed), producerId: row.producerId == null ? null : String(row.producerId), producerEpoch: Number(row.producerEpoch), nextProducerSequence: Number(row.nextProducerSequence) };
+		return { identity: row.identity as ConversationStreamIdentity, incarnation: String(row.incarnation), nextOffset: formatOffset(Number(row.nextOffset) - 1), closed: Boolean(row.closed), producerId: row.producerId == null ? null : String(row.producerId), producerEpoch: Number(row.producerEpoch), nextProducerSequence: Number(row.nextProducerSequence) };
 	}
 
 	async close(path: string): Promise<void> {
@@ -153,6 +153,9 @@ export class MongoConversationSnapshotStore<State = unknown> implements Conversa
 			const streams = tx.collection(collectionName(this.prefix, 'conversation_streams'));
 			const meta = await streams.findOne({ _id: path });
 			if (!meta) throw failure(path, 'Stream does not exist.', 'save_snapshot');
+			if (snapshot.streamIncarnation !== meta.incarnation) {
+				throw failure(path, 'Snapshot stream incarnation is stale.', 'save_snapshot');
+			}
 			if (parseOffset(snapshot.streamOffset) > Number(meta.nextOffset) - 1) {
 				throw failure(path, 'Snapshot offset is beyond the stream head.', 'save_snapshot');
 			}

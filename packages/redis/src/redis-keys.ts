@@ -58,6 +58,12 @@ export class RedisKeys {
 	eventOrder = (path: string) => this.encoded('event-order', path);
 	eventKeys = (path: string) => this.encoded('event-keys', path);
 	events = () => this.key('events');
+	conversation = (path: string) => this.encoded('conversation', path);
+	conversationBatches = (path: string) => this.encoded('conversation-batches', path);
+	conversationOrder = (path: string) => this.encoded('conversation-order', path);
+	conversationRetries = (path: string) => this.encoded('conversation-retries', path);
+	conversationSnapshot = (path: string) => this.encoded('conversation-snapshot', path);
+	conversations = () => this.key('conversations');
 	chunkOwner(owner: PersistedChunkOwner) {
 		return this.encoded('chunk-owner', owner.kind, owner.id, owner.part);
 	}

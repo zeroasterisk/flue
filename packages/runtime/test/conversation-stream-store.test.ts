@@ -247,10 +247,13 @@ describe('SqliteConversationStreamStore', () => {
 			producerSequence: 0,
 			records: [userRecord('record_1', 'entry_1')],
 		});
+		const meta = await stream.getMeta('agents/echo/1');
+		if (!meta) throw new Error('Expected canonical stream metadata.');
 		const snapshot = {
 			version: 1,
 			reducerVersion: 1,
 			streamOffset: '0000000000000000_0000000000000000',
+			streamIncarnation: meta.incarnation,
 			state: { conversations: 1 },
 			createdAt: '2026-06-25T00:00:01.000Z',
 		};
@@ -273,10 +276,13 @@ describe('SqliteConversationStreamStore', () => {
 			producerSequence: 0,
 			records: [userRecord('record_1', 'entry_1')],
 		});
+		const meta = await stream.getMeta('agents/echo/1');
+		if (!meta) throw new Error('Expected canonical stream metadata.');
 		await snapshots.save('agents/echo/1', {
 			version: 1,
 			reducerVersion: 1,
 			streamOffset: '0000000000000000_0000000000000000',
+			streamIncarnation: meta.incarnation,
 			state: {},
 			createdAt: '2026-06-25T00:00:01.000Z',
 		});

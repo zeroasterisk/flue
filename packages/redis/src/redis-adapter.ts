@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { WorkflowRunPointer } from '@flue/runtime';
 import type {
 	AgentAttemptMarker,
 	AgentDispatchAdmission,
@@ -30,7 +31,6 @@ import type {
 	SubmissionAttemptRef,
 	SubmissionClaimRef,
 } from '@flue/runtime/adapter';
-import type { WorkflowRunPointer } from '@flue/runtime';
 import {
 	assertSupportedFlueSchemaVersion,
 	clampLimit,
@@ -60,29 +60,33 @@ import {
 	SUBMISSION_SESSION_NAME,
 	submissionChunkOwner,
 } from '@flue/runtime/adapter';
+import {
+	RedisConversationSnapshotStore,
+	RedisConversationStreamStore,
+} from './conversation-store.ts';
 import { encodeSegment, RedisKeys } from './redis-keys.ts';
 import type { RedisArgument, RedisOptions, RedisRunner } from './redis-runner.ts';
 import {
 	acquireDeletionScript,
 	acquireGenerationScript,
 	admitSubmissionScript,
-	appendEventScript,
 	appendEventOnceScript,
+	appendEventScript,
 	claimSubmissionScript,
 	closeEventScript,
 	createRunScript,
 	deleteSubmissionScript,
 	endRunScript,
+	finalizeTerminalScript,
 	finishDeletionScript,
 	journalScript,
 	lifecycleScript,
+	prepareTerminalScript,
 	publishChunksScript,
 	publishGenerationScript,
-	prepareTerminalScript,
-	recordTerminalOffsetScript,
-	finalizeTerminalScript,
 	quarantineSubmissionScript,
 	reclaimGenerationsScript,
+	recordTerminalOffsetScript,
 	releaseGenerationScript,
 	renewDeletionScript,
 	renewLeasesScript,
@@ -213,6 +217,8 @@ export function redis(runner: RedisRunner, options: RedisOptions = {}): Persiste
 				},
 				runStore: new RedisRunStore(backend),
 				eventStreamStore: new RedisEventStreamStore(backend),
+				conversationStreamStore: new RedisConversationStreamStore(runner, backend.keys),
+				conversationSnapshotStore: new RedisConversationSnapshotStore(runner, backend.keys),
 			};
 		},
 		async close() {
