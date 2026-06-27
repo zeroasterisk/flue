@@ -631,12 +631,8 @@ class CloudflareAgentCoordinator {
 			if (!agent) throw new Error('[flue] Agent target unavailable during durable admission.');
 			const admitted = await this.submissions.admitDirect(input);
 			if (admitted.canonicalReadyAt === null) {
-				try {
-					await this.materializeSubmissionConversation(input, agent);
-					await this.submissions.markSubmissionCanonicalReady(input.submissionId);
-				} catch (error) {
-					throw error;
-				}
+				await this.materializeSubmissionConversation(input, agent);
+				await this.submissions.markSubmissionCanonicalReady(input.submissionId);
 			}
 			const offset = (await this.ensureConversationWriter()).offset;
 			await this.armSubmissionWake();
@@ -673,16 +669,12 @@ class CloudflareAgentCoordinator {
 			return new Response('Conflicting internal dispatch replay.', { status: 409 });
 		}
 		if (admission.submission.canonicalReadyAt === null) {
-			try {
-				await this.materializeSubmissionConversation(
-					{ ...input, kind: 'dispatch', submissionId: input.dispatchId },
-					agent,
-				);
-				const ready = await this.submissions.markSubmissionCanonicalReady(input.dispatchId);
-				if (!ready) throw new Error('[flue] Dispatch admission disappeared before canonical readiness.');
-			} catch (error) {
-				throw error;
-			}
+			await this.materializeSubmissionConversation(
+				{ ...input, kind: 'dispatch', submissionId: input.dispatchId },
+				agent,
+			);
+			const ready = await this.submissions.markSubmissionCanonicalReady(input.dispatchId);
+			if (!ready) throw new Error('[flue] Dispatch admission disappeared before canonical readiness.');
 		}
 		await this.armSubmissionWake();
 		await this.reconcileSubmissions({ driverAlreadyArmed: true });

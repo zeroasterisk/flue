@@ -14,10 +14,12 @@ function createSql(db: DatabaseSync): SqlStorage {
 		exec(query, ...bindings) {
 			const statement = db.prepare(query);
 			const returnsRows = query.trimStart().toUpperCase().startsWith('SELECT') || /\bRETURNING\b/i.test(query);
-			const rows = returnsRows
-				? statement.all(...(bindings as never[])) as Record<string, unknown>[]
-				: (statement.run(...(bindings as never[])), []);
-			return { toArray: () => rows };
+			if (returnsRows) {
+				const rows = statement.all(...(bindings as never[])) as Record<string, unknown>[];
+				return { toArray: () => rows };
+			}
+			statement.run(...(bindings as never[]));
+			return { toArray: () => [] };
 		},
 	};
 }

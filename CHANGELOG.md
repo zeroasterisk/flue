@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- **Persisted storage is reset-only schema v7.** Pre-1.0 persisted stores from any other schema version are rejected and must be cleared; there is no migration from the beta session-store formats. Custom `PersistenceAdapter` implementations must provide `conversationStreamStore` and `attachmentStore` alongside execution, run, and event-stream stores. `SessionStore` and session-transcript adapter contracts are removed.
+- **Agent conversations use one append-only canonical stream per agent instance.** Session history, compaction, child topology, tool outcomes, settlement, and recovery are canonical records in that stream; operational submission rows and observable event streams are not transcripts. Sessions append for the instance lifetime, per-session deletion is removed, and retained Action or Task conversations are no longer recursively deleted. Workflow-local canonical conversation state is scoped to one workflow execution rather than shared across runs.
+- **Agent stream reads are conversation projections.** Replace the former `client.agents.stream()` event behavior with `client.agents.history()`, `client.agents.updates()`, and `client.agents.activity()`. History is an API-materialized conversation snapshot, not a persisted snapshot or replay cache; updates resume from its opaque physical offset, while activity exposes raw canonical records for diagnostics.
+- **Attachments are separate immutable payloads.** Canonical records carry opaque `{ id, mimeType, size, digest }` references, and adapters resolve bytes through the required `AttachmentStore`; attachment references are not download URLs.
+
+### Fixes & Other Changes
+
+- Canonical tool outcomes are now durably recorded before one atomic commit publishes a complete tool-result batch. Recovery reuses known outcomes and materializes unknown interrupted outcomes without exposing partial tool-result prefixes.
+- Direct agent admission receipts continue to return `{ streamUrl, offset, submissionId }`; workflow receipts remain `{ runId }` or `{ runId, result }` when waiting.
+
 ## @flue/runtime, @flue/cli, @flue/sdk, and @flue/react 1.0.0-beta.7 - 2026-06-25
 
 ### New Features

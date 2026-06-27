@@ -72,7 +72,7 @@ interface ReducedAssistantToolCallBlock extends ReducedAssistantBlockBase {
 	thoughtSignature?: string;
 }
 
-export type ReducedAssistantBlock =
+type ReducedAssistantBlock =
 	| ReducedAssistantTextBlock
 	| ReducedAssistantReasoningBlock
 	| ReducedAssistantToolCallBlock;
@@ -87,7 +87,8 @@ export interface InProgressAssistantMessage {
 	blockIndexes: Set<number>;
 }
 
-export interface ReducedToolOutcome {
+interface ReducedToolOutcome {
+	recordId: string;
 	assistantMessageId: string;
 	toolCallId: string;
 	toolName: string;
@@ -168,7 +169,7 @@ export function reduceConversationRecords(
 	return next;
 }
 
-export function cloneReducedInstanceState(state: ReducedInstanceState): ReducedInstanceState {
+function cloneReducedInstanceState(state: ReducedInstanceState): ReducedInstanceState {
 	return {
 		recordsThroughOffset: state.recordsThroughOffset,
 		conversationScopes: new Map(state.conversationScopes),
@@ -411,6 +412,7 @@ export function applyConversationRecord(
 				fail(record, `Tool outcome for "${record.toolCallId}" already exists.`);
 			}
 			conversation.toolOutcomes.set(outcomeKey, {
+				recordId: record.id,
 				assistantMessageId: record.assistantMessageId,
 				toolCallId: record.toolCallId,
 				toolName: record.toolName,
@@ -419,18 +421,57 @@ export function applyConversationRecord(
 			});
 			break;
 		}
-		case 'tool_result':
-			validateToolResultPrefix(conversation, record);
-			appendEntry(state, conversation, record, {
-				type: 'message',
-				id: record.messageId,
-				parentId: record.parentId,
-				timestamp: record.timestamp,
-				submissionId: record.submissionId,
-				message: toolResultMessage(record, record.content),
-				attachmentRefs: attachmentRefs(record.content),
+		case 'tool_results_committed': {
+			const assistant = conversation.entries.get(record.assistantMessageId);
+			if (
+				assistant?.type !== 'message' ||
+				assistant.message.role !== 'assistant' ||
+				assistant.message.stopReason !== 'toolUse'
+			) {
+				fail(record, `Committed tool results require a completed tool-use assistant.`);
+			}
+			if (record.parentId !== record.assistantMessageId || record.parentId !== conversation.activeLeafId) {
+				fail(record, `Committed tool results must extend their active assistant parent.`);
+			}
+			const calls = assistant.message.content.filter((block) => block.type === 'toolCall');
+			if (record.outcomeIds.length !== calls.length || new Set(record.outcomeIds).size !== calls.length) {
+				fail(record, `Committed tool results must reference every assistant tool call exactly once.`);
+			}
+			const outcomes = record.outcomeIds.map((outcomeId, index) => {
+				const outcomeRecord = state.recordsById.get(outcomeId);
+				const call = calls[index];
+				if (
+					outcomeRecord?.type !== 'tool_outcome' ||
+					!call ||
+					outcomeRecord.conversationId !== record.conversationId ||
+					outcomeRecord.harness !== record.harness ||
+					outcomeRecord.session !== record.session ||
+					outcomeRecord.assistantMessageId !== record.assistantMessageId ||
+					outcomeRecord.toolCallId !== call.id ||
+					outcomeRecord.toolName !== call.name ||
+					conversation.toolOutcomes.get(toolOutcomeKey(record.assistantMessageId, call.id))?.recordId !== outcomeId
+				) {
+					fail(record, `Committed tool outcome references do not match assistant tool-call order.`);
+				}
+				return outcomeRecord;
 			});
+			let parentId = record.parentId;
+			for (const outcome of outcomes) {
+				const entryId = toolResultEntryId(record.assistantMessageId, outcome.toolCallId);
+				assertEntryAppend(state, conversation, record, entryId, parentId);
+				commitEntry(state, conversation, {
+					type: 'message',
+					id: entryId,
+					parentId,
+					timestamp: outcome.timestamp,
+					submissionId: record.submissionId,
+					message: toolResultMessage(outcome),
+					attachmentRefs: attachmentRefs(outcome.content),
+				});
+				parentId = entryId;
+			}
 			break;
+		}
 		case 'compaction':
 			if (!conversation.entries.has(record.firstKeptEntryId)) {
 				fail(record, `Compaction first-kept entry "${record.firstKeptEntryId}" does not exist.`);
@@ -772,33 +813,6 @@ function assertParent(
 	}
 }
 
-function validateToolResultPrefix(
-	conversation: ReducedConversationState,
-	record: Extract<ConversationRecord, { type: 'tool_result' }>,
-): void {
-	const path = getActiveConversationPath(conversation);
-	let assistantIndex = path.length - 1;
-	while (assistantIndex >= 0) {
-		const entry = path[assistantIndex];
-		if (entry?.type !== 'message' || entry.message.role !== 'toolResult') break;
-		assistantIndex -= 1;
-	}
-	const assistantEntry = path[assistantIndex];
-	if (assistantEntry?.type !== 'message' || assistantEntry.message.role !== 'assistant') {
-		fail(record, `Tool result does not follow an assistant tool request.`);
-	}
-	const calls = assistantEntry.message.content.filter((block) => block.type === 'toolCall');
-	const priorResults = path.slice(assistantIndex + 1);
-	const expectedCall = calls[priorResults.length];
-	if (!expectedCall) fail(record, `Tool request has no remaining result slot.`);
-	if (record.parentId !== conversation.activeLeafId) {
-		fail(record, `Tool result must extend the active ordered result chain.`);
-	}
-	if (record.toolCallId !== expectedCall.id || record.toolName !== expectedCall.name) {
-		fail(record, `Tool result does not match the next requested tool call.`);
-	}
-}
-
 function pathToLeaf(
 	conversation: ReducedConversationState,
 	leafId: string,
@@ -942,15 +956,14 @@ function userMessage(content: CanonicalUserContent[], timestamp: string): AgentM
 }
 
 function toolResultMessage(
-	record: Extract<ConversationRecord, { type: 'tool_result' }>,
-	content: CanonicalToolResultContent[],
+	record: Extract<ConversationRecord, { type: 'tool_outcome' }>,
 ): AgentMessage {
 	return {
 		role: 'toolResult',
 		toolCallId: record.toolCallId,
 		toolName: record.toolName,
 		isError: record.isError,
-		content: content.map((block) =>
+		content: record.content.map((block) =>
 			block.type === 'text'
 				? block
 				: {
@@ -999,6 +1012,17 @@ function isCompleteToolBatch(
 
 export function toolOutcomeKey(assistantMessageId: string, toolCallId: string): string {
 	return JSON.stringify([assistantMessageId, toolCallId]);
+}
+
+export function toolResultEntryId(assistantMessageId: string, toolCallId: string): string {
+	return `entry_tool_result_${encodeCanonicalId(assistantMessageId)}_${encodeCanonicalId(toolCallId)}`;
+}
+
+function encodeCanonicalId(id: string): string {
+	const bytes = new TextEncoder().encode(id);
+	let binary = '';
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
 
 function conversationScopeKey(harness: string, session: string): string {

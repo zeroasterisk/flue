@@ -17,12 +17,12 @@ import { classifySubmissionState } from './submission-state.ts';
 import type { PromptUsage } from './types.ts';
 import { addUsage, emptyUsage, fromProviderUsage } from './usage.ts';
 
-export interface ConversationDeltaState {
+interface ConversationDeltaState {
 	nextSequence: number;
 	accepted: string[];
 }
 
-export type ConversationUiPart =
+type ConversationUiPart =
 	| {
 			type: 'text';
 			blockId?: string;

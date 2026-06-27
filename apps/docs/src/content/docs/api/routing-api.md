@@ -44,8 +44,8 @@ Creates a mountable Hono sub-app for Flue's public HTTP API. Routes are relative
 | Route                    | Purpose                                                                                  |
 | ------------------------ | ---------------------------------------------------------------------------------------- |
 | `POST /agents/:name/:id` | Start a prompt on an HTTP-exposed agent instance; returns `202` with stream coordinates. |
-| `GET /agents/:name/:id`  | Stream agent events via the Durable Streams protocol.                                    |
-| `HEAD /agents/:name/:id` | Return agent stream metadata (tail offset, closed status).                               |
+| `GET /agents/:name/:id`  | Read materialized history, projected updates, or raw canonical activity.                  |
+| `HEAD /agents/:name/:id` | Return canonical conversation-stream metadata.                                           |
 | `POST /workflows/:name`  | Start an HTTP-exposed workflow run.                                                      |
 | `GET /runs/:runId`       | Stream workflow-run events via the Durable Streams protocol.                             |
 | `GET /runs/:runId?meta`  | Retrieve the workflow-run record as plain JSON.                                          |

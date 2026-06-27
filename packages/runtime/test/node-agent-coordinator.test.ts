@@ -415,17 +415,18 @@ describe('NodeAgentCoordinator', () => {
 			expect(toolCalls).toBe(0);
 			const records = (await conversationStreamStore.read(agentStreamPath('assistant', 'instance-1')))
 				.batches.flatMap((batch) => batch.records);
-			const results = records.filter((record) => record.type === 'tool_result');
-			expect(results).toHaveLength(2);
-			expect(results[0]).toMatchObject({
+			const outcomes = records.filter((record) => record.type === 'tool_outcome');
+			expect(outcomes).toHaveLength(2);
+			expect(outcomes[0]).toMatchObject({
 				toolCallId: 'tool-call-1',
 				isError: false,
 				content: [{ type: 'text', text: 'Known completed result' }],
 			});
-			expect(results[1]).toMatchObject({
+			expect(outcomes[1]).toMatchObject({
 				toolCallId: 'tool-call-2',
 				isError: true,
 			});
+			expect(records.filter((record) => record.type === 'tool_results_committed')).toHaveLength(1);
 		});
 
 		it('reuses canonical tool repair after a real process kill before journal repair', async () => {
@@ -741,11 +742,11 @@ describe('NodeAgentCoordinator', () => {
 			const outcomeIndex = records.findIndex(
 				(record) => record.type === 'tool_outcome' && record.toolCallId === toolCallId,
 			);
-			const resultIndex = records.findIndex(
-				(record) => record.type === 'tool_result' && record.toolCallId === toolCallId,
+			const commitIndex = records.findIndex(
+				(record) => record.type === 'tool_results_committed' && record.assistantMessageId,
 			);
 			expect(outcomeIndex).toBeGreaterThanOrEqual(0);
-			expect(resultIndex).toBeGreaterThan(outcomeIndex);
+			expect(commitIndex).toBeGreaterThan(outcomeIndex);
 		});
 	});
 

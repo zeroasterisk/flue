@@ -47,7 +47,7 @@ A file-backed SQLite database is a good fit for local development, a single-host
 
 ## Postgres on Node.js
 
-Use `@flue/postgres` when state must survive host replacement or be shared across multiple application replicas:
+Use `@flue/postgres` when state must survive host replacement or several application replicas need shared workflow history and replacement-recovery storage:
 
 ```ts title="src/db.ts"
 import { postgres } from '@flue/postgres';
@@ -57,7 +57,7 @@ export default postgres(process.env.DATABASE_URL!);
 
 The Postgres adapter persists canonical conversation streams, immutable attachments, submission rows, workflow-run records, workflow event streams, and run indexing. Its `migrate()` hook runs automatically when the generated Node server starts.
 
-A shared Postgres database is the right choice when another Node process must recover accepted work after a host failure or when several replicas need access to the same workflow-run history.
+A shared Postgres database is the right choice when another Node process must recover accepted work after a host failure or when several replicas need access to the same workflow-run history. It does not coordinate active-active execution of one agent instance: route each instance to one live Node owner and avoid overlapping owners during replacement.
 
 ## Cloudflare SQLite
 
@@ -86,7 +86,7 @@ A persisted conversation does not make a sandbox durable. A durable workspace do
 | ----------------------------- | ---------------------------------------------------------------------------------- |
 | Local development             | `sqlite()` with a file path, or no `db.ts` when restart persistence is unnecessary |
 | Single-host Node deployment   | File-backed `sqlite()`                                                             |
-| Multi-replica Node deployment | `@flue/postgres`                                                                   |
+| Multi-replica Node deployment | `@flue/postgres`, with one live owner routed per agent instance                         |
 | Cloudflare deployment         | Built-in Durable Object SQLite                                                     |
 | Another database backend      | Custom `PersistenceAdapter`                                                        |
 

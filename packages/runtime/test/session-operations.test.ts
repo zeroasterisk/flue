@@ -838,7 +838,7 @@ describe('session.task()', () => {
 
 		const repairedLeaf = await internal.repairInterruptedToolCalls(input, request, attempt);
 		const offset = writer.offset;
-		expect(repairedLeaf).toMatch(/^entry_tool_repair_/);
+		expect(repairedLeaf).toMatch(/^entry_tool_result_/);
 		const repaired = await writer.getConversation('conversation-tool-repair');
 		expect(repaired?.entries.get(repairedLeaf ?? '')).toMatchObject({
 			type: 'message',

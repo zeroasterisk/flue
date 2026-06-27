@@ -3,8 +3,15 @@ import {
 	type ConversationUiSnapshot,
 	projectConversationUi,
 } from './conversation-projections.ts';
-import type { ConversationRecord, DataRecord, SubmissionSettledRecord } from './conversation-records.ts';
-import type { ReducedInstanceState } from './conversation-reducer.ts';
+import type {
+	CanonicalToolResultContent,
+	ConversationRecord,
+	ConversationRecordEnvelope,
+	DataRecord,
+	SubmissionSettledRecord,
+} from './conversation-records.ts';
+import { toolResultEntryId, type ReducedInstanceState } from './conversation-reducer.ts';
+import { ConversationRecordInvariantError } from './errors.ts';
 
 export interface AgentConversationSelector {
 	conversationId?: string;
@@ -12,14 +19,14 @@ export interface AgentConversationSelector {
 	session?: string;
 }
 
-export interface AgentConversationDataPart {
+interface AgentConversationDataPart {
 	recordId: string;
 	name: string;
 	id?: string;
 	data: unknown;
 }
 
-export interface AgentConversationSettlement {
+interface AgentConversationSettlement {
 	recordId: string;
 	submissionId: string;
 	outcome: 'completed' | 'failed';
@@ -39,14 +46,24 @@ export interface AgentConversationSnapshot {
 	settlements: AgentConversationSettlement[];
 }
 
-export interface AgentConversationRecordUpdate {
+interface ProjectedToolResultRecord extends ConversationRecordEnvelope {
+	type: 'tool_result';
+	messageId: string;
+	parentId: string;
+	toolCallId: string;
+	toolName: string;
+	isError: boolean;
+	content: CanonicalToolResultContent[];
+}
+
+interface AgentConversationRecordUpdate {
 	v: 1;
 	type: 'conversation_record';
 	conversationId: string;
-	record: ConversationRecord;
+	record: ConversationRecord | ProjectedToolResultRecord;
 }
 
-export interface AgentConversationSnapshotUpdate {
+interface AgentConversationSnapshotUpdate {
 	v: 1;
 	type: 'conversation_reset';
 	conversationId: string;
@@ -57,7 +74,7 @@ export type AgentConversationUpdate =
 	| AgentConversationRecordUpdate
 	| AgentConversationSnapshotUpdate;
 
-export function selectAgentConversation(
+function selectAgentConversation(
 	state: ReducedInstanceState,
 	selector: AgentConversationSelector,
 ) {
@@ -128,13 +145,53 @@ export function projectAgentConversationBatch(options: {
 			: [];
 	}
 	return relevant
-		.filter((record) => record.type !== 'conversation_created' && record.type !== 'tool_outcome')
+		.flatMap((record): Array<ConversationRecord | ProjectedToolResultRecord> => {
+			if (record.type === 'conversation_created' || record.type === 'tool_outcome') return [];
+			if (record.type !== 'tool_results_committed') return [record];
+			let parentId = record.parentId;
+			return record.outcomeIds.map((outcomeId) => {
+				const outcome = options.state.recordsById.get(outcomeId);
+				if (
+					outcome?.type !== 'tool_outcome' ||
+					outcome.conversationId !== record.conversationId ||
+					outcome.harness !== record.harness ||
+					outcome.session !== record.session
+				) {
+					throw new ConversationRecordInvariantError({
+						recordId: record.id,
+						recordType: record.type,
+						reason: `Committed tool outcome "${outcomeId}" is unavailable to the public projection.`,
+					});
+				}
+				const projected = projectedToolResultRecord(record, outcome, parentId);
+				parentId = projected.messageId;
+				return projected;
+			});
+		})
 		.map((record) => ({
 			v: 1,
-			type: 'conversation_record',
+			type: 'conversation_record' as const,
 			conversationId: conversation.conversationId,
 			record,
 		}));
+}
+
+function projectedToolResultRecord(
+	commit: Extract<ConversationRecord, { type: 'tool_results_committed' }>,
+	outcome: Extract<ConversationRecord, { type: 'tool_outcome' }>,
+	parentId: string,
+): ProjectedToolResultRecord {
+	return {
+		...commit,
+		id: toolResultEntryId(commit.assistantMessageId, outcome.toolCallId).replace('entry_', 'record_'),
+		type: 'tool_result',
+		messageId: toolResultEntryId(commit.assistantMessageId, outcome.toolCallId),
+		parentId,
+		toolCallId: outcome.toolCallId,
+		toolName: outcome.toolName,
+		isError: outcome.isError,
+		content: outcome.content,
+	};
 }
 
 function requiresSnapshotReset(record: ConversationRecord): boolean {

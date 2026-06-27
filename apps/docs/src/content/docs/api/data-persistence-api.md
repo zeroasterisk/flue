@@ -44,7 +44,7 @@ Flue calls `migrate()` once at startup when present, then awaits `connect()` onc
 
 ### Schema versioning
 
-An adapter must record its schema or format version when creating storage and reject unknown or newer versions before reading or writing data. Use `FLUE_SCHEMA_VERSION`, `assertSupportedFlueSchemaVersion()`, and `PersistedSchemaVersionError` from `@flue/runtime/adapter`.
+An adapter must record its schema or format version when creating storage and reject every mismatch before reading or writing data. The current pre-1.0 format is schema v7 and is reset-only: clear stores created by another version rather than attempting an in-place migration. Use `FLUE_SCHEMA_VERSION`, `assertSupportedFlueSchemaVersion()`, and `PersistedSchemaVersionError` from `@flue/runtime/adapter`.
 
 ## `AgentExecutionStore`
 
@@ -105,7 +105,7 @@ interface AttachmentStore {
 }
 ```
 
-Attachments are immutable external payloads referenced by canonical conversation records. `put()` must be idempotent for identical bytes and metadata and reject conflicting reuse of an attachment id. Binding changes ownership from a submission to its canonical conversation reference; it does not rewrite payload bytes.
+Attachments are immutable external payloads referenced by canonical conversation records. An `AttachmentRef` is opaque storage identity and integrity metadata—`{ id, mimeType, size, digest }`—not a download URL. `put()` must be idempotent for identical bytes and metadata and reject conflicting reuse of an attachment id. Binding changes ownership from a submission to its canonical conversation reference; it does not rewrite payload bytes.
 
 `deleteForInstance()` is a low-level whole-instance cleanup primitive. The adapter contract does not expose per-session attachment deletion or promise public orchestration around whole-instance deletion.
 

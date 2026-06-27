@@ -584,13 +584,9 @@ export function createNodeAgentCoordinator(options: {
 				}
 				let submission = admission.submission;
 				if (submission.canonicalReadyAt === null) {
-					try {
-						await materializeSubmissionConversation(createDispatchAgentSubmissionInput(input), agent);
-						submission =
-							(await submissions.markSubmissionCanonicalReady(submission.submissionId)) ?? submission;
-					} catch (error) {
-						throw error;
-					}
+					await materializeSubmissionConversation(createDispatchAgentSubmissionInput(input), agent);
+					submission =
+						(await submissions.markSubmissionCanonicalReady(submission.submissionId)) ?? submission;
 				}
 
 				if (activityLease) activityLeases.set(submission.submissionId, activityLease);
@@ -630,13 +626,9 @@ export function createNodeAgentCoordinator(options: {
 				try {
 					const admitted = await submissions.admitDirect(input);
 					if (admitted.canonicalReadyAt === null) {
-						try {
-							await materializeSubmissionConversation(input, agent);
-							const ready = await submissions.markSubmissionCanonicalReady(input.submissionId);
-							if (!ready) throw new Error('[flue] Direct admission disappeared before canonical readiness.');
-						} catch (error) {
-							throw error;
-						}
+						await materializeSubmissionConversation(input, agent);
+						const ready = await submissions.markSubmissionCanonicalReady(input.submissionId);
+						if (!ready) throw new Error('[flue] Direct admission disappeared before canonical readiness.');
 					}
 					const writer = await getConversationWriter(input);
 					const offset = writer?.offset ?? '-1';

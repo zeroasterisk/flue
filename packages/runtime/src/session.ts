@@ -71,11 +71,13 @@ import {
 	type ReducedConversationState,
 	type ReducedMessageEntry,
 	toolOutcomeKey,
+	toolResultEntryId,
 } from './conversation-reducer.ts';
 import type { ConversationRecordWriter } from './conversation-writer.ts';
 import { createDataEmitter } from './data.ts';
 import {
 	AttachmentNotAvailableError,
+	ConversationRecordInvariantError,
 	DelegationDepthExceededError,
 	ModelNotConfiguredError,
 	OperationFailedError,
@@ -983,33 +985,36 @@ export class Session implements FlueSession, AgentSubmissionSession {
 				case 'turn_end': {
 					const turnId = this.activeTurnId ?? generateTurnId();
 					if (event.toolResults.length > 0 && this.conversationWriter) {
-						let parentId = this.canonicalToolResultParentId ?? await this.conversationWriter.getConversationLeaf(this.conversationId);
+						const parentId = this.canonicalToolResultParentId ?? await this.conversationWriter.getConversationLeaf(this.conversationId);
+						if (!parentId) throw new Error('[flue] Canonical tool results have no assistant parent.');
+						const assistantMessageId = this.canonicalToolRequestMessageId;
+						if (!assistantMessageId) throw new Error('[flue] Canonical tool results have no assistant request.');
 						const conversation = await this.requireConversation();
-						for (const toolResult of event.toolResults) {
-							if (!parentId) throw new Error('[flue] Canonical tool result has no assistant parent.');
-							const assistantMessageId = this.canonicalToolRequestMessageId;
-							if (!assistantMessageId) throw new Error('[flue] Canonical tool result has no assistant request.');
-							const outcome = conversation.toolOutcomes.get(
-								toolOutcomeKey(assistantMessageId, toolResult.toolCallId),
-							);
+						const outcomeIds = event.toolResults.map((toolResult) => {
+							const outcome = conversation.toolOutcomes.get(toolOutcomeKey(assistantMessageId, toolResult.toolCallId));
 							if (!outcome) throw new Error('[flue] Canonical tool result has no durable outcome.');
-							const outcomeKey = `${encodeCanonicalId(outcome.assistantMessageId)}_${encodeCanonicalId(toolResult.toolCallId)}`;
-							const messageId = `entry_tool_result_${outcomeKey}`;
-							await this.appendCanonical([{
-								...this.canonicalEnvelope('tool_result', `record_tool_result_${outcomeKey}`),
-								type: 'tool_result',
-								messageId,
-								parentId,
-								toolCallId: outcome.toolCallId,
-								toolName: outcome.toolName,
-								isError: outcome.isError,
-								content: outcome.content,
-							}]);
-							parentId = messageId;
+							return outcome.recordId;
+						});
+						await this.appendCanonical([{
+							...this.canonicalEnvelope('tool_results_committed', `record_tool_results_committed_${encodeCanonicalId(assistantMessageId)}`),
+							type: 'tool_results_committed',
+							assistantMessageId,
+							parentId,
+							outcomeIds,
+						}]);
+						for (const toolResult of event.toolResults) {
 							this.pendingToolPublications.get(toolResult.toolCallId)?.();
 							this.pendingToolPublications.delete(toolResult.toolCallId);
 						}
-						this.canonicalToolResultParentId = parentId ?? undefined;
+						const finalToolResult = event.toolResults.at(-1);
+						if (!finalToolResult) {
+							throw new ConversationRecordInvariantError({
+								recordId: `record_tool_results_committed_${encodeCanonicalId(assistantMessageId)}`,
+								recordType: 'tool_results_committed',
+								reason: 'A committed canonical tool-result batch must contain at least one result.',
+							});
+						}
+						this.canonicalToolResultParentId = toolResultEntryId(assistantMessageId, finalToolResult.toolCallId);
 						this.canonicalToolRequestMessageId = undefined;
 					}
 					const message = event.message;
@@ -1160,15 +1165,10 @@ export class Session implements FlueSession, AgentSubmissionSession {
 				);
 				if (assistant?.type === 'message') {
 					const repairedResultIds = toolRequest.toolCalls.map(
-						(toolCall) =>
-							`entry_tool_repair_${encodeCanonicalId(assistant.id)}_${encodeCanonicalId(toolCall.id)}`,
+						(toolCall) => toolResultEntryId(assistant.id, toolCall.id),
 					);
 					const repairedLeafId = repairedResultIds.at(-1);
-					if (
-						repairedLeafId &&
-						path.at(-1)?.id === repairedLeafId &&
-						repairedResultIds.every((entryId) => conversation.entries.has(entryId))
-					) {
+					if (repairedLeafId && path.at(-1)?.id === repairedLeafId) {
 						await this.rebuildCanonicalContext();
 						return repairedLeafId;
 					}
@@ -1228,55 +1228,53 @@ export class Session implements FlueSession, AgentSubmissionSession {
 		previousLeafId: string | null,
 		conversation: ReducedConversationState,
 	): Promise<string | undefined> {
-		const settledByCallId = new Map<string, ReducedMessageEntry>();
-		for (const entry of following) {
-			if (entry.message.role !== 'toolResult') continue;
-			if (!settledByCallId.has(entry.message.toolCallId)) {
-				settledByCallId.set(entry.message.toolCallId, entry);
-			}
+		void following;
+		if (previousLeafId !== assistantEntryId) return undefined;
+		const finalToolCall = toolCalls.at(-1);
+		if (!finalToolCall) {
+			throw new ConversationRecordInvariantError({
+				recordId: `record_tool_repair_commit_${encodeCanonicalId(assistantEntryId)}`,
+				recordType: 'tool_results_committed',
+				reason: 'A repaired canonical tool-result batch must contain at least one tool call.',
+			});
 		}
-		if (toolCalls.every((toolCall) => settledByCallId.has(toolCall.id))) return undefined;
-		const records: ConversationRecord[] = [{
-			...this.canonicalEnvelope(
-				'active_leaf_changed',
-				`record_tool_repair_${encodeCanonicalId(assistantEntryId)}_rewind`,
-			),
-			type: 'active_leaf_changed',
-			leafId: assistantEntryId,
-			previousLeafId,
-			reason: 'interrupted_tool_batch_repair',
-		}];
-		let parentId = assistantEntryId;
+		const outcomeRecords: ConversationRecord[] = [];
+		const outcomeIds: string[] = [];
 		for (const toolCall of toolCalls) {
-			const settledEntry = settledByCallId.get(toolCall.id);
-			const settled = settledEntry?.message.role === 'toolResult' ? settledEntry.message : undefined;
 			const outcome = conversation.toolOutcomes.get(toolOutcomeKey(assistantEntryId, toolCall.id));
-			const content = outcome?.content ?? settled?.content.map((block) => {
-				if (block.type === 'text') return { type: 'text' as const, text: block.text };
-				const attachment = settledEntry?.attachmentRefs?.get(block.data);
-				if (!attachment) throw new AttachmentNotAvailableError({ attachmentId: block.data });
-				return { type: 'attachment' as const, attachment };
-			}) ?? [{ type: 'text' as const, text: JSON.stringify({
-				type: 'interrupted',
-				message: 'Tool execution was interrupted before completion. The outcome is unknown.',
-			}) }];
+			if (outcome) {
+				outcomeIds.push(outcome.recordId);
+				continue;
+			}
 			const repairKey = `${encodeCanonicalId(assistantEntryId)}_${encodeCanonicalId(toolCall.id)}`;
-			const messageId = `entry_tool_repair_${repairKey}`;
-			records.push({
-				...this.canonicalEnvelope('tool_result', `record_tool_repair_${repairKey}`),
-				type: 'tool_result',
-				messageId,
-				parentId,
+			const recordId = `record_tool_repair_outcome_${repairKey}`;
+			outcomeRecords.push({
+				...this.canonicalEnvelope('tool_outcome', recordId),
+				type: 'tool_outcome',
+				assistantMessageId: assistantEntryId,
 				toolCallId: toolCall.id,
 				toolName: toolCall.name,
-				isError: outcome?.isError ?? settled?.isError ?? true,
-				content,
+				isError: true,
+				content: [{ type: 'text', text: JSON.stringify({
+					type: 'interrupted',
+					message: 'Tool execution was interrupted before completion. The outcome is unknown.',
+				}) }],
 			});
-			parentId = messageId;
+			outcomeIds.push(recordId);
 		}
-		await this.appendCanonical(records);
+		if (outcomeRecords.length > 0) await this.appendCanonical(outcomeRecords);
+		await this.appendCanonical([{
+			...this.canonicalEnvelope(
+				'tool_results_committed',
+				`record_tool_repair_commit_${encodeCanonicalId(assistantEntryId)}`,
+			),
+			type: 'tool_results_committed',
+			assistantMessageId: assistantEntryId,
+			parentId: assistantEntryId,
+			outcomeIds,
+		}]);
 		await this.rebuildCanonicalContext();
-		return parentId;
+		return toolResultEntryId(assistantEntryId, finalToolCall.id);
 	}
 
 	async recoverInterruptedStream(
@@ -2424,7 +2422,7 @@ export class Session implements FlueSession, AgentSubmissionSession {
 		const parentId = await this.conversationWriter.getConversationLeaf(this.conversationId);
 		const userMessageId = generateConversationEntryId();
 		const assistantMessageId = generateConversationEntryId();
-		const resultMessageId = generateConversationEntryId();
+		const resultMessageId = toolResultEntryId(assistantMessageId, toolCallId);
 		const refs = await this.persistCanonicalAttachments(
 				toolResult.content.flatMap((content, index) => content.type === 'image'
 					? [{ id: `att_${resultMessageId}_${index}`, mimeType: content.mimeType, data: content.data }]
@@ -2469,16 +2467,22 @@ export class Session implements FlueSession, AgentSubmissionSession {
 					usage: zeroProviderUsage(),
 				},
 				{
-					...this.canonicalEnvelope('tool_result'),
-					type: 'tool_result',
-					messageId: resultMessageId,
-					parentId: assistantMessageId,
+					...this.canonicalEnvelope('tool_outcome', `record_tool_outcome_${encodeCanonicalId(assistantMessageId)}_${encodeCanonicalId(toolCallId)}`),
+					type: 'tool_outcome',
+					assistantMessageId,
 					toolCallId,
 					toolName: 'bash',
 					isError,
 					content: toolResult.content.map((content) => content.type === 'text'
 						? { type: 'text' as const, text: content.text }
 						: attachmentContent()),
+				},
+				{
+					...this.canonicalEnvelope('tool_results_committed'),
+					type: 'tool_results_committed',
+					assistantMessageId,
+					parentId: assistantMessageId,
+					outcomeIds: [`record_tool_outcome_${encodeCanonicalId(assistantMessageId)}_${encodeCanonicalId(toolCallId)}`],
 				},
 		]);
 		await this.rebuildCanonicalContext();

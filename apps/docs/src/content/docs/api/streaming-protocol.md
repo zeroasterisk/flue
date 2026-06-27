@@ -25,7 +25,7 @@ History returns one JSON snapshot after reducing the complete physical stream pr
 
 Updates require `offset` and resume strictly after it. Use `live=long-poll` for one waitable read or `live=sse` for a continuous stream. Do not resume without retaining the projection state produced by the matching history snapshot; request fresh history when local state is unavailable.
 
-The current server reconstructs the canonical prefix through the supplied offset when an updates connection starts. Reconnect cost therefore grows with the physical agent-instance stream. Snapshot-assisted prefix loading is planned before Flue claims unbounded high-volume conversation support; applications with very large streams should measure reconnect latency and avoid unnecessary reconnect loops.
+The server reconstructs the canonical prefix through the supplied offset when an updates connection starts. The history response is an API-materialized projection, not a persisted conversation snapshot or replay cache, so reconnect cost grows with the physical agent-instance stream. Applications with very large streams should measure reconnect latency and avoid unnecessary reconnect loops.
 
 Agent history and updates do not support `tail`. A suffix can omit message starts, branches, compaction state, or earlier deltas and cannot be reduced safely.
 

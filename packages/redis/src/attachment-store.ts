@@ -14,7 +14,7 @@ import {
 	verifyAttachmentBytes,
 } from '@flue/runtime/adapter';
 import type { RedisKeys } from './redis-keys.ts';
-import type { RedisArgument, RedisRunner } from './redis-runner.ts';
+import type { RedisRunner } from './redis-runner.ts';
 
 interface AttachmentRecord extends StoredAttachment { owner: AttachmentOwner }
 
@@ -126,4 +126,3 @@ const INDEX_CONVERSATION = `redis.call('SADD',KEYS[1],ARGV[1]) redis.call('SADD'
 function string(value: unknown): string { return value instanceof Uint8Array ? new TextDecoder().decode(value) : String(value); }
 function binary(value: unknown): Uint8Array { if (value instanceof Uint8Array) return copyAttachmentBytes(value); if (typeof value === 'string') return new TextEncoder().encode(value); throw new TypeError('Persisted attachment bytes are not binary data.'); }
 function conflict(input: { streamPath: string; attachment: AttachmentRef }): never { throw new AttachmentConflictError({ path: input.streamPath, attachmentId: input.attachment.id }); }
-export type AttachmentRedisArgument = RedisArgument;

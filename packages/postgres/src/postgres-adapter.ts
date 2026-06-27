@@ -172,7 +172,7 @@ async function ensureTables(runner: PostgresRunner): Promise<void> {
 		const storedVersion = versionRows[0]?.value;
 		if (storedVersion === undefined || storedVersion === null) {
 			const existing = await tx.query(
-				`SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name LIKE 'flue\_%' ESCAPE '\' AND table_name <> 'flue_meta' LIMIT 1`,
+				String.raw`SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name LIKE 'flue\_%' ESCAPE '\' AND table_name <> 'flue_meta' LIMIT 1`,
 			);
 			if (existing.length > 0) assertSupportedFlueSchemaVersion('unversioned');
 			await tx.query(

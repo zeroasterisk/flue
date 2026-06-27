@@ -13,11 +13,11 @@ export function isUuid(value: string): boolean {
 	return UUID_PATTERN.test(value);
 }
 
-export function isTaskSessionName(name: string): boolean {
+function isTaskSessionName(name: string): boolean {
 	return name.startsWith(TASK_SESSION_PREFIX);
 }
 
-export function isActionScopeName(name: string): boolean {
+function isActionScopeName(name: string): boolean {
 	return name.startsWith(ACTION_SCOPE_PREFIX);
 }
 
@@ -52,34 +52,6 @@ export function createActionScopeName(invocationId: string): string {
 	return `${ACTION_SCOPE_PREFIX}${invocationId}`;
 }
 
-export function childSessionStorageKey(
-	parentStorageKey: string,
-	child: unknown,
-): string | undefined {
-	if (!child || typeof child !== 'object') return undefined;
-	const parent = parseSessionStorageKey(parentStorageKey);
-	if (!parent) return undefined;
-	const { type, session } = child as { type?: unknown; session?: unknown };
-	if (typeof session !== 'string') return undefined;
-	if (type === 'task') {
-		const { taskId } = child as { taskId?: unknown };
-		if (
-			typeof taskId !== 'string' ||
-			!isUuid(taskId) ||
-			session !== createTaskSessionName(parent.session, taskId)
-		) {
-			return undefined;
-		}
-		return createSessionStorageKey(parent.instanceId, parent.harness, session);
-	}
-	if (type === 'action') {
-		const { invocationId } = child as { invocationId?: unknown };
-		if (typeof invocationId !== 'string' || !isUuid(invocationId)) return undefined;
-		const scope = createActionScopeName(invocationId);
-		return createSessionStorageKey(parent.instanceId, `${parent.harness}:${scope}`, session);
-	}
-	return undefined;
-}
 
 export function parseSessionStorageKey(storageKey: string): SessionStorageIdentity | undefined {
 	if (!storageKey.startsWith(SESSION_STORAGE_PREFIX)) return undefined;

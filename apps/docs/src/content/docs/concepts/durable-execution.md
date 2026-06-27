@@ -69,7 +69,7 @@ Persisting a conversation does not make sandbox files durable. The default virtu
 
 ## Durable Workflows
 
-Workflows are finite function invocations. Each invocation runs the authored `run(...)` function once and receives its own `runId`. Flue does not checkpoint arbitrary TypeScript execution and resume the function from its last completed line.
+Workflows are finite function invocations. Each invocation runs the authored `run(...)` function once, receives its own `runId`, and owns execution-scoped canonical conversation state for its harness and sessions. That state is not a persistent agent conversation shared with another workflow run. Flue does not checkpoint arbitrary TypeScript execution and resume the function from its last completed line.
 
 On Cloudflare, recovery terminalizes an interrupted workflow run and closes its event stream. Node currently has no equivalent workflow recovery path. With a durable adapter, the run record and events survive, but an interrupted run remains listed as `active` and live readers wait indefinitely. Use `client.runs.events()` or a catch-up read to inspect events persisted before the crash.
 

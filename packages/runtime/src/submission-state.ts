@@ -294,7 +294,7 @@ export function isRetryableModelError(message: AssistantMessage): boolean {
 	);
 }
 
-export function isCompletedAssistantResponse(message: AssistantMessage): boolean {
+function isCompletedAssistantResponse(message: AssistantMessage): boolean {
 	return message.stopReason === 'stop' || message.stopReason === 'length';
 }
 

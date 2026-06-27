@@ -55,9 +55,6 @@ function dispatchInput(overrides: Partial<DispatchInput> = {}): DispatchInput {
 	};
 }
 
-function attempt(submissionId: string, attemptId: string) {
-	return { submissionId, attemptId };
-}
 
 describe('createSqlAgentExecutionStore()', () => {
 	it('creates the initial flue_agent_submissions schema and ordering indexes when initialized', () => {
@@ -296,7 +293,7 @@ describe('createSqlAgentExecutionStore()', () => {
 		expect(() =>
 			createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent'),
 		).toThrow(
-			'[flue] Cloudflare durable agent class "FlueAssistantAgent" could not initialize its SQLite execution store. Underlying error: This database records an unrecognized schema version ("unversioned"; this runtime supports version 6).',
+			'[flue] Cloudflare durable agent class "FlueAssistantAgent" could not initialize its SQLite execution store. Underlying error: This database records an unrecognized schema version ("unversioned"; this runtime supports version 7).',
 		);
 	});
 });

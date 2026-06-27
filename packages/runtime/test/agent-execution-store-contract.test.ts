@@ -245,7 +245,7 @@ describe('sqlite() PersistenceAdapter', () => {
 		const rows = db.prepare(`SELECT value FROM flue_meta WHERE key = 'schema_version'`).all() as {
 			value: string;
 		}[];
-		expect(rows).toEqual([{ value: '6' }]);
+		expect(rows).toEqual([{ value: '7' }]);
 		db.close();
 	});
 
@@ -275,7 +275,7 @@ describe('sqlite() PersistenceAdapter', () => {
 		db.close();
 
 		const adapter = sqlite(dbPath);
-		expect(() => adapter.migrate?.()).toThrow('supports version 6');
+		expect(() => adapter.migrate?.()).toThrow('supports version 7');
 		const unchanged = new DatabaseSync(dbPath);
 		const columns = unchanged.prepare('PRAGMA table_info(flue_agent_submissions)').all() as Array<{
 			name: string;
@@ -313,7 +313,7 @@ describe('sqlite() PersistenceAdapter', () => {
 		db.close();
 
 		const adapter = sqlite(dbPath);
-		expect(() => adapter.migrate?.()).toThrow('supports version 6');
+		expect(() => adapter.migrate?.()).toThrow('supports version 7');
 		const unchanged = new DatabaseSync(dbPath);
 		const submissionColumns = unchanged.prepare('PRAGMA table_info(flue_agent_submissions)').all() as Array<{ name: string }>;
 		const runColumns = unchanged.prepare('PRAGMA table_info(flue_runs)').all() as Array<{ name: string }>;

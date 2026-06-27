@@ -59,14 +59,14 @@ export type ConversationCreatedRecord = ConversationCreatedRecordBase &
 		  }
 	);
 
-export interface UserMessageRecord extends ConversationRecordEnvelope {
+interface UserMessageRecord extends ConversationRecordEnvelope {
 	type: 'user_message';
 	messageId: string;
 	parentId: string | null;
 	content: CanonicalUserContent[];
 }
 
-export interface SignalRecord extends ConversationRecordEnvelope {
+interface SignalRecord extends ConversationRecordEnvelope {
 	type: 'signal';
 	messageId: string;
 	parentId: string | null;
@@ -76,7 +76,7 @@ export interface SignalRecord extends ConversationRecordEnvelope {
 	attributes?: Record<string, string>;
 }
 
-export type AssistantModelInfo = Omit<
+type AssistantModelInfo = Omit<
 	AssistantMessage,
 	'role' | 'content' | 'stopReason' | 'errorMessage' | 'timestamp' | 'usage'
 >;
@@ -88,7 +88,7 @@ export interface AssistantMessageStartedRecord extends ConversationRecordEnvelop
 	modelInfo: AssistantModelInfo;
 }
 
-export interface AssistantTextStartedRecord extends ConversationRecordEnvelope {
+interface AssistantTextStartedRecord extends ConversationRecordEnvelope {
 	type: 'assistant_text_started';
 	messageId: string;
 	blockId: string;
@@ -96,7 +96,7 @@ export interface AssistantTextStartedRecord extends ConversationRecordEnvelope {
 	textSignature?: string;
 }
 
-export interface AssistantTextDeltaRecord extends ConversationRecordEnvelope {
+interface AssistantTextDeltaRecord extends ConversationRecordEnvelope {
 	type: 'assistant_text_delta';
 	messageId: string;
 	blockId: string;
@@ -104,21 +104,21 @@ export interface AssistantTextDeltaRecord extends ConversationRecordEnvelope {
 	delta: string;
 }
 
-export interface AssistantTextCompletedRecord extends ConversationRecordEnvelope {
+interface AssistantTextCompletedRecord extends ConversationRecordEnvelope {
 	type: 'assistant_text_completed';
 	messageId: string;
 	blockId: string;
 	deltaCount: number;
 }
 
-export interface AssistantReasoningStartedRecord extends ConversationRecordEnvelope {
+interface AssistantReasoningStartedRecord extends ConversationRecordEnvelope {
 	type: 'assistant_reasoning_started';
 	messageId: string;
 	blockId: string;
 	blockIndex: number;
 }
 
-export interface AssistantReasoningDeltaRecord extends ConversationRecordEnvelope {
+interface AssistantReasoningDeltaRecord extends ConversationRecordEnvelope {
 	type: 'assistant_reasoning_delta';
 	messageId: string;
 	blockId: string;
@@ -126,7 +126,7 @@ export interface AssistantReasoningDeltaRecord extends ConversationRecordEnvelop
 	delta: string;
 }
 
-export interface AssistantReasoningCompletedRecord extends ConversationRecordEnvelope {
+interface AssistantReasoningCompletedRecord extends ConversationRecordEnvelope {
 	type: 'assistant_reasoning_completed';
 	messageId: string;
 	blockId: string;
@@ -136,7 +136,7 @@ export interface AssistantReasoningCompletedRecord extends ConversationRecordEnv
 	redacted?: boolean;
 }
 
-export interface AssistantToolCallRecord extends ConversationRecordEnvelope {
+interface AssistantToolCallRecord extends ConversationRecordEnvelope {
 	type: 'assistant_tool_call';
 	messageId: string;
 	blockId: string;
@@ -147,7 +147,7 @@ export interface AssistantToolCallRecord extends ConversationRecordEnvelope {
 	thoughtSignature?: string;
 }
 
-export interface AssistantMessageCompletedRecord extends ConversationRecordEnvelope {
+interface AssistantMessageCompletedRecord extends ConversationRecordEnvelope {
 	type: 'assistant_message_completed';
 	messageId: string;
 	stopReason: AssistantMessage['stopReason'];
@@ -155,7 +155,7 @@ export interface AssistantMessageCompletedRecord extends ConversationRecordEnvel
 	error?: string;
 }
 
-export interface ToolOutcomeRecord extends ConversationRecordEnvelope {
+interface ToolOutcomeRecord extends ConversationRecordEnvelope {
 	type: 'tool_outcome';
 	assistantMessageId: string;
 	toolCallId: string;
@@ -164,14 +164,11 @@ export interface ToolOutcomeRecord extends ConversationRecordEnvelope {
 	content: CanonicalToolResultContent[];
 }
 
-export interface ToolResultRecord extends ConversationRecordEnvelope {
-	type: 'tool_result';
-	messageId: string;
+interface ToolResultsCommittedRecord extends ConversationRecordEnvelope {
+	type: 'tool_results_committed';
+	assistantMessageId: string;
 	parentId: string;
-	toolCallId: string;
-	toolName: string;
-	isError: boolean;
-	content: CanonicalToolResultContent[];
+	outcomeIds: string[];
 }
 
 export interface CompactionRecord extends ConversationRecordEnvelope {
@@ -186,7 +183,7 @@ export interface CompactionRecord extends ConversationRecordEnvelope {
 	usage?: PromptUsage;
 }
 
-export interface ActiveLeafChangedRecord extends ConversationRecordEnvelope {
+interface ActiveLeafChangedRecord extends ConversationRecordEnvelope {
 	type: 'active_leaf_changed';
 	leafId: string | null;
 	previousLeafId: string | null;
@@ -211,7 +208,7 @@ export type CanonicalChildSessionRef =
 			taskId?: never;
 	  });
 
-export interface ChildSessionRetainedRecord extends ConversationRecordEnvelope {
+interface ChildSessionRetainedRecord extends ConversationRecordEnvelope {
 	type: 'child_session_retained';
 	child: CanonicalChildSessionRef;
 }
@@ -244,14 +241,13 @@ export type ConversationRecord =
 	| AssistantToolCallRecord
 	| AssistantMessageCompletedRecord
 	| ToolOutcomeRecord
-	| ToolResultRecord
+	| ToolResultsCommittedRecord
 	| CompactionRecord
 	| ActiveLeafChangedRecord
 	| ChildSessionRetainedRecord
 	| DataRecord
 	| SubmissionSettledRecord;
 
-export type ConversationRecordType = ConversationRecord['type'];
 
 export function generateConversationRecordId(): string {
 	return `record_${crypto.randomUUID()}`;

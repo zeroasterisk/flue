@@ -519,7 +519,7 @@ describe('reduceConversationRecords()', () => {
 		});
 	});
 
-	it('retains a durable tool outcome outside the model-visible graph', () => {
+	it('materializes one complete ordered tool-results commit from durable outcomes', () => {
 		const records = canonicalConversation();
 		const state = reduceConversationRecords(createReducedInstanceState(), records.slice(0, 4), '4');
 		applyConversationRecord(state, {
@@ -568,9 +568,28 @@ describe('reduceConversationRecords()', () => {
 		expect(conversation.activeLeafId).toBe('entry_assistant');
 		expect(conversation.toolOutcomes.size).toBe(1);
 		expect(buildConversationContext(conversation)).toEqual([{ role: 'user', content: [{ type: 'text', text: 'Hello' }], timestamp: expect.any(Number) }]);
+
+		const commit = {
+			...scope,
+			id: 'record_tool_commit',
+			type: 'tool_results_committed' as const,
+			timestamp: '2026-06-25T00:00:02.500Z',
+			assistantMessageId: 'entry_assistant',
+			parentId: 'entry_assistant',
+			outcomeIds: ['record_tool_outcome'],
+		};
+		applyConversationRecord(state, commit);
+		applyConversationRecord(state, commit);
+
+		expect(conversation.activeLeafId).toMatch(/^entry_tool_result_/);
+		expect(buildConversationContext(conversation)).toMatchObject([
+			{ role: 'user' },
+			{ role: 'assistant', stopReason: 'toolUse' },
+			{ role: 'toolResult', toolCallId: 'call_expected', content: [{ type: 'text', text: 'durable result' }] },
+		]);
 	});
 
-	it('rejects a tool result that does not match the next requested tool call', () => {
+	it('rejects a tool-results commit that does not match the requested tool call', () => {
 		const records = canonicalConversation();
 		const state = reduceConversationRecords(createReducedInstanceState(), records.slice(0, 4), '4');
 		applyConversationRecord(state, {
@@ -603,19 +622,27 @@ describe('reduceConversationRecords()', () => {
 			stopReason: 'toolUse',
 			usage,
 		});
+		applyConversationRecord(state, {
+			...scope,
+			id: 'record_wrong_outcome',
+			type: 'tool_outcome',
+			timestamp: '2026-06-25T00:00:02.400Z',
+			assistantMessageId: 'entry_assistant',
+			toolCallId: 'call_expected',
+			toolName: 'lookup',
+			isError: false,
+			content: [{ type: 'text', text: 'result' }],
+		});
 
 		expect(() =>
 			applyConversationRecord(state, {
 				...scope,
-				id: 'record_wrong_tool_result',
-				type: 'tool_result',
+				id: 'record_wrong_commit',
+				type: 'tool_results_committed',
 				timestamp: '2026-06-25T00:00:03.000Z',
-				messageId: 'entry_result',
+				assistantMessageId: 'entry_assistant',
 				parentId: 'entry_assistant',
-				toolCallId: 'call_wrong',
-				toolName: 'lookup',
-				isError: false,
-				content: [{ type: 'text', text: 'result' }],
+				outcomeIds: [],
 			}),
 		).toThrow(ConversationRecordInvariantError);
 	});
