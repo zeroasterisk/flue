@@ -519,7 +519,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 	private createActionHarness: CreateActionHarness | undefined;
 	private scopeSignal: AbortSignal | undefined;
 	private onClose: (() => void) | undefined;
-	private activeJournalCallbacks: ProcessAgentSubmissionOptions['journal'] | undefined;
 	private activeTimeoutAt: number | undefined;
 	private activeSubmissionId: string | undefined;
 	private activeSubmissionAttemptId: string | undefined;
@@ -541,16 +540,10 @@ export class Session implements FlueSession, AgentSubmissionSession {
 	private emitTurnRequestAndStream: StreamFn = async (model, context, options) => {
 		if (this.activeTurnId === undefined) this.activeTurnId = generateTurnId();
 		const turnId = this.activeTurnId;
-		const state = {
-			operationId: this.activeOperationId ?? generateOperationId(),
-			turnId,
-			checkpointLeafId: (await this.conversationWriter.getConversationLeaf(this.conversationId)) ?? undefined,
-		};
-		await this.activeJournalCallbacks?.beforeProvider?.(state);
+		const operationId = this.activeOperationId ?? generateOperationId();
 		this.emitTurnRequest(turnId, 'agent', model, context, options);
-		await this.activeJournalCallbacks?.providerStarted?.(state);
 		const operation = { type: 'model' as const, turnId };
-		const executionContext = this.executionContext({ operationId: state.operationId, turnId });
+		const executionContext = this.executionContext({ operationId, turnId });
 		return interceptExecution(operation, executionContext, async () =>
 			wrapProviderStream(streamSimple(model, context, options), operation, executionContext),
 		);
@@ -866,17 +859,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 						this.emitTurn(turnId, 'agent', event.message, request);
 						this.modelRequests.delete(turnId);
 						this.modelRequestStartTimes.delete(turnId);
-						const toolCalls = event.message.content.filter(
-							(content) => content.type === 'toolCall',
-						);
-						if (toolCalls.length > 0) {
-							await this.activeJournalCallbacks?.toolRequestRecorded?.({
-								operationId: this.activeOperationId ?? generateOperationId(),
-								turnId: this.activeTurnId ?? generateTurnId(),
-								checkpointLeafId: (await this.conversationWriter.getConversationLeaf(this.conversationId)) ?? undefined,
-								toolRequest: { toolCalls },
-							});
-						}
 					}
 					this.emit({ type: 'message_end', message: event.message, turnId });
 					break;
@@ -966,11 +948,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 				}
 				case 'turn_end': {
 					const turnId = this.activeTurnId ?? generateTurnId();
-					const message = event.message;
-					const assistant =
-						message.role === 'assistant' ? (message as AssistantMessage) : undefined;
-					const turnInterrupted =
-						assistant?.stopReason === 'aborted' || assistant?.stopReason === 'error';
 					const committedToolResults = event.toolResults.length > 0;
 					if (committedToolResults) {
 						const parentId = this.canonicalToolResultParentId ?? await this.conversationWriter.getConversationLeaf(this.conversationId);
@@ -1004,24 +981,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 						}
 						this.canonicalToolResultParentId = toolResultEntryId(assistantMessageId, finalToolResult.toolCallId);
 						this.canonicalToolRequestMessageId = undefined;
-						if (!turnInterrupted) {
-							await this.activeJournalCallbacks?.checkpointReady?.({
-								operationId: this.activeOperationId ?? generateOperationId(),
-								turnId,
-								checkpointLeafId: this.canonicalToolResultParentId,
-							});
-						}
-					} else if (assistant && !turnInterrupted) {
-						const committedLeafId = await this.conversationWriter.getConversationLeaf(this.conversationId);
-						if (!committedLeafId) {
-							throw new Error('[flue] Invariant: committed leaf ID is null after completing a turn.');
-						}
-						await this.activeJournalCallbacks?.committed?.({
-							operationId: this.activeOperationId ?? generateOperationId(),
-							turnId,
-							checkpointLeafId: committedLeafId,
-							committedLeafId,
-						});
 					}
 					this.emit({
 						type: 'turn_messages',
@@ -1139,62 +1098,14 @@ export class Session implements FlueSession, AgentSubmissionSession {
 	}
 
 	/**
-	 * Repair interrupted tool calls by building a complete ordered result batch
-	 * for all tool calls in the journal's toolRequest. Already-settled results
-	 * are preserved (first-write-wins); unresolved tools get synthetic error
-	 * results. Results are appended in original tool-call order so
-	 * `isCompleteToolResultBatch` positional matching succeeds.
-	 *
-	 * Returns the new leaf ID after repair, or undefined if no repair was needed.
-	 */
-	async repairInterruptedToolCalls(
-		_input: AgentSubmissionInput,
-		toolRequest: { toolCalls: Array<{ type: 'toolCall'; id: string; name: string }> },
-		attempt?: import('./agent-execution-store.ts').SubmissionAttemptRef,
-	): Promise<string | undefined> {
-		{
-			this.activeSubmissionId = attempt?.submissionId;
-			this.activeSubmissionAttemptId = attempt?.attemptId;
-			const conversation = await this.conversationWriter.getConversation(this.conversationId);
-			if (conversation) {
-				const path = getActiveConversationPath(conversation);
-				const assistant = path.findLast(
-					(entry) => entry.type === 'message' && entry.message.role === 'assistant' && entry.message.stopReason === 'toolUse',
-				);
-				if (assistant?.type === 'message') {
-					const repairedResultIds = toolRequest.toolCalls.map(
-						(toolCall) => toolResultEntryId(assistant.id, toolCall.id),
-					);
-					const repairedLeafId = repairedResultIds.at(-1);
-					if (repairedLeafId && path.at(-1)?.id === repairedLeafId) {
-						await this.rebuildCanonicalContext();
-						return repairedLeafId;
-					}
-					const assistantIndex = path.findIndex((entry) => entry.id === assistant.id);
-					const knownResults = path.slice(assistantIndex + 1).flatMap(
-						(entry): ReducedMessageEntry[] => entry.type === 'message' ? [entry] : [],
-					);
-					return this.appendRepairedToolResultBatch(
-						assistant.id,
-						toolRequest.toolCalls,
-						knownResults,
-						conversation.activeLeafId,
-						conversation,
-					);
-				}
-			}
-		}
-		return undefined;
-	}
-
-	/**
 	 * Complete the trailing partial tool-result batch left by a turn that was
 	 * interrupted mid-batch, so resumption continues from the repaired batch
 	 * instead of replaying — and re-executing — tool calls whose results were
-	 * already recorded. Same conservative semantics as
-	 * `repairInterruptedToolCalls`, with the batch derived from persisted
-	 * history (the journal's toolRequest does not survive the next turn the
-	 * abort also cut short). No-op when no trailing partial batch exists.
+	 * already recorded. Conservative by construction: every recorded result is
+	 * preserved (first-write-wins) and unresolved calls get explicit
+	 * unknown-outcome error results — never a re-execution. The batch is
+	 * derived from persisted canonical history. No-op when no trailing partial
+	 * batch exists.
 	 */
 	private async repairTrailingPartialToolBatch(inputEntryId: string): Promise<void> {
 		const conversation = await this.requireConversation();
@@ -1277,11 +1188,15 @@ export class Session implements FlueSession, AgentSubmissionSession {
 
 	async recoverInterruptedStream(
 		attempt: import('./agent-execution-store.ts').SubmissionAttemptRef,
-		turnId: string,
+		turnId?: string,
 	): Promise<boolean> {
 		{
 			this.activeSubmissionId = attempt.submissionId;
 			this.activeSubmissionAttemptId = attempt.attemptId;
+			// `turnId` only cosmetically stamps the appended recovery records;
+			// discovery of the partial to recover is by submissionId. Canonical-
+			// only recovery passes no turnId (the journal that once carried it is
+			// gone), which is harmless.
 			this.activeTurnId = turnId;
 			const inProgress = await this.conversationWriter.findInProgressAssistant(
 				this.conversationId,
@@ -2985,7 +2900,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 			callSite: 'this dispatched input',
 			onInputApplied: options?.onInputApplied,
 			submissionAttempt: options?.submissionAttempt,
-			journal: options?.journal,
 			startedAt: options?.startedAt,
 			timeoutAt: options?.timeoutAt,
 			signal,
@@ -3028,7 +2942,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 			callSite: 'this direct input',
 			onInputApplied: options?.onInputApplied,
 			submissionAttempt: options?.submissionAttempt,
-			journal: options?.journal,
 			startedAt: options?.startedAt,
 			timeoutAt: options?.timeoutAt,
 			signal,
@@ -3051,7 +2964,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 	private async runPersistedContextInput(options: {
 		inputEntryId: string;
 		createCanonicalInput: (parentId: string | null) => Promise<ConversationRecord> | ConversationRecord;
-		journal?: ProcessAgentSubmissionOptions['journal'];
 		startedAt?: number;
 		timeoutAt?: number;
 		errorLabel: string;
@@ -3068,7 +2980,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 				callSite: options.callSite,
 			},
 			async ({ resolvedModel }) => {
-				this.activeJournalCallbacks = options.journal;
 				this.activeSubmissionId = options.submissionAttempt?.submissionId;
 				this.activeSubmissionAttemptId = options.submissionAttempt?.attemptId;
 				const durability = this.resolveSubmissionDurability(options.startedAt, options.timeoutAt);
@@ -3134,12 +3045,24 @@ export class Session implements FlueSession, AgentSubmissionSession {
 							this.throwIfError(options.errorLabel);
 							break;
 						}
-						case 'tool_use_unresolved':
-							// Divergence preserved from before consolidation (see
-							// submission-state.ts): an unresolved tool call settles with the
-							// persisted response here, while inspection reports it
-							// 'uncertain'.
+						case 'tool_use_unresolved': {
+							// A tool turn made durable but interrupted before ANY tool
+							// outcome was recorded. Repair the batch — every unresolved
+							// call gets an explicit unknown-outcome error, never a
+							// re-execution — and continue, identical to a partial batch.
+							// (Before the turn-journal removal this was reached only when
+							// the journal said the turn never started, and was settled
+							// as-is; canonical recovery cannot prove "never started", so it
+							// conservatively repairs and lets the model proceed.)
+							await this.repairTrailingPartialToolBatch(options.inputEntryId);
+							await this.runModelTurnWithRecovery({
+								start: () => this.agentLoop.continue(),
+								signal: options.signal,
+								resume: { assistant: state.assistant, errorLabel: options.errorLabel },
+							});
+							this.throwIfError(options.errorLabel);
 							break;
+						}
 					}
 					return {
 						text: this.getAssistantText(),
@@ -3147,7 +3070,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 						model: { provider: resolvedModel.provider, id: resolvedModel.id },
 					};
 				} finally {
-					this.activeJournalCallbacks = undefined;
 					this.activeSubmissionId = undefined;
 					this.activeSubmissionAttemptId = undefined;
 					this.activeTimeoutAt = undefined;

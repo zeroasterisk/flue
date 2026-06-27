@@ -247,7 +247,7 @@ describe('dispatch()', () => {
 });
 
 describe('dispatched session processing', () => {
-	it('does not commit the journal when a turn ends aborted', async () => {
+	it('rejects the operation when a turn ends aborted', async () => {
 		const provider = createProvider();
 		provider.setResponses([
 			fauxAssistantMessage('partial output collected before the abort', {
@@ -255,22 +255,21 @@ describe('dispatched session processing', () => {
 				errorMessage: 'Request was aborted',
 			}),
 		]);
-		const journalCommits: string[] = [];
 		const agent = defineAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
 		}));
 		const input: DirectAgentSubmissionInput = {
 			kind: 'direct',
-			submissionId: 'direct:aborted-turn-no-commit',
+			submissionId: 'direct:aborted-turn',
 			agent: 'moderator',
-			id: 'guild:aborted-turn-no-commit',
+			id: 'guild:aborted-turn',
 			payload: { message: 'Hello directly' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
 		const ctx = createFlueContext({
 			id: input.id,
 			env: {},
-			req: new Request('http://flue.local/agents/moderator/guild:aborted-turn-no-commit', {
+			req: new Request('http://flue.local/agents/moderator/guild:aborted-turn', {
 				method: 'POST',
 			}),
 			agentConfig: {
@@ -284,42 +283,31 @@ describe('dispatched session processing', () => {
 			createAgentSubmissionSessionHandler(agent, input, (s) =>
 				s.processSubmissionInput(input, {
 					submissionAttempt: { submissionId: input.submissionId, attemptId: 'attempt-1' },
-					journal: {
-						committed: async () => {
-							journalCommits.push('committed');
-						},
-						checkpointReady: async () => {
-							journalCommits.push('checkpoint-ready');
-						},
-					},
 				}),
 			)(ctx),
 		).rejects.toBeInstanceOf(OperationFailedError);
-
-		expect(journalCommits).toEqual([]);
 	});
 
-	it('does not commit the journal when a turn ends with a model error', async () => {
+	it('rejects the operation when a turn ends with a model error', async () => {
 		const provider = createProvider();
 		provider.setResponses([
 			fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'invalid_api_key' }),
 		]);
-		const journalCommits: string[] = [];
 		const agent = defineAgent(() => ({
 			model: `${provider.getModel().provider}/${provider.getModel().id}`,
 		}));
 		const input: DirectAgentSubmissionInput = {
 			kind: 'direct',
-			submissionId: 'direct:error-turn-no-commit',
+			submissionId: 'direct:error-turn',
 			agent: 'moderator',
-			id: 'guild:error-turn-no-commit',
+			id: 'guild:error-turn',
 			payload: { message: 'Hello directly' },
 			acceptedAt: '2026-06-01T00:00:00.000Z',
 		};
 		const ctx = createFlueContext({
 			id: input.id,
 			env: {},
-			req: new Request('http://flue.local/agents/moderator/guild:error-turn-no-commit', {
+			req: new Request('http://flue.local/agents/moderator/guild:error-turn', {
 				method: 'POST',
 			}),
 			agentConfig: {
@@ -333,19 +321,8 @@ describe('dispatched session processing', () => {
 			createAgentSubmissionSessionHandler(agent, input, (s) =>
 				s.processSubmissionInput(input, {
 					submissionAttempt: { submissionId: input.submissionId, attemptId: 'attempt-1' },
-					journal: {
-						committed: async () => {
-							journalCommits.push('committed');
-						},
-						checkpointReady: async () => {
-							journalCommits.push('checkpoint-ready');
-						},
-					},
 				}),
 			)(ctx),
 		).rejects.toBeInstanceOf(OperationFailedError);
-
-		expect(journalCommits).toEqual([]);
 	});
-
 });

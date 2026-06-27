@@ -1050,18 +1050,6 @@ export class SubmissionRetryExhaustedError extends FlueError {
 	}
 }
 
-export class SubmissionOwnershipError extends FlueError {
-	constructor({ boundary }: { boundary: string }) {
-		super({
-			type: 'submission_ownership_lost',
-			message: 'Submission ownership was lost before external work could continue.',
-			details: 'The interrupted attempt did not invoke additional model or tool work.',
-			dev: `The durable ownership transition failed at "${boundary}".`,
-			meta: { boundary },
-		});
-	}
-}
-
 /** A durable submission exceeded its configured processing timeout. */
 export class SubmissionTimeoutError extends FlueError {
 	constructor() {

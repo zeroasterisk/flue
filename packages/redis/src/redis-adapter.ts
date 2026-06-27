@@ -5,10 +5,7 @@ import type {
 	AgentDispatchAdmission,
 	AgentSubmission,
 	AgentSubmissionStore,
-	AgentTurnJournal,
-	AgentTurnJournalPhase,
 	CreateRunInput,
-	CreateTurnJournalInput,
 	DirectAgentSubmissionInput,
 	DispatchAgentSubmissionInput,
 	DispatchInput,
@@ -65,7 +62,6 @@ import {
 	createRunScript,
 	endRunScript,
 	finalizeSettlementScript,
-	journalScript,
 	lifecycleScript,
 	markSubmissionCanonicalReadyScript,
 	quarantineSubmissionScript,
@@ -303,11 +299,6 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 		return row.submissionId ? this.parseSubmission(row) : null;
 	}
 
-	async getTurnJournal(submissionId: string): Promise<AgentTurnJournal | null> {
-		const row = await this.backend.hgetall(this.backend.keys.journal(submissionId));
-		return row.submissionId ? parseJournal(row) : null;
-	}
-
 	async markSubmissionCanonicalReady(submissionId: string): Promise<AgentSubmission | null> {
 		const changed = integer(
 			await this.backend.eval(
@@ -365,74 +356,7 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 		return output;
 	}
 
-	async beginTurnJournal(input: CreateTurnJournalInput): Promise<boolean> {
-		const now = Date.now();
-		return (
-			integer(
-				await this.backend.eval(
-					journalScript,
-					[
-						this.backend.keys.journal(input.submissionId),
-						this.backend.keys.journals(),
-						this.backend.keys.submission(input.submissionId),
-					],
-					[
-						'begin',
-						input.submissionId,
-						input.sessionKey,
-						input.kind,
-						input.attemptId,
-						input.operationId,
-						input.turnId,
-						input.phase,
-						now,
-						input.checkpointLeafId ?? empty,
-						optionalJson(input.toolRequest),
-					],
-				),
-			) === 1
-		);
-	}
-
-	async updateTurnJournalPhase(
-		attempt: SubmissionAttemptRef,
-		phase: AgentTurnJournalPhase,
-		options: { checkpointLeafId?: string; toolRequest?: unknown } = {},
-	): Promise<boolean> {
-		return (
-			integer(
-				await this.backend.eval(
-					journalScript,
-					[this.backend.keys.journal(attempt.submissionId)],
-					[
-						'phase',
-						attempt.attemptId,
-						phase,
-						Date.now(),
-						options.checkpointLeafId ?? empty,
-						optionalJson(options.toolRequest),
-					],
-				),
-			) === 1
-		);
-	}
-
-	async commitTurnJournal(
-		attempt: SubmissionAttemptRef,
-		committedLeafId: string,
-	): Promise<boolean> {
-		return (
-			integer(
-				await this.backend.eval(
-					journalScript,
-					[this.backend.keys.journal(attempt.submissionId)],
-					['commit', attempt.attemptId, Date.now(), committedLeafId],
-				),
-			) === 1
-		);
-	}
-
-	async replaceTurnJournalAttempt(
+	async replaceSubmissionAttempt(
 		attempt: SubmissionAttemptRef,
 		nextAttemptId: string,
 		lease?: { ownerId: string; leaseExpiresAt: number },
@@ -441,10 +365,7 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 			integer(
 				await this.backend.eval(
 					replaceAttemptScript,
-					[
-						this.backend.keys.submission(attempt.submissionId),
-						this.backend.keys.journal(attempt.submissionId),
-					],
+					[this.backend.keys.submission(attempt.submissionId)],
 					[
 						attempt.attemptId,
 						nextAttemptId,
@@ -896,26 +817,6 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 			leaseExpiresAt: integer(row.leaseExpiresAt),
 		};
 	}
-}
-
-function parseJournal(row: Hash): AgentTurnJournal {
-	const malformed = 'Persisted Redis turn journal is malformed.';
-	return {
-		submissionId: required(row.submissionId, malformed),
-		sessionKey: required(row.sessionKey, malformed),
-		kind: row.kind as 'dispatch' | 'direct',
-		attemptId: required(row.attemptId, malformed),
-		operationId: required(row.operationId, malformed),
-		turnId: required(row.turnId, malformed),
-		phase: row.phase as AgentTurnJournalPhase,
-		revision: integer(row.revision),
-		createdAt: integer(row.createdAt),
-		updatedAt: integer(row.updatedAt),
-		...(row.checkpointLeafId ? { checkpointLeafId: row.checkpointLeafId } : {}),
-		...(row.toolRequest ? { toolRequest: JSON.parse(row.toolRequest) } : {}),
-		committed: row.committed === '1',
-		...(row.committedLeafId ? { committedLeafId: row.committedLeafId } : {}),
-	};
 }
 
 class RedisRunStore {

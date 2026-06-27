@@ -31,8 +31,6 @@ export class RedisKeys {
 	submissionStatus = (status: string) => this.key('submissions', 'status', status);
 	sessionSubmissions = (sessionKey: string) => this.encoded('session-submissions', sessionKey);
 	sessionUnsettled = (sessionKey: string) => this.encoded('session-unsettled', sessionKey);
-	journal = (submissionId: string) => this.encoded('journal', submissionId);
-	journals = () => this.key('journals');
 	receipt = (id: string) => this.encoded('receipt', id);
 	marker = (submissionId: string, attemptId: string) =>
 		this.encoded('marker', submissionId, attemptId);

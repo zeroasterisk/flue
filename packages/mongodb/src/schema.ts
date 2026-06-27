@@ -37,9 +37,6 @@ export function schema(prefix: string): MongoCollectionSpec[] {
 				collation: simple,
 			},
 		]),
-		spec('journals', [
-			{ name: 'submission_id', key: { submissionId: 1 }, unique: true, collation: simple },
-		]),
 		spec('markers', [
 			{
 				name: 'submission_attempt',

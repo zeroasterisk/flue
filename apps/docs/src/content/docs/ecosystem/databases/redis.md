@@ -107,7 +107,7 @@ Flue runs `migrate()` at startup. It initializes schema-version metadata
 idempotently and refuses data from an unsupported newer schema; there is no
 separate migration command.
 
-Redis stores append-only canonical conversation records and compaction facts, immutable attachment payloads, accepted prompts and dispatches, recovery journals, workflow runs and indexes, and persisted event streams. It does not store session transcript snapshots, sandbox files, external API side effects, secrets, or application business data.
+Redis stores append-only canonical conversation records and compaction facts, immutable attachment payloads, accepted prompts and dispatches, recovery claims and leases, workflow runs and indexes, and persisted event streams. It does not store session transcript snapshots, sandbox files, external API side effects, secrets, or application business data.
 
 ## Verify durability
 

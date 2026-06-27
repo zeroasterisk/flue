@@ -21,9 +21,6 @@ export type {
 	AgentExecutionStore,
 	AgentSubmission,
 	AgentSubmissionStore,
-	AgentTurnJournal,
-	AgentTurnJournalPhase,
-	CreateTurnJournalInput,
 	PersistenceAdapter,
 	SubmissionAttemptRef,
 	SubmissionDurability,
@@ -31,13 +28,6 @@ export type {
 } from './agent-execution-store.ts';
 export type { FlueContextConfig, FlueContextInternal } from './client.ts';
 export { createFlueContext, initializeRootHarness } from './client.ts';
-// Conversation wire types projected onto the HTTP `history`/`updates` views.
-// Exposed here only so the SDK can pin its public projection types to the
-// runtime's emitted shapes via a compile-time assignability test.
-export type {
-	AgentConversationSnapshot,
-	ConversationStreamChunk,
-} from './conversation-public.ts';
 // `FlueRegistry` (Durable Object class) and the composite Cloudflare run
 // store/index factories live in the `@flue/runtime/cloudflare/internal`
 // subpath because that entry pulls in `cloudflare:workers`, a virtual module
@@ -48,6 +38,13 @@ export {
 	createCloudflareAgentRuntime,
 } from './cloudflare/agent-coordinator.ts';
 export { createSqlConversationStores } from './cloudflare/agent-execution-store.ts';
+// Conversation wire types projected onto the HTTP `history`/`updates` views.
+// Exposed here only so the SDK can pin its public projection types to the
+// runtime's emitted shapes via a compile-time assignability test.
+export type {
+	AgentConversationSnapshot,
+	ConversationStreamChunk,
+} from './conversation-public.ts';
 export { RuntimeUnavailableError, toHttpResponse } from './errors.ts';
 export type { InstrumentationOwner } from './instrumentation.ts';
 export {

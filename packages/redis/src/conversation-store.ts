@@ -12,6 +12,7 @@ import {
 	formatOffset,
 	MAX_READ_LIMIT,
 	parseOffset,
+	StreamListenerRegistry,
 } from '@flue/runtime/adapter';
 import {
 	acquireConversationProducerScript,
@@ -34,7 +35,7 @@ function integer(value: string | undefined): number {
 }
 
 export class RedisConversationStreamStore implements ConversationStreamStore {
-	private listeners = new Map<string, Set<() => void>>();
+	private listeners = new StreamListenerRegistry();
 
 	constructor(private runner: RedisRunner, private keys: RedisKeys) {}
 
@@ -107,7 +108,7 @@ export class RedisConversationStreamStore implements ConversationStreamStore {
 		if (result[0] !== 'appended' && result[0] !== 'retry') {
 			throw failure('append', input.path, appendReason(result[0]));
 		}
-		if (result[0] === 'appended') this.notify(input.path);
+		if (result[0] === 'appended') this.listeners.notify(input.path);
 		return { offset: formatOffset(integer(result[1])) };
 	}
 
@@ -172,17 +173,12 @@ export class RedisConversationStreamStore implements ConversationStreamStore {
 			],
 			[path],
 		);
-		this.notify(path);
+		this.listeners.notify(path);
 	}
 
 	subscribe(path: string, listener: () => void): () => void {
-		const listeners = this.listeners.get(path) ?? new Set();
-		listeners.add(listener);
-		this.listeners.set(path, listeners);
-		return () => { listeners.delete(listener); if (listeners.size === 0) this.listeners.delete(path); };
+		return this.listeners.subscribe(path, listener);
 	}
-
-	private notify(path: string): void { for (const listener of this.listeners.get(path) ?? []) { try { listener(); } catch {} } }
 }
 
 function appendReason(code: string | undefined): string {

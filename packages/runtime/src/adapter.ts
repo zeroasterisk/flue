@@ -23,9 +23,9 @@
  * from `@flue/runtime/test-utils`.
  *
  * Stability: `RunStore` and `EventStreamStore` are stable.
- * The `AgentSubmissionStore` turn-journal, settlement, and lease method
- * groups mirror the durable-execution engine and are subject to change until
- * 1.0 — for every backend equally.
+ * The `AgentSubmissionStore` settlement and lease method groups mirror the
+ * durable-execution engine and are subject to change until 1.0 — for every
+ * backend equally.
  */
 
 // ─── Store interfaces and vocabulary types ──────────────────────────────────
@@ -37,9 +37,6 @@ export type {
 	AgentExecutionStore,
 	AgentSubmission,
 	AgentSubmissionStore,
-	AgentTurnJournal,
-	AgentTurnJournalPhase,
-	CreateTurnJournalInput,
 	PersistenceAdapter,
 	PersistenceStores,
 	SubmissionAttemptRef,
@@ -143,7 +140,6 @@ export {
 	sameAttachmentRef,
 	verifyAttachmentBytes,
 } from './runtime/attachment-store.ts';
-export { InMemoryConversationStreamStore } from './runtime/conversation-stream-store.ts';
 export type {
 	ConversationProducerClaim,
 	ConversationStreamBatch,
@@ -152,6 +148,15 @@ export type {
 	ConversationStreamReadResult,
 	ConversationStreamStore,
 } from './runtime/conversation-stream-store.ts';
+export {
+	InMemoryConversationStreamStore,
+	StreamListenerRegistry,
+} from './runtime/conversation-stream-store.ts';
+export type {
+	SqlConversationDialect,
+	SqlConversationDialectTx,
+} from './runtime/sql-conversation-stream-store.ts';
+export { defineSqlConversationStreamStore } from './runtime/sql-conversation-stream-store.ts';
 
 // ─── Event stream store ─────────────────────────────────────────────────────
 

@@ -7,13 +7,13 @@
  * implement it directly.
  */
 
+import type { SubmissionSettledRecord } from './conversation-records.ts';
 import type {
 	AgentSubmissionInput,
 	DirectAgentSubmissionInput,
 } from './runtime/agent-submissions.ts';
-import type { ConversationStreamStore } from './runtime/conversation-stream-store.ts';
-import type { SubmissionSettledRecord } from './conversation-records.ts';
 import type { AttachmentStore } from './runtime/attachment-store.ts';
+import type { ConversationStreamStore } from './runtime/conversation-stream-store.ts';
 import type { DispatchInput } from './runtime/dispatch-queue.ts';
 import type { EventStreamStore } from './runtime/event-stream-store.ts';
 import type { RunStore } from './runtime/run-store.ts';
@@ -100,43 +100,6 @@ export type AgentDispatchAdmission =
 	| { readonly kind: 'retained_receipt'; readonly receipt: AgentDispatchReceipt }
 	| { readonly kind: 'conflict' };
 
-// ─── Turn journal ───────────────────────────────────────────────────────────
-
-export type AgentTurnJournalPhase =
-	| 'before_provider'
-	| 'provider_started'
-	| 'tool_request_recorded'
-	| 'committed';
-
-export interface AgentTurnJournal {
-	readonly submissionId: string;
-	readonly sessionKey: string;
-	readonly kind: 'dispatch' | 'direct';
-	readonly attemptId: string;
-	readonly operationId: string;
-	readonly turnId: string;
-	readonly phase: AgentTurnJournalPhase;
-	readonly revision: number;
-	readonly createdAt: number;
-	readonly updatedAt: number;
-	readonly checkpointLeafId?: string;
-	readonly toolRequest?: unknown;
-	readonly committed: boolean;
-	readonly committedLeafId?: string;
-}
-
-export interface CreateTurnJournalInput {
-	readonly submissionId: string;
-	readonly sessionKey: string;
-	readonly kind: 'dispatch' | 'direct';
-	readonly attemptId: string;
-	readonly operationId: string;
-	readonly turnId: string;
-	readonly phase: AgentTurnJournalPhase;
-	readonly checkpointLeafId?: string;
-	readonly toolRequest?: unknown;
-}
-
 // ─── Submission store ───────────────────────────────────────────────────────
 
 /**
@@ -151,17 +114,13 @@ export interface CreateTurnJournalInput {
  * unique indexes is the adapter's choice. Verify an implementation with
  * `defineStoreContractTests` from `@flue/runtime/test-utils`.
  *
- * Stability: the turn-journal and lease method groups (and
- * the {@link AgentTurnJournalPhase} union) mirror the durable-execution
- * engine and are subject to change until 1.0. This applies to every
- * backend equally.
+ * Stability: the lease method group mirrors the durable-execution engine and
+ * is subject to change until 1.0. This applies to every backend equally.
  */
 export interface AgentSubmissionStore {
 	// Query
 	/** Return the submission, or `null` when the id is unknown. */
 	getSubmission(submissionId: string): Promise<AgentSubmission | null>;
-	/** Return the submission's turn journal, or `null` when none was ever begun. */
-	getTurnJournal(submissionId: string): Promise<AgentTurnJournal | null>;
 	/** True while any submission is queued or running. */
 	hasUnsettledSubmissions(): Promise<boolean>;
 	/**
@@ -178,43 +137,14 @@ export interface AgentSubmissionStore {
 	/** Direct settlement obligations reserved but not yet finalized. */
 	listPendingSubmissionSettlements(): Promise<SubmissionSettlementObligation[]>;
 
-	// Turn journal lifecycle. Each submission has at most ONE journal slot.
 	/**
-	 * Create the submission's journal, or replace an existing one in place:
-	 * the new turn's identity and phase are written, commit state is reset,
-	 * and the revision increases. Returns whether a journal was
-	 * written.
+	 * Recovery handoff: atomically move a running submission from `attempt`
+	 * to `nextAttemptId`, increment `attemptCount`, clear any pending recovery
+	 * request, and (when given) install the new lease. Returns the updated
+	 * submission, or `null` — without writing — when the submission is not
+	 * running under `attempt`.
 	 */
-	beginTurnJournal(input: CreateTurnJournalInput): Promise<boolean>;
-	/**
-	 * Advance the phase of the uncommitted journal owned by `attempt`,
-	 * merging any provided options into the journal (absent options keep
-	 * their stored values). Returns `false` — without writing — when the
-	 * journal is missing, already committed, or owned by another attempt.
-	 */
-	updateTurnJournalPhase(
-		attempt: SubmissionAttemptRef,
-		phase: AgentTurnJournalPhase,
-		options?: {
-			checkpointLeafId?: string;
-			toolRequest?: unknown;
-		},
-	): Promise<boolean>;
-	/**
-	 * Transition the journal to `committed`, recording `committedLeafId`.
-	 * Only an UNCOMMITTED journal owned by `attempt` transitions; a second
-	 * commit, a stale attempt, or a missing journal returns `false` and
-	 * leaves the stored commit untouched.
-	 */
-	commitTurnJournal(attempt: SubmissionAttemptRef, committedLeafId: string): Promise<boolean>;
-	/**
-	 * Recovery handoff: atomically move a running submission and its
-	 * uncommitted journal from `attempt` to `nextAttemptId`, increment
-	 * `attemptCount`, clear any pending recovery request, and (when given)
-	 * install the new lease. Returns the updated submission, or `null` —
-	 * without writing — when the submission is not running under `attempt`.
-	 */
-	replaceTurnJournalAttempt(
+	replaceSubmissionAttempt(
 		attempt: SubmissionAttemptRef,
 		nextAttemptId: string,
 		lease?: { ownerId: string; leaseExpiresAt: number },

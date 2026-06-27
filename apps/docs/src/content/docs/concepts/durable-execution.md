@@ -20,7 +20,7 @@ later input → rebuilds context → continues the conversation
 
 ### Persist conversations
 
-The canonical stream records model-visible messages, assistant output, tool calls and results, compaction, topology, and recovery facts. Attachment bytes live in a separate immutable attachment store and are referenced from canonical records. Mutable submission claims, leases, and turn journals remain operational state rather than a second transcript.
+The canonical stream records model-visible messages, assistant output, tool calls and results, compaction, topology, and recovery facts. Attachment bytes live in a separate immutable attachment store and are referenced from canonical records. Mutable submission claims and leases remain operational state rather than a second transcript.
 
 To persist this state in an application-controlled database, create a `src/db.ts` or `.flue/db.ts` file that default-exports a `PersistenceAdapter`. See [Database](/docs/guide/database/) for setup and [Data Persistence API](/docs/api/data-persistence-api/) for the storage contracts.
 
@@ -36,7 +36,7 @@ dispatch(...) input ────────────────────
 
 The connection that submitted a prompt observes the work but does not own it. If the response closes after Cloudflare accepts the prompt, backend processing can continue. Clients can reconnect to the canonical agent stream from a durable offset.
 
-After interruption, Flue compares canonical conversation progress with the operational turn journal. It recognizes already-completed output, retries only when it can prove the provider was not reached, and continues usable partial output from durable deltas. Completed tool results are reused. A tool call with no durable result is represented as interrupted with an unknown outcome rather than run again automatically.
+After interruption, Flue decides what to do next from the canonical conversation stream alone. It recognizes already-completed output, continues usable partial output from durable deltas, and reuses completed tool results. A tool call with no durable result is represented as interrupted with an unknown outcome rather than run again automatically. When no output was durably persisted before the interruption, recovery may re-dispatch the provider once — consistent with at-least-once execution.
 
 This recovery is intentionally conservative because repeating model or tool activity can duplicate external effects. Use application-owned idempotency keys where repeated effects would be harmful. See [Deploy Agents on Cloudflare](/docs/ecosystem/deploy/cloudflare/) for platform configuration and migrations.
 

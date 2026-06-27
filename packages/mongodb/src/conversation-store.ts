@@ -12,12 +12,13 @@ import {
 	formatOffset,
 	MAX_READ_LIMIT,
 	parseOffset,
+	StreamListenerRegistry,
 } from '@flue/runtime/adapter';
 import type { MongoOperations, MongoRunner } from './mongodb-runner.ts';
 import { collectionName } from './schema.ts';
 
 export class MongoConversationStreamStore implements ConversationStreamStore {
-	private listeners = new Map<string, Set<() => void>>();
+	private listeners = new StreamListenerRegistry();
 
 	constructor(private runner: MongoRunner, private prefix: string) {}
 
@@ -100,7 +101,7 @@ export class MongoConversationStreamStore implements ConversationStreamStore {
 			if (updated.modifiedCount !== 1) throw failure(input.path, 'Producer ownership changed during append.');
 			return { offset: formatOffset(offset), appended: true };
 		});
-		if (result.appended) this.notify(input.path);
+		if (result.appended) this.listeners.notify(input.path);
 		return { offset: result.offset };
 	}
 
@@ -129,19 +130,15 @@ export class MongoConversationStreamStore implements ConversationStreamStore {
 			await tx.collection(collectionName(this.prefix, 'conversation_batches')).deleteMany({ path });
 			await tx.collection(collectionName(this.prefix, 'conversation_streams')).deleteOne({ _id: path });
 		});
-		this.notify(path);
+		this.listeners.notify(path);
 	}
 
 	subscribe(path: string, listener: () => void): () => void {
-		const listeners = this.listeners.get(path) ?? new Set();
-		listeners.add(listener);
-		this.listeners.set(path, listeners);
-		return () => { listeners.delete(listener); if (listeners.size === 0) this.listeners.delete(path); };
+		return this.listeners.subscribe(path, listener);
 	}
 
 	private streams() { return this.runner.collection(collectionName(this.prefix, 'conversation_streams')); }
 	private batches() { return this.runner.collection(collectionName(this.prefix, 'conversation_batches')); }
-	private notify(path: string) { for (const listener of this.listeners.get(path) ?? []) { try { listener(); } catch {} } }
 }
 
 async function assertSubmissionAuthorization(

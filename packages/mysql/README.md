@@ -51,7 +51,7 @@ This adapter persists Flue runtime state:
 - the canonical append-only conversation stream for each agent instance;
 - immutable external attachments referenced by conversation records;
 - accepted direct prompts and `dispatch(...)` submissions, including durable
-  turn journals, claims, and leases;
+  claims and leases;
 - workflow-run records, event streams, and run indexing.
 
 The canonical stream is the sole transcript and is replayed from its beginning;

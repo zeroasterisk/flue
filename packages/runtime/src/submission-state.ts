@@ -15,14 +15,19 @@
  * divergences, pinned by `test/submission-state.test.ts`:
  *
  * - `resume` with mode `overflow` or `input_only`: the preamble resumes
- *   these, but inspection reports `'uncertain'` — reconciliation
- *   compensates with its provider-unreached retry special case (see
- *   `reconcileInterruptedSubmission`).
+ *   these, but inspection reports `'uncertain'`. Reconciliation treats
+ *   `'uncertain'` as the one accepted provider-redispatch window and retries
+ *   it (see `reconcileInterruptedSubmission`), so the coarse mapping still
+ *   resumes correctly.
  * - `completed` with `overflow: true` (silent or truncation overflow on a
  *   stop/length response): inspection reports `'completed'`, but the
  *   preamble treats it as an overflow resume (compact and continue).
- * - `tool_use_unresolved`: inspection reports `'uncertain'`, but the
- *   preamble settles with the persisted response without resuming.
+ * - `tool_use_unresolved`: inspection reports `'uncertain'`; the preamble
+ *   repairs the trailing tool batch (every unresolved call gets an explicit
+ *   unknown-outcome error, never a re-execution) and continues — identical to
+ *   a partial batch. (Before the turn-journal removal a zero-result batch was
+ *   settled as-is; canonical recovery cannot prove a tool "never started", so
+ *   it conservatively repairs and lets the model proceed.)
  * - `advanced_past_input`: inspection reports `'uncertain'`, the preamble
  *   fails the operation.
  */

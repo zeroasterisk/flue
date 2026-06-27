@@ -60,8 +60,8 @@ export interface NodeAgentCoordinator {
 /**
  * Create a `DispatchQueue` backed by a `NodeAgentCoordinator`.
  *
- * Dispatches go through proper SQL admission, claim, journal callbacks,
- * and settlement instead of fire-and-forget inline processing. The
+ * Dispatches go through proper SQL admission, claim, and settlement
+ * instead of fire-and-forget inline processing. The
  * coordinator also reconciles interrupted work from a previous process
  * on startup and drains queued submissions after each dispatch.
  */
@@ -439,7 +439,7 @@ export function createNodeAgentCoordinator(options: {
 	 * `periodicLeaseScan` (started by `ensureClaimLoop` just before the
 	 * direct call) would each list the same expired submissions and run
 	 * `reconcileInterruptedSubmission` twice per submission with
-	 * independent fresh Sessions — the journal-attempt CAS picks one
+	 * independent fresh Sessions — the attempt-replacement CAS picks one
 	 * winner, and the loser can append a spurious interruption advisory
 	 * to session history before its settlement CAS is rejected.
 	 */

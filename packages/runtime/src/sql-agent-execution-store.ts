@@ -31,9 +31,6 @@ import type {
 	AgentExecutionStore,
 	AgentSubmission,
 	AgentSubmissionStore,
-	AgentTurnJournal,
-	AgentTurnJournalPhase,
-	CreateTurnJournalInput,
 	SubmissionAttemptRef,
 	SubmissionClaimRef,
 	SubmissionSettlementObligation,
@@ -70,7 +67,6 @@ import {
 export function ensureSqlAgentExecutionTables(sql: SqlStorage): void {
 	migrateFlueSqlSchema(sql, () => {
 		ensureSubmissionTable(sql);
-		ensureTurnJournalTable(sql);
 		ensureSqlPersistedChunkTable(sql);
 	});
 }
@@ -102,152 +98,33 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 		return row ? this.parseSubmission(row) : null;
 	}
 
-	async getTurnJournal(submissionId: string): Promise<AgentTurnJournal | null> {
-		const row = this.sql
-			.exec(
-				`SELECT submission_id, session_key, kind, attempt_id, operation_id, turn_id,
-					        phase, revision, created_at, updated_at, checkpoint_leaf_id,
-					        tool_request_json, committed, committed_leaf_id
-				 FROM flue_agent_turn_journals
-				 WHERE submission_id = ?
-				 LIMIT 1`,
-				submissionId,
-			)
-			.toArray()[0];
-		return row ? parseTurnJournal(row) : null;
-	}
-
-	async beginTurnJournal(input: CreateTurnJournalInput): Promise<boolean> {
-		const now = Date.now();
-		return (
-			this.sql
-				.exec(
-					`INSERT INTO flue_agent_turn_journals
-					 (submission_id, session_key, kind, attempt_id, operation_id, turn_id,
-						  phase, revision, created_at, updated_at, checkpoint_leaf_id,
-						  tool_request_json, committed, committed_leaf_id)
-						 SELECT ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0, NULL
-						 WHERE EXISTS (
-						   SELECT 1 FROM flue_agent_submissions
-						   WHERE submission_id = ? AND status = 'running' AND attempt_id = ?
-						 )
-						 ON CONFLICT(submission_id) DO UPDATE SET
-						  attempt_id = excluded.attempt_id,
-						  operation_id = excluded.operation_id,
-						  turn_id = excluded.turn_id,
-						  phase = excluded.phase,
-						  revision = flue_agent_turn_journals.revision + 1,
-						  updated_at = excluded.updated_at,
-						  checkpoint_leaf_id = excluded.checkpoint_leaf_id,
-						  tool_request_json = excluded.tool_request_json,
-						  committed = 0,
-						  committed_leaf_id = NULL
-						 RETURNING submission_id`,
-					input.submissionId,
-					input.sessionKey,
-					input.kind,
-					input.attemptId,
-					input.operationId,
-					input.turnId,
-					input.phase,
-					now,
-					now,
-					input.checkpointLeafId ?? null,
-					input.toolRequest === undefined ? null : JSON.stringify(input.toolRequest),
-					input.submissionId,
-					input.attemptId,
-				)
-				.toArray().length > 0
-		);
-	}
-
-	async updateTurnJournalPhase(
-		attempt: SubmissionAttemptRef,
-		phase: AgentTurnJournalPhase,
-		options: { checkpointLeafId?: string; toolRequest?: unknown } = {},
-	): Promise<boolean> {
-		const now = Date.now();
-		return (
-			this.sql
-				.exec(
-					`UPDATE flue_agent_turn_journals
-					 SET phase = ?, revision = revision + 1, updated_at = ?,
-						     checkpoint_leaf_id = COALESCE(?, checkpoint_leaf_id),
-						     tool_request_json = COALESCE(?, tool_request_json)
-					 WHERE submission_id = ? AND attempt_id = ? AND committed = 0
-					 RETURNING submission_id`,
-					phase,
-					now,
-					options.checkpointLeafId ?? null,
-					options.toolRequest === undefined ? null : JSON.stringify(options.toolRequest),
-					attempt.submissionId,
-					attempt.attemptId,
-				)
-				.toArray().length > 0
-		);
-	}
-
-	async commitTurnJournal(
-		attempt: SubmissionAttemptRef,
-		committedLeafId: string,
-	): Promise<boolean> {
-		const now = Date.now();
-		return (
-			this.sql
-				.exec(
-					`UPDATE flue_agent_turn_journals
-					 SET phase = 'committed', revision = revision + 1, updated_at = ?,
-					     committed = 1, committed_leaf_id = ?
-					 WHERE submission_id = ? AND attempt_id = ? AND committed = 0
-					 RETURNING submission_id`,
-					now,
-					committedLeafId,
-					attempt.submissionId,
-					attempt.attemptId,
-				)
-				.toArray().length > 0
-		);
-	}
-
-	async replaceTurnJournalAttempt(
+	async replaceSubmissionAttempt(
 		attempt: SubmissionAttemptRef,
 		nextAttemptId: string,
 		lease?: { ownerId: string; leaseExpiresAt: number },
 	): Promise<AgentSubmission | null> {
-		return this.transactionSync(() => {
-			const now = Date.now();
-			const row = this.sql
-				.exec(
-					`UPDATE flue_agent_submissions
-					 SET attempt_id = ?, recovery_requested_at = NULL, started_at = ?, attempt_count = attempt_count + 1${
-							lease ? ', owner_id = ?, lease_expires_at = ?' : ''
-						}
-					 WHERE submission_id = ? AND status = 'running' AND attempt_id = ?
-					 RETURNING ${submissionColumns}`,
-					...(lease
-						? [
-								nextAttemptId,
-								now,
-								lease.ownerId,
-								lease.leaseExpiresAt,
-								attempt.submissionId,
-								attempt.attemptId,
-							]
-						: [nextAttemptId, now, attempt.submissionId, attempt.attemptId]),
-				)
-				.toArray()[0];
-			if (!row) return null;
-			this.sql.exec(
-				`UPDATE flue_agent_turn_journals
-				 SET attempt_id = ?, revision = revision + 1, updated_at = ?
-				 WHERE submission_id = ? AND attempt_id = ? AND committed = 0`,
-				nextAttemptId,
-				now,
-				attempt.submissionId,
-				attempt.attemptId,
-			);
-			return this.parseSubmission(row);
-		});
+		const now = Date.now();
+		const row = this.sql
+			.exec(
+				`UPDATE flue_agent_submissions
+				 SET attempt_id = ?, recovery_requested_at = NULL, started_at = ?, attempt_count = attempt_count + 1${
+						lease ? ', owner_id = ?, lease_expires_at = ?' : ''
+					}
+				 WHERE submission_id = ? AND status = 'running' AND attempt_id = ?
+				 RETURNING ${submissionColumns}`,
+				...(lease
+					? [
+							nextAttemptId,
+							now,
+							lease.ownerId,
+							lease.leaseExpiresAt,
+							attempt.submissionId,
+							attempt.attemptId,
+						]
+					: [nextAttemptId, now, attempt.submissionId, attempt.attemptId]),
+			)
+			.toArray()[0];
+		return row ? this.parseSubmission(row) : null;
 	}
 
 	private getDispatchReceipt(submissionId: string): AgentDispatchReceipt | null {
@@ -724,55 +601,6 @@ function submissionColumnsFor(table: string): string {
 // local avoids a shared abstraction that would need to accommodate every
 // backend's quirks.
 
-function parseTurnJournal(row: SqlRow): AgentTurnJournal {
-	if (
-		typeof row.submission_id !== 'string' ||
-		typeof row.session_key !== 'string' ||
-		(row.kind !== 'dispatch' && row.kind !== 'direct') ||
-		typeof row.attempt_id !== 'string' ||
-		typeof row.operation_id !== 'string' ||
-		typeof row.turn_id !== 'string' ||
-		(row.phase !== 'before_provider' &&
-			row.phase !== 'provider_started' &&
-			row.phase !== 'tool_request_recorded' &&
-			row.phase !== 'committed') ||
-		typeof row.revision !== 'number' ||
-		typeof row.created_at !== 'number' ||
-		typeof row.updated_at !== 'number' ||
-		(row.checkpoint_leaf_id !== null &&
-			row.checkpoint_leaf_id !== undefined &&
-			typeof row.checkpoint_leaf_id !== 'string') ||
-		(row.committed !== 0 && row.committed !== 1) ||
-		(row.committed_leaf_id !== null &&
-			row.committed_leaf_id !== undefined &&
-			typeof row.committed_leaf_id !== 'string')
-	) {
-		throw new Error('[flue] Persisted turn journal row is malformed.');
-	}
-	return {
-		submissionId: row.submission_id,
-		sessionKey: row.session_key,
-		kind: row.kind,
-		attemptId: row.attempt_id,
-		operationId: row.operation_id,
-		turnId: row.turn_id,
-		phase: row.phase,
-		revision: row.revision,
-		createdAt: row.created_at,
-		updatedAt: row.updated_at,
-		...(typeof row.checkpoint_leaf_id === 'string'
-			? { checkpointLeafId: row.checkpoint_leaf_id }
-			: {}),
-		...(typeof row.tool_request_json === 'string'
-			? { toolRequest: JSON.parse(row.tool_request_json) as unknown }
-			: {}),
-		committed: row.committed === 1,
-		...(typeof row.committed_leaf_id === 'string'
-			? { committedLeafId: row.committed_leaf_id }
-			: {}),
-	};
-}
-
 function parseSettlementObligation(row: SqlRow): SubmissionSettlementObligation {
 	if (
 		typeof row.submission_id !== 'string' ||
@@ -872,27 +700,6 @@ function parseSubmission(
 		...(typeof row.owner_id === 'string' ? { ownerId: row.owner_id } : {}),
 		leaseExpiresAt: typeof row.lease_expires_at === 'number' ? row.lease_expires_at : 0,
 	};
-}
-
-function ensureTurnJournalTable(sql: SqlStorage): void {
-	sql.exec(
-		`CREATE TABLE IF NOT EXISTS flue_agent_turn_journals (
-		 submission_id TEXT PRIMARY KEY,
-		 session_key TEXT NOT NULL,
-		 kind TEXT NOT NULL,
-		 attempt_id TEXT NOT NULL,
-		 operation_id TEXT NOT NULL,
-		 turn_id TEXT NOT NULL,
-		 phase TEXT NOT NULL,
-		 revision INTEGER NOT NULL,
-		 created_at INTEGER NOT NULL,
-		 updated_at INTEGER NOT NULL,
-		 checkpoint_leaf_id TEXT,
-		 tool_request_json TEXT,
-		 committed INTEGER NOT NULL DEFAULT 0,
-		 committed_leaf_id TEXT
-		)`,
-	);
 }
 
 function ensureSubmissionTable(sql: SqlStorage): void {

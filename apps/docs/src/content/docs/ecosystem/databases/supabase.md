@@ -137,7 +137,7 @@ A Flue database stores runtime state, not the application's whole data model.
 | Canonical agent conversation streams and compaction records                    | Sandbox files and installed dependencies |
 | Immutable attachment payloads                                                  | External API side effects                |
 | Accepted direct prompts and `dispatch(...)` submissions                        | Application-owned business data          |
-| Durable turn journals, workflow-run records, persisted events, and run indexes | Provider credentials or secrets          |
+| Durable submission claims and leases, workflow-run records, persisted events, and run indexes | Provider credentials or secrets          |
 | Recovery state for accepted work                                               | Provider credentials or secrets          |
 
 See [Durable Agents](/docs/concepts/durable-execution/) for recovery behavior

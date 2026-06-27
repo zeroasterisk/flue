@@ -542,7 +542,7 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 				});
 			});
 
-			it('increments attempt_count on recovery via replaceTurnJournalAttempt', async () => {
+			it('increments attempt_count on recovery via replaceSubmissionAttempt', async () => {
 				const store = await create();
 				await admitDispatchReady(store,dispatchInput());
 				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
@@ -550,17 +550,7 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 					attemptCount: 1,
 				});
 
-				await store.submissions.beginTurnJournal({
-					submissionId: 'dispatch-1',
-					sessionKey: 'agent-session:["agent-1","default","default"]',
-					kind: 'dispatch',
-					attemptId: 'attempt-1',
-					operationId: 'op-1',
-					turnId: 'turn-1',
-					phase: 'before_provider',
-				});
-
-				const replaced = await store.submissions.replaceTurnJournalAttempt(
+				const replaced = await store.submissions.replaceSubmissionAttempt(
 					attempt('dispatch-1', 'attempt-1'),
 					'attempt-2',
 				);
@@ -586,141 +576,15 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 			});
 		});
 
-		// ── Turn journal lifecycle ────────────────────────────────────────
+		// ── Recovery attempt replacement ──────────────────────────────────
 
-		describe('turn journal lifecycle', () => {
-			it('rejects journal creation when the attempt no longer owns the submission', async () => {
+		describe('replaceSubmissionAttempt()', () => {
+			it('replaces a running attempt and returns the updated submission', async () => {
 				const store = await create();
 				await admitDispatchReady(store,dispatchInput());
 				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
 
-				expect(
-					await store.submissions.beginTurnJournal({
-						submissionId: 'dispatch-1',
-						sessionKey: 'agent-session:["agent-1","default","default"]',
-						kind: 'dispatch',
-						attemptId: 'attempt-stale',
-						operationId: 'op-1',
-						turnId: 'turn-1',
-						phase: 'before_provider',
-					}),
-				).toBe(false);
-				expect(await store.submissions.getTurnJournal('dispatch-1')).toBeNull();
-			});
-
-			it('creates, advances, and commits a turn journal through all phases', async () => {
-				const store = await create();
-				await admitDispatchReady(store,dispatchInput());
-				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
-
-				expect(
-					await store.submissions.beginTurnJournal({
-						submissionId: 'dispatch-1',
-						sessionKey: 'agent-session:["agent-1","default","default"]',
-						kind: 'dispatch',
-						attemptId: 'attempt-1',
-						operationId: 'op-1',
-						turnId: 'turn-1',
-						phase: 'before_provider',
-					}),
-				).toBe(true);
-				expect(
-					await store.submissions.updateTurnJournalPhase(
-						attempt('dispatch-1', 'attempt-1'),
-						'provider_started',
-					),
-				).toBe(true);
-				expect(
-					await store.submissions.updateTurnJournalPhase(
-						attempt('dispatch-1', 'attempt-1'),
-						'tool_request_recorded',
-						{
-							toolRequest: { toolCalls: ['lookup'] },
-						},
-					),
-				).toBe(true);
-				expect(await store.submissions.getTurnJournal('dispatch-1')).toMatchObject({
-					phase: 'tool_request_recorded',
-					committed: false,
-					toolRequest: { toolCalls: ['lookup'] },
-				});
-				expect(
-					await store.submissions.commitTurnJournal(attempt('dispatch-1', 'attempt-1'), 'leaf-1'),
-				).toBe(true);
-				expect(await store.submissions.getTurnJournal('dispatch-1')).toMatchObject({
-					phase: 'committed',
-					committed: true,
-					committedLeafId: 'leaf-1',
-				});
-			});
-
-			it('returns false when a committed turn journal is committed again', async () => {
-				const store = await create();
-				await admitDispatchReady(store,dispatchInput());
-				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
-				await store.submissions.beginTurnJournal({
-					submissionId: 'dispatch-1',
-					sessionKey: 'agent-session:["agent-1","default","default"]',
-					kind: 'dispatch',
-					attemptId: 'attempt-1',
-					operationId: 'op-1',
-					turnId: 'turn-1',
-					phase: 'before_provider',
-				});
-				await store.submissions.commitTurnJournal(attempt('dispatch-1', 'attempt-1'), 'leaf-1');
-				expect(
-					await store.submissions.commitTurnJournal(attempt('dispatch-1', 'attempt-1'), 'leaf-1'),
-				).toBe(false);
-			});
-
-			it('resets journal on new turn after commit', async () => {
-				const store = await create();
-				await admitDispatchReady(store,dispatchInput());
-				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
-				await store.submissions.beginTurnJournal({
-					submissionId: 'dispatch-1',
-					sessionKey: 'agent-session:["agent-1","default","default"]',
-					kind: 'dispatch',
-					attemptId: 'attempt-1',
-					operationId: 'op-1',
-					turnId: 'turn-1',
-					phase: 'before_provider',
-				});
-				await store.submissions.commitTurnJournal(attempt('dispatch-1', 'attempt-1'), 'leaf-1');
-
-				await store.submissions.beginTurnJournal({
-					submissionId: 'dispatch-1',
-					sessionKey: 'agent-session:["agent-1","default","default"]',
-					kind: 'dispatch',
-					attemptId: 'attempt-1',
-					operationId: 'op-2',
-					turnId: 'turn-2',
-					phase: 'before_provider',
-				});
-
-				expect(await store.submissions.getTurnJournal('dispatch-1')).toMatchObject({
-					phase: 'before_provider',
-					committed: false,
-					operationId: 'op-2',
-					turnId: 'turn-2',
-				});
-			});
-
-			it('replaces the journal attempt and returns the updated submission', async () => {
-				const store = await create();
-				await admitDispatchReady(store,dispatchInput());
-				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
-				await store.submissions.beginTurnJournal({
-					submissionId: 'dispatch-1',
-					sessionKey: 'agent-session:["agent-1","default","default"]',
-					kind: 'dispatch',
-					attemptId: 'attempt-1',
-					operationId: 'op-1',
-					turnId: 'turn-1',
-					phase: 'before_provider',
-				});
-
-				const replaced = await store.submissions.replaceTurnJournalAttempt(
+				const replaced = await store.submissions.replaceSubmissionAttempt(
 					attempt('dispatch-1', 'attempt-1'),
 					'attempt-2',
 				);
@@ -730,8 +594,41 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 					status: 'running',
 					attemptId: 'attempt-2',
 				});
-				expect(await store.submissions.getTurnJournal('dispatch-1')).toMatchObject({
+			});
+
+			it('returns null without writing when the attempt no longer owns the submission', async () => {
+				const store = await create();
+				await admitDispatchReady(store,dispatchInput());
+				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
+
+				expect(
+					await store.submissions.replaceSubmissionAttempt(
+						attempt('dispatch-1', 'attempt-stale'),
+						'attempt-2',
+					),
+				).toBeNull();
+				expect(await store.submissions.getSubmission('dispatch-1')).toMatchObject({
+					attemptId: 'attempt-1',
+					attemptCount: 1,
+				});
+			});
+
+			it('installs the new lease when one is supplied', async () => {
+				const store = await create();
+				await admitDispatchReady(store,dispatchInput());
+				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
+				const leaseExpiresAt = Date.now() + 60_000;
+
+				const replaced = await store.submissions.replaceSubmissionAttempt(
+					attempt('dispatch-1', 'attempt-1'),
+					'attempt-2',
+					{ ownerId: 'owner-2', leaseExpiresAt },
+				);
+
+				expect(replaced).toMatchObject({
 					attemptId: 'attempt-2',
+					ownerId: 'owner-2',
+					leaseExpiresAt,
 				});
 			});
 		});
@@ -886,11 +783,6 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 			it('getSubmission returns null for unknown ids', async () => {
 				const store = await create();
 				expect(await store.submissions.getSubmission('nonexistent')).toBeNull();
-			});
-
-			it('getTurnJournal returns null for unknown submissions', async () => {
-				const store = await create();
-				expect(await store.submissions.getTurnJournal('nonexistent')).toBeNull();
 			});
 		});
 	});

@@ -95,24 +95,6 @@ describe('createSqlAgentExecutionStore()', () => {
 				'settlement_record_json',
 			]),
 		);
-		expect(columnNames('flue_agent_turn_journals')).toEqual(
-			new Set([
-				'submission_id',
-				'session_key',
-				'kind',
-				'attempt_id',
-				'operation_id',
-				'turn_id',
-				'phase',
-				'revision',
-				'created_at',
-				'updated_at',
-				'checkpoint_leaf_id',
-				'tool_request_json',
-				'committed',
-				'committed_leaf_id',
-			]),
-		);
 		const tableNames = new Set(
 			(
 				db
@@ -127,7 +109,6 @@ describe('createSqlAgentExecutionStore()', () => {
 				'flue_agent_attempt_markers',
 				'flue_agent_dispatch_receipts',
 				'flue_agent_submissions',
-				'flue_agent_turn_journals',
 				'flue_image_chunks',
 				'flue_meta',
 			]),

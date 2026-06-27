@@ -10,7 +10,6 @@ import type { ConversationRecordWriter } from '../conversation-writer.ts';
 import {
 	FlueError,
 	SubmissionInterruptedError,
-	SubmissionOwnershipError,
 	SubmissionRetryExhaustedError,
 	SubmissionTimeoutError,
 } from '../errors.ts';
@@ -61,12 +60,6 @@ export interface AgentSubmissionInterruption {
 
 export type AgentSubmissionInspection = 'absent' | 'completed' | 'continuable' | 'uncertain';
 
-interface ProcessAgentSubmissionJournalState {
-	readonly operationId: string;
-	readonly turnId: string;
-	readonly checkpointLeafId?: string;
-}
-
 export interface ProcessAgentSubmissionOptions {
 	submissionAttempt?: SubmissionAttemptRef;
 	onInputApplied?: (durability: SubmissionDurability) => Promise<void> | void;
@@ -74,23 +67,6 @@ export interface ProcessAgentSubmissionOptions {
 	startedAt?: number;
 	/** Absolute timestamp (ms) after which the submission should be aborted. */
 	timeoutAt?: number;
-	journal?: {
-		beforeProvider?: (state: ProcessAgentSubmissionJournalState) => Promise<void> | void;
-		providerStarted?: (state: ProcessAgentSubmissionJournalState) => Promise<void> | void;
-		toolRequestRecorded?: (
-			state: ProcessAgentSubmissionJournalState & { toolRequest: unknown },
-		) => Promise<void> | void;
-		checkpointReady?: (
-			state: ProcessAgentSubmissionJournalState & { checkpointLeafId: string },
-		) => Promise<void> | void;
-		committed?: (
-			state: ProcessAgentSubmissionJournalState & { committedLeafId: string },
-		) => Promise<void> | void;
-	};
-}
-
-interface AgentSubmissionToolRequest {
-	readonly toolCalls: ReadonlyArray<{ type: 'toolCall'; id: string; name: string }>;
 }
 
 /**
@@ -106,14 +82,9 @@ export interface AgentSubmissionSession {
 		input: AgentSubmissionInput,
 		options?: ProcessAgentSubmissionOptions,
 	): CallHandle<unknown>;
-	repairInterruptedToolCalls(
-		input: AgentSubmissionInput,
-		toolRequest: AgentSubmissionToolRequest,
-		attempt?: SubmissionAttemptRef,
-	): Promise<string | undefined>;
 	recoverInterruptedStream(
 		attempt: SubmissionAttemptRef,
-		turnId: string,
+		turnId?: string,
 	): Promise<boolean>;
 	recordSubmissionTerminal(input: AgentSubmissionInterruption): Promise<void>;
 }
@@ -265,67 +236,6 @@ export function createAgentSubmissionObserverRegistry(): AgentSubmissionObserver
 }
 
 /**
- * Build the journal callback object for a submission attempt. Both the
- * Cloudflare coordinator and the Node dispatch processor use the same
- * journal phase lifecycle; this factory eliminates the duplication.
- */
-function createSubmissionJournalCallbacks(
-	submissions: Pick<
-		AgentSubmissionStore,
-		'beginTurnJournal' | 'updateTurnJournalPhase' | 'commitTurnJournal'
-	>,
-	submission: { submissionId: string; sessionKey: string; kind: 'dispatch' | 'direct' },
-	attempt: SubmissionAttemptRef,
-): NonNullable<ProcessAgentSubmissionOptions['journal']> {
-	let journalTurnId: string | undefined;
-	return {
-		beforeProvider: async (state) => {
-			if (state.turnId !== journalTurnId) {
-				const created = await submissions.beginTurnJournal({
-					submissionId: submission.submissionId,
-					sessionKey: submission.sessionKey,
-					kind: submission.kind,
-					attemptId: attempt.attemptId,
-					operationId: state.operationId,
-					turnId: state.turnId,
-					phase: 'before_provider',
-					checkpointLeafId: state.checkpointLeafId,
-				});
-				if (!created) throw new SubmissionOwnershipError({ boundary: 'before_provider' });
-				journalTurnId = state.turnId;
-			}
-		},
-		providerStarted: async (state) => {
-			if (!(await submissions.updateTurnJournalPhase(attempt, 'provider_started', {
-				checkpointLeafId: state.checkpointLeafId,
-			}))) {
-				throw new SubmissionOwnershipError({ boundary: 'provider_started' });
-			}
-		},
-		toolRequestRecorded: async (state) => {
-			if (!(await submissions.updateTurnJournalPhase(attempt, 'tool_request_recorded', {
-				checkpointLeafId: state.checkpointLeafId,
-				toolRequest: state.toolRequest,
-			}))) {
-				throw new SubmissionOwnershipError({ boundary: 'tool_request_recorded' });
-			}
-		},
-		checkpointReady: async (state) => {
-			if (!(await submissions.updateTurnJournalPhase(attempt, 'before_provider', {
-				checkpointLeafId: state.checkpointLeafId,
-			}))) {
-				throw new SubmissionOwnershipError({ boundary: 'checkpoint_ready' });
-			}
-		},
-		committed: async (state) => {
-			if (!(await submissions.commitTurnJournal(attempt, state.committedLeafId))) {
-				throw new SubmissionOwnershipError({ boundary: 'committed' });
-			}
-		},
-	};
-}
-
-/**
  * Reconciliation disposition for an interrupted submission. Coordinators
  * use it for observer notification and replacement-attempt scheduling:
  *
@@ -381,7 +291,6 @@ export async function reconcileInterruptedSubmission(
 		};
 	})(ctx)) as { state: AgentSubmissionInspection; result: unknown };
 	const state = inspected.state;
-	const journal = await submissions.getTurnJournal(submission.submissionId);
 	if (state === 'completed') {
 		if (submission.kind === 'direct') {
 			await settleDirectSubmission(
@@ -446,12 +355,12 @@ export async function reconcileInterruptedSubmission(
 		);
 	}
 
-	if (
-		submission.inputAppliedAt === undefined &&
-		state !== 'absent' &&
-		(journal === null || journal.phase === 'before_provider')
-	) {
-		const replacement = await submissions.replaceTurnJournalAttempt(
+	// Canonical input exists but the operational input-applied marker did not
+	// land (the crash window between persisting the input and writing the
+	// marker). Re-acquire the attempt, mark the input applied, and let resume
+	// processing classify and continue from the canonical input.
+	if (submission.inputAppliedAt === undefined && state !== 'absent') {
+		const replacement = await submissions.replaceSubmissionAttempt(
 			attempt,
 			crypto.randomUUID(),
 			lease,
@@ -472,185 +381,63 @@ export async function reconcileInterruptedSubmission(
 		return { disposition: 'stale' };
 	}
 
-	// Check turn journal for pre-commit interruption that can be retried.
+	// Resumable progress, or the one accepted degraded window. Both the
+	// durable-partial-stream case and the trailing-incomplete-tool-batch case
+	// classify 'continuable'; 'uncertain' is the accepted provider-redispatch
+	// window — nothing observable was persisted, so a single retry (which may
+	// re-dispatch the provider once) is safe under the at-least-once execution
+	// contract and `store: true` response replay.
 	//
-	// TODO(multi-process): The stream recovery and tool repair branches below
-	// mutate session state (appending messages via recoverInterruptedStream /
-	// repairInterruptedToolCalls) *before* calling replaceTurnJournalAttempt,
-	// which is the atomic CAS that acquires ownership of the next attempt. In
-	// a multi-process Node deployment sharing Postgres, two coordinators could
-	// both observe the same expired-lease submission, both append recovery
-	// messages, and then only one wins the CAS. recoverInterruptedStream has
-	// a partial idempotency guard (alreadyRecovered check), but
-	// repairInterruptedToolCalls does not. The same pattern exists on the
-	// terminal path: failInterruptedSubmission appends the submission_interrupted
-	// advisory (recordSubmissionTerminal) and saves the session *before* the
-	// failSubmission CAS, so a reconciler that loses that CAS has already
-	// polluted session history (its in-process findSubmissionTerminal guard
-	// does not see a concurrent process's append). When multi-process is
-	// supported, either move replaceTurnJournalAttempt before the mutations
-	// or add an idempotency guard to repairInterruptedToolCalls, and move
-	// recordSubmissionTerminal after (or make it conditional on) the
-	// failSubmission CAS. This is safe today because Cloudflare DOs are
-	// single-threaded and multi-process Node is not a supported configuration.
-	if (journal?.phase === 'provider_started' && journal.committed === false) {
-		const replacement = await submissions.replaceTurnJournalAttempt(
+	// Acquire the replacement attempt (the fencing CAS) BEFORE any recovery
+	// append, so a reconciler that loses the CAS never mutates session history.
+	// Resume processing then classifies the canonical state and runs the right
+	// continuation:
+	//   - a durable partial stream is materialized here by
+	//     `recoverInterruptedStream` (self-guards to a no-op when there is none);
+	//   - an incomplete tool batch — partial OR zero-result — is repaired at
+	//     resume by `repairTrailingPartialToolBatch`, which writes explicit
+	//     unknown-outcome errors and NEVER re-executes a tool.
+	//
+	// TODO(multi-process): the terminal path (`failInterruptedSubmission`)
+	// still appends the `submission_interrupted` advisory before the
+	// `failSubmission` CAS, so a reconciler that loses that CAS has already
+	// polluted session history. Safe today because Cloudflare DOs are
+	// single-threaded and multi-process Node is not a supported configuration;
+	// when it is, move `recordSubmissionTerminal` after (or condition it on)
+	// the `failSubmission` CAS. The recovery-append ordering above no longer
+	// has this hazard (the CAS now precedes the append).
+	if (state === 'continuable' || state === 'uncertain') {
+		const replacement = await submissions.replaceSubmissionAttempt(
 			attempt,
 			crypto.randomUUID(),
 			lease,
 		);
-		if (replacement?.attemptId) {
-			const replacementAttempt = {
-				submissionId: replacement.submissionId,
-				attemptId: replacement.attemptId,
-			};
+		if (!replacement?.attemptId) return { disposition: 'stale' };
+		if (state === 'continuable') {
 			const recoveryCtx = createContext(dispatchId);
 			if (submission.kind === 'direct') recoveryCtx.setSubmissionId?.(submission.submissionId);
-			let recovered = false;
-			try {
-				recovered = (await createAgentSubmissionSessionHandler(agent, input, (s) =>
-					s.recoverInterruptedStream(replacementAttempt, journal.turnId),
-				)(recoveryCtx)) as boolean;
-			} catch (error) {
-				if (!(error instanceof TypeError && error.message.includes('recoverInterruptedStream'))) throw error;
-			}
-			if (recovered || state === 'continuable') {
-				return { disposition: 'replacement', submission: replacement };
-			}
-			const error = new SubmissionInterruptedError({ phase: 'after_input_application' });
-			return failInterruptedSubmission(
-				submissions,
-				replacement,
-				replacementAttempt,
-				agent,
-				'interrupted_after_input_application',
-				error,
-				createContext,
-				undefined,
-				conversationWriter,
-			);
+			await createAgentSubmissionSessionHandler(agent, input, (s) =>
+				s.recoverInterruptedStream({
+					submissionId: replacement.submissionId,
+					attemptId: replacement.attemptId as string,
+				}),
+			)(recoveryCtx);
 		}
-	}
-	// The journal is the authoritative record of provider work: a null
-	// journal means no attempt ever reached the beforeProvider write (the
-	// crash window between the input-application marker and the first
-	// journal row), and phase 'before_provider' means the provider call for
-	// the current turn never started. Either way a retry is safe by
-	// construction.
-	const providerUnreached = journal === null || journal.phase === 'before_provider';
-	if (
-		submission.inputAppliedAt !== undefined &&
-		(journal === null ||
-			((journal.phase === 'before_provider' || journal.phase === 'provider_started') &&
-				!journal.committed)) &&
-		// 'continuable': session has partial progress that restart processing
-		// can resume (persisted tool results — repaired first at resume when
-		// the recorded batch is incomplete, so completed calls are never
-		// re-executed — a recovered stream partial, a transient retryable
-		// error, or an aborted partial that replays from the last durable
-		// message).
-		// 'uncertain' with the provider unreached: nothing observable
-		// happened, so a retry is safe. Without this, a crash after input
-		// application but before any provider response would terminally fail
-		// the submission instead of retrying.
-		(state === 'continuable' || (state === 'uncertain' && providerUnreached))
-	) {
-		const replacement = await submissions.replaceTurnJournalAttempt(
-			attempt,
-			crypto.randomUUID(),
-			lease,
-		);
-		if (replacement) return { disposition: 'replacement', submission: replacement };
+		return { disposition: 'replacement', submission: replacement };
 	}
 
-	// Check for interrupted tool calls that can be repaired.
-	if (
-		journal?.phase === 'tool_request_recorded' &&
-		journal.committed === false &&
-		journal.toolRequest
-	) {
-		const replacement = await submissions.replaceTurnJournalAttempt(
-			attempt,
-			crypto.randomUUID(),
-			lease,
-		);
-		if (replacement?.attemptId) {
-			const repairCtx = createContext(dispatchId);
-			if (submission.kind === 'direct') repairCtx.setSubmissionId?.(submission.submissionId);
-			const repairedLeafId = (await createAgentSubmissionSessionHandler(agent, input, (s) =>
-				s.repairInterruptedToolCalls(
-					input,
-					journal.toolRequest as AgentSubmissionToolRequest,
-					{ submissionId: replacement.submissionId, attemptId: replacement.attemptId as string },
-				),
-			)(repairCtx)) as string | undefined;
-			if (repairedLeafId) {
-				await submissions.updateTurnJournalPhase(
-					{ submissionId: replacement.submissionId, attemptId: replacement.attemptId },
-					'before_provider',
-					{ checkpointLeafId: repairedLeafId },
-				);
-				return { disposition: 'replacement', submission: replacement };
-			}
-			if (state === 'continuable') {
-				return { disposition: 'replacement', submission: replacement };
-			}
-			const error = new SubmissionInterruptedError({ phase: 'after_input_application' });
-			return failInterruptedSubmission(
-				submissions,
-				replacement,
-				{ submissionId: replacement.submissionId, attemptId: replacement.attemptId },
-				agent,
-				'interrupted_after_input_application',
-				error,
-				createContext,
-				undefined,
-				conversationWriter,
-			);
-		}
-		if (state === 'continuable') {
-			const replacement = await submissions.replaceTurnJournalAttempt(
-				attempt,
-				crypto.randomUUID(),
-				lease,
-			);
-			if (replacement) return { disposition: 'replacement', submission: replacement };
-		}
-	}
-
-	// Pre-input-application interruption.
+	// Only 'absent' remains here (completed/continuable/uncertain handled
+	// above; canonical input present without the marker is repaired above).
 	if (submission.inputAppliedAt === undefined) {
-		if (state === 'absent') {
-			await submissions.requeueSubmissionBeforeInputApplied(attempt);
-			return { disposition: 'requeued' };
-		}
-		const error = new SubmissionInterruptedError({ phase: 'before_input_marker' });
-		return failInterruptedSubmission(
-			submissions,
-			submission,
-			attempt,
-			agent,
-			'interrupted_before_input_marker',
-			error,
-			createContext,
-			undefined,
-			conversationWriter,
-		);
+		// Crashed before any canonical input was persisted — requeue for a
+		// clean first attempt.
+		await submissions.requeueSubmissionBeforeInputApplied(attempt);
+		return { disposition: 'requeued' };
 	}
 
-	// Collect interrupted tool metadata from the journal when available.
-	const interruptedTools = journal?.toolRequest
-		? (journal.toolRequest as AgentSubmissionToolRequest).toolCalls.map((tc) => ({
-				name: tc.name,
-				id: tc.id,
-			}))
-		: undefined;
-
-	// Post-input-application interruption without completion.
-	const error = new SubmissionInterruptedError({
-		phase: 'after_input_application',
-		interruptedTools,
-	});
+	// The input-applied marker was written but the canonical input is absent
+	// (it could not be persisted before the crash): nothing to resume — fail.
+	const error = new SubmissionInterruptedError({ phase: 'after_input_application' });
 	return failInterruptedSubmission(
 		submissions,
 		submission,
@@ -659,7 +446,7 @@ export async function reconcileInterruptedSubmission(
 		'interrupted_after_input_application',
 		error,
 		createContext,
-		interruptedTools,
+		undefined,
 		conversationWriter,
 	);
 }
@@ -810,7 +597,6 @@ export async function processSubmission(opts: ProcessSubmissionOptions): Promise
 						? submission.timeoutAt
 						: undefined,
 				submissionAttempt: attempt,
-				journal: createSubmissionJournalCallbacks(submissions, submission, attempt),
 			});
 			// Wire the coordinator's abort signal so shutdown can cancel
 			// in-flight work at the turn boundary.

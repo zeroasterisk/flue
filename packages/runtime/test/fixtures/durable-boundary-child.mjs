@@ -105,24 +105,16 @@ if (mode === 'input-marker') {
 await submissions.markSubmissionInputApplied({ submissionId, attemptId });
 
 if (mode === 'stream-recovery') {
-	await submissions.beginTurnJournal({
-		submissionId,
-		sessionKey: 'agent-session:["instance-1","default","default"]',
-		kind: 'dispatch',
-		attemptId,
-		operationId: 'operation-stream',
-		turnId: 'turn-stream',
-		phase: 'before_provider',
-		checkpointLeafId: inputEntryId,
-	});
-	await submissions.updateTurnJournalPhase({ submissionId, attemptId }, 'provider_started');
+	// Genuine crash mid-stream: an assistant message is started with one
+	// durable text delta acknowledged, but never completed and never recovered.
+	// Recovery must materialize this partial exactly once and resume.
 	await append([
 		{
 			...scope,
 			id: 'record-stream-started',
 			type: 'assistant_message_started',
 			turnId: 'turn-stream',
-			messageId: 'entry-stream-partial',
+			messageId: 'entry_stream_partial',
 			parentId: inputEntryId,
 			modelInfo: { api: 'faux', provider: 'faux', model: 'reviewer' },
 		},
@@ -130,7 +122,7 @@ if (mode === 'stream-recovery') {
 			...scope,
 			id: 'record-stream-text-started',
 			type: 'assistant_text_started',
-			messageId: 'entry-stream-partial',
+			messageId: 'entry_stream_partial',
 			blockId: 'block-stream',
 			blockIndex: 0,
 		},
@@ -138,70 +130,21 @@ if (mode === 'stream-recovery') {
 			...scope,
 			id: 'record-stream-delta',
 			type: 'assistant_text_delta',
-			messageId: 'entry-stream-partial',
+			messageId: 'entry_stream_partial',
 			blockId: 'block-stream',
 			sequence: 0,
 			delta: 'Durable partial',
 		},
 	]);
-	await append([
-		{
-			...scope,
-			id: 'record_recovery_entry-stream-partial_block-stream_completed',
-			type: 'assistant_text_completed',
-			messageId: 'entry-stream-partial',
-			blockId: 'block-stream',
-			deltaCount: 1,
-		},
-		{
-			...scope,
-			id: 'record_recovery_entry-stream-partial_aborted',
-			type: 'assistant_message_completed',
-			messageId: 'entry-stream-partial',
-			stopReason: 'aborted',
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-			error: 'Stream interrupted before completion.',
-		},
-		{
-			...scope,
-			id: 'record_recovery_entry-stream-partial_stream_interrupted',
-			type: 'signal',
-			messageId: 'entry_recovery_entry-stream-partial_stream_interrupted',
-			parentId: 'entry-stream-partial',
-			signalType: 'stream_interrupted',
-			content: 'The previous assistant stream was interrupted.',
-		},
-		{
-			...scope,
-			id: 'record_recovery_entry-stream-partial_stream_continued',
-			type: 'signal',
-			messageId: 'entry_recovery_entry-stream-partial_stream_continued',
-			parentId: 'entry_recovery_entry-stream-partial_stream_interrupted',
-			signalType: 'stream_continued',
-			content: 'Continue from the durable partial assistant response.',
-		},
-	]);
 }
 
 if (mode === 'tool-repair' || mode === 'tool-outcome') {
-	await submissions.beginTurnJournal({
-		submissionId,
-		sessionKey: 'agent-session:["instance-1","default","default"]',
-		kind: 'dispatch',
-		attemptId,
-		operationId: 'operation-tool',
-		turnId: 'turn-tool',
-		phase: 'before_provider',
-		checkpointLeafId: inputEntryId,
-	});
 	const toolCalls = mode === 'tool-outcome'
 		? [
 				{ type: 'toolCall', id: 'tool-call-1', name: 'lookup' },
 				{ type: 'toolCall', id: 'tool-call-2', name: 'lookup' },
 			]
 		: [{ type: 'toolCall', id: 'tool-call-1', name: 'lookup' }];
-	const toolRequest = { toolCalls };
-	await submissions.updateTurnJournalPhase({ submissionId, attemptId }, 'tool_request_recorded', { toolRequest });
 	await append([
 		{
 			...scope,
@@ -231,6 +174,11 @@ if (mode === 'tool-repair' || mode === 'tool-outcome') {
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
 		},
 	]);
+	// tool-outcome: one of the two tool calls completed durably before the
+	// crash; recovery must preserve it and error only the unresolved call.
+	// tool-repair: the single tool call was interrupted before ANY outcome was
+	// appended; recovery must write one unknown-outcome error and never re-run
+	// the tool.
 	if (mode === 'tool-outcome') {
 		await append([{
 			...scope,
@@ -242,28 +190,6 @@ if (mode === 'tool-repair' || mode === 'tool-outcome') {
 			isError: false,
 			content: [{ type: 'text', text: 'Known completed result' }],
 		}]);
-	} else {
-		await append([
-			{
-				...scope,
-				id: 'record_tool_repair_entry_tool_assistant_rewind',
-				type: 'active_leaf_changed',
-				leafId: 'entry_tool_assistant',
-				previousLeafId: 'entry_tool_assistant',
-				reason: 'interrupted_tool_batch_repair',
-			},
-			{
-				...scope,
-				id: 'record_tool_repair_entry_tool_assistant_tool-call-1',
-				type: 'tool_result',
-				messageId: 'entry_tool_repair_entry_tool_assistant_tool-call-1',
-				parentId: 'entry_tool_assistant',
-				toolCallId: 'tool-call-1',
-				toolName: 'lookup',
-				isError: true,
-				content: [{ type: 'text', text: '{"type":"interrupted"}' }],
-			},
-		]);
 	}
 }
 

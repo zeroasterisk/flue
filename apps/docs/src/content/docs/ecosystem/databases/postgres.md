@@ -122,7 +122,7 @@ A Flue database stores runtime state, not your whole application.
 | Workflow-run records and persisted events                         | Provider credentials or secrets                                |
 | Run indexing for `/runs` lookups and `listRuns()`                 |                                                                |
 
-The submission rows and their turn journals are what make accepted work
+The submission rows are what make accepted work
 recoverable after an interruption. See [Durable Agents](/docs/concepts/durable-execution/)
 for how recovery uses them, and the [Data Persistence API](/docs/api/data-persistence-api/)
 for the exact adapter contract.

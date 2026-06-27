@@ -15,10 +15,7 @@ import type {
 	AgentDispatchAdmission,
 	AgentSubmission,
 	AgentSubmissionStore,
-	AgentTurnJournal,
-	AgentTurnJournalPhase,
 	CreateRunInput,
-	CreateTurnJournalInput,
 	DirectAgentSubmissionInput,
 	DispatchAgentSubmissionInput,
 	DispatchInput,
@@ -67,7 +64,7 @@ import {
 	submissionChunkOwner,
 } from '@flue/runtime/adapter';
 import { PgAttachmentStore } from './postgres-attachment-store.ts';
-import { PgConversationStreamStore } from './postgres-conversation-store.ts';
+import { createPgConversationStreamStore } from './postgres-conversation-store.ts';
 
 // ─── Bring-your-own-driver runner seam ──────────────────────────────────────
 
@@ -142,7 +139,7 @@ export function postgres(runner: PostgresRunner): PersistenceAdapter {
 				},
 				runStore: new PgRunStore(runner),
 				eventStreamStore: new PgEventStreamStore(runner),
-				conversationStreamStore: new PgConversationStreamStore(runner),
+				conversationStreamStore: createPgConversationStreamStore(runner),
 				attachmentStore: new PgAttachmentStore(runner),
 			};
 		},
@@ -222,25 +219,6 @@ async function ensureTables(runner: PostgresRunner): Promise<void> {
 			)
 		`);
 
-
-		await tx.query(`
-			CREATE TABLE IF NOT EXISTS flue_agent_turn_journals (
-				submission_id TEXT PRIMARY KEY,
-				session_key TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				attempt_id TEXT NOT NULL,
-				operation_id TEXT NOT NULL,
-				turn_id TEXT NOT NULL,
-				phase TEXT NOT NULL,
-				revision INTEGER NOT NULL,
-				created_at BIGINT NOT NULL,
-				updated_at BIGINT NOT NULL,
-				checkpoint_leaf_id TEXT,
-				tool_request_json TEXT,
-				committed INTEGER NOT NULL DEFAULT 0,
-				committed_leaf_id TEXT
-			)
-		`);
 
 		await tx.query(`
 			CREATE TABLE IF NOT EXISTS flue_agent_dispatch_receipts (
@@ -492,19 +470,6 @@ class PgSubmissionStore implements AgentSubmissionStore {
 		});
 	}
 
-	async getTurnJournal(submissionId: string): Promise<AgentTurnJournal | null> {
-		const rows = await this.runner.query(
-			`SELECT submission_id, session_key, kind, attempt_id, operation_id, turn_id,
-				        phase, revision, created_at, updated_at, checkpoint_leaf_id,
-				        tool_request_json, committed, committed_leaf_id
-			 FROM flue_agent_turn_journals
-			 WHERE submission_id = $1
-			 LIMIT 1`,
-			[submissionId],
-		);
-		return rows[0] ? parseTurnJournal(rows[0]) : null;
-	}
-
 	async markSubmissionCanonicalReady(submissionId: string): Promise<AgentSubmission | null> {
 		const rows = await this.runner.query(
 			`UPDATE flue_agent_submissions SET canonical_ready_at = COALESCE(canonical_ready_at, $1)
@@ -565,103 +530,7 @@ class PgSubmissionStore implements AgentSubmissionStore {
 		});
 	}
 
-	// ── Turn journal lifecycle ───────────────────────────────────────────
-
-	async beginTurnJournal(input: CreateTurnJournalInput): Promise<boolean> {
-		const now = Date.now();
-		const toolRequestJson =
-			input.toolRequest === undefined ? null : JSON.stringify(input.toolRequest);
-		const rows = await this.runner.transaction(async (tx) => {
-			const owner = await tx.query(
-				`SELECT submission_id FROM flue_agent_submissions
-				 WHERE submission_id = $1 AND status = 'running' AND attempt_id = $2 FOR UPDATE`,
-				[input.submissionId, input.attemptId],
-			);
-			if (!owner[0]) return [];
-			return tx.query(
-				`INSERT INTO flue_agent_turn_journals
-			 (submission_id, session_key, kind, attempt_id, operation_id, turn_id,
-			  phase, revision, created_at, updated_at, checkpoint_leaf_id,
-			  tool_request_json, committed, committed_leaf_id)
-			 SELECT $1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, 0, NULL
-			 WHERE EXISTS (
-			   SELECT 1 FROM flue_agent_submissions
-			   WHERE submission_id = $12 AND status = 'running' AND attempt_id = $13
-			 )
-			 ON CONFLICT (submission_id) DO UPDATE SET
-			   attempt_id = EXCLUDED.attempt_id,
-			   operation_id = EXCLUDED.operation_id,
-			   turn_id = EXCLUDED.turn_id,
-			   phase = EXCLUDED.phase,
-			   revision = flue_agent_turn_journals.revision + 1,
-			   updated_at = EXCLUDED.updated_at,
-			   checkpoint_leaf_id = EXCLUDED.checkpoint_leaf_id,
-			   tool_request_json = EXCLUDED.tool_request_json,
-			   committed = 0,
-			   committed_leaf_id = NULL
-			 RETURNING submission_id`,
-			[
-				input.submissionId,
-				input.sessionKey,
-				input.kind,
-				input.attemptId,
-				input.operationId,
-				input.turnId,
-				input.phase,
-				now,
-				now,
-				input.checkpointLeafId ?? null,
-				toolRequestJson,
-				input.submissionId,
-				input.attemptId,
-			],
-			);
-		});
-		return rows.length > 0;
-	}
-
-	async updateTurnJournalPhase(
-		attempt: SubmissionAttemptRef,
-		phase: AgentTurnJournalPhase,
-		options: { checkpointLeafId?: string; toolRequest?: unknown } = {},
-	): Promise<boolean> {
-		const now = Date.now();
-		const rows = await this.runner.query(
-			`UPDATE flue_agent_turn_journals
-			 SET phase = $1, revision = revision + 1, updated_at = $2,
-			     checkpoint_leaf_id = COALESCE($3, checkpoint_leaf_id),
-			     tool_request_json = COALESCE($4, tool_request_json)
-			 WHERE submission_id = $5 AND attempt_id = $6 AND committed = 0
-			 RETURNING submission_id`,
-			[
-				phase,
-				now,
-				options.checkpointLeafId ?? null,
-				options.toolRequest === undefined ? null : JSON.stringify(options.toolRequest),
-				attempt.submissionId,
-				attempt.attemptId,
-			],
-		);
-		return rows.length > 0;
-	}
-
-	async commitTurnJournal(
-		attempt: SubmissionAttemptRef,
-		committedLeafId: string,
-	): Promise<boolean> {
-		const now = Date.now();
-		const rows = await this.runner.query(
-			`UPDATE flue_agent_turn_journals
-			 SET phase = 'committed', revision = revision + 1, updated_at = $1,
-			     committed = 1, committed_leaf_id = $2
-			 WHERE submission_id = $3 AND attempt_id = $4 AND committed = 0
-			 RETURNING submission_id`,
-			[now, committedLeafId, attempt.submissionId, attempt.attemptId],
-		);
-		return rows.length > 0;
-	}
-
-	async replaceTurnJournalAttempt(
+	async replaceSubmissionAttempt(
 		attempt: SubmissionAttemptRef,
 		nextAttemptId: string,
 		lease?: { ownerId: string; leaseExpiresAt: number },
@@ -692,12 +561,6 @@ class PgSubmissionStore implements AgentSubmissionStore {
 						[nextAttemptId, now, attempt.submissionId, attempt.attemptId],
 					);
 			if (!subRows[0]) return null;
-			await tx.query(
-				`UPDATE flue_agent_turn_journals
-				 SET attempt_id = $1, revision = revision + 1, updated_at = $2
-				 WHERE submission_id = $3 AND attempt_id = $4 AND committed = 0`,
-				[nextAttemptId, now, attempt.submissionId, attempt.attemptId],
-			);
 			return parseSubmission(
 				subRows[0],
 				await createPostgresChunkStore(tx).read(submissionChunkOwner(attempt.submissionId)),
@@ -1042,7 +905,7 @@ class PgSubmissionStore implements AgentSubmissionStore {
 	}
 }
 
-// ─── Submission / turn-journal row parsers ──────────────────────────────────
+// ─── Submission row parsers ─────────────────────────────────────────────────
 
 function parseDispatchReceipt(row: SqlRow): { submissionId: string; acceptedAt: number } {
 	const acceptedAt = Number(row.accepted_at);
@@ -1481,55 +1344,4 @@ class PgEventStreamStore implements EventStreamStore {
 	}
 }
 
-// ─── Row parsers ────────────────────────────────────────────────────────────
 
-function parseTurnJournal(row: SqlRow): AgentTurnJournal {
-	const revision = Number(row.revision);
-	const createdAt = Number(row.created_at);
-	const updatedAt = Number(row.updated_at);
-	const committed = Number(row.committed);
-
-	if (
-		typeof row.submission_id !== 'string' ||
-		typeof row.session_key !== 'string' ||
-		(row.kind !== 'dispatch' && row.kind !== 'direct') ||
-		typeof row.attempt_id !== 'string' ||
-		typeof row.operation_id !== 'string' ||
-		typeof row.turn_id !== 'string' ||
-		(row.phase !== 'before_provider' &&
-			row.phase !== 'provider_started' &&
-			row.phase !== 'tool_request_recorded' &&
-			row.phase !== 'committed') ||
-		!Number.isFinite(revision) ||
-		!Number.isFinite(createdAt) ||
-		!Number.isFinite(updatedAt) ||
-		(row.checkpoint_leaf_id != null && typeof row.checkpoint_leaf_id !== 'string') ||
-		(committed !== 0 && committed !== 1) ||
-		(row.committed_leaf_id != null && typeof row.committed_leaf_id !== 'string')
-	) {
-		throw new Error('[flue] Persisted turn journal row is malformed.');
-	}
-
-	return {
-		submissionId: row.submission_id,
-		sessionKey: row.session_key,
-		kind: row.kind,
-		attemptId: row.attempt_id,
-		operationId: row.operation_id,
-		turnId: row.turn_id,
-		phase: row.phase,
-		revision,
-		createdAt,
-		updatedAt,
-		...(typeof row.checkpoint_leaf_id === 'string'
-			? { checkpointLeafId: row.checkpoint_leaf_id }
-			: {}),
-		...(typeof row.tool_request_json === 'string'
-			? { toolRequest: JSON.parse(row.tool_request_json) as unknown }
-			: {}),
-		committed: committed === 1,
-		...(typeof row.committed_leaf_id === 'string'
-			? { committedLeafId: row.committed_leaf_id }
-			: {}),
-	};
-}

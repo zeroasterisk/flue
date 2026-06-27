@@ -105,7 +105,7 @@ async function openExecutionStore(dbPath: string): Promise<AgentExecutionStore> 
 }
 
 /** Create a context factory that uses a real LLM model. */
-function makeRealCreateContext(executionStore: AgentExecutionStore): CreateAgentContextFn {
+function makeRealCreateContext(): CreateAgentContextFn {
 	const model = resolveModel(REAL_MODEL);
 	return ({ id, request, initialEventIndex, dispatchId }) =>
 		createFlueContext({
@@ -125,7 +125,6 @@ function makeRealCreateContext(executionStore: AgentExecutionStore): CreateAgent
 /** Create a context factory that uses a faux (mock) provider. */
 function makeFauxCreateContext(
 	provider: FauxProviderRegistration,
-	executionStore: AgentExecutionStore,
 ): CreateAgentContextFn {
 	return ({ id, request, initialEventIndex, dispatchId }) =>
 		createFlueContext({
@@ -164,7 +163,7 @@ async function createRealCoordinator(
 	const coordinator = createNodeAgentCoordinator({
 		submissions: executionStore.submissions,
 		agents: [{ name: 'assistant', definition: agent }],
-		createContext: makeRealCreateContext(executionStore),
+		createContext: makeRealCreateContext(),
 		conversationStreamStore,
 		attachmentStore,
 	});
@@ -187,7 +186,7 @@ async function createFauxCoordinator(
 	const coordinator = createNodeAgentCoordinator({
 		submissions: executionStore.submissions,
 		agents: [{ name: 'assistant', definition: agent }],
-		createContext: makeFauxCreateContext(provider, executionStore),
+		createContext: makeFauxCreateContext(provider),
 		conversationStreamStore,
 		attachmentStore,
 	});
@@ -321,7 +320,7 @@ describe('NodeAgentCoordinator', () => {
 						model: `${provider.getModel().provider}/${provider.getModel().id}`,
 					})),
 				}],
-				createContext: makeFauxCreateContext(provider, executionStore),
+				createContext: makeFauxCreateContext(provider),
 				conversationStreamStore: failingStore,
 				attachmentStore,
 			});
@@ -397,32 +396,50 @@ describe('NodeAgentCoordinator', () => {
 			});
 		});
 
-		it('reuses canonical stream recovery after a real process kill before journal repair', async () => {
+		// Kill matrix scenario 3: killed after acknowledged partial deltas,
+		// before completion. Recovery must materialize the durable partial
+		// exactly once (never re-stream committed text) and resume with at most
+		// one replacement provider call.
+		it('materializes a durable partial stream once and resumes after a real process kill', async () => {
 			const dbPath = createTempDbPath();
 			await killAtDurableBoundary('stream-recovery', dbPath);
 			const adapter = sqlite(dbPath);
 			await adapter.migrate?.();
-			const { executionStore, conversationStreamStore } = await adapter.connect();
-			const path = agentStreamPath('assistant', 'instance-1');
-			const before = await conversationStreamStore.read(path);
-			const recoveryRecordCount = before.batches.flatMap((batch) => batch.records).filter(
-				(record) => record.id.startsWith('record_recovery_'),
-			).length;
-			const submission = await executionStore.submissions.getSubmission('dispatch-stream-recovery');
-			if (!submission?.attemptId) throw new Error('Expected interrupted stream submission.');
-			const replacement = await executionStore.submissions.replaceTurnJournalAttempt(
-				{ submissionId: submission.submissionId, attemptId: submission.attemptId },
-				'attempt-stream-replacement',
-			);
-			expect(replacement).not.toBeNull();
-			await executionStore.submissions.updateTurnJournalPhase(
-				{ submissionId: submission.submissionId, attemptId: 'attempt-stream-replacement' },
-				'before_provider',
-			);
-			const after = await conversationStreamStore.read(path);
-			expect(after.batches.flatMap((batch) => batch.records).filter(
-				(record) => record.id.startsWith('record_recovery_'),
-			)).toHaveLength(recoveryRecordCount);
+			const { executionStore, conversationStreamStore, attachmentStore } = await adapter.connect();
+			let providerCalls = 0;
+			const provider = createFauxProvider();
+			provider.setResponses([() => {
+				providerCalls += 1;
+				return fauxAssistantMessage('Continued after recovery.');
+			}]);
+			const coordinator = createNodeAgentCoordinator({
+				submissions: executionStore.submissions,
+				agents: [{
+					name: 'assistant',
+					definition: defineAgent(() => ({
+						model: `${provider.getModel().provider}/${provider.getModel().id}`,
+					})),
+				}],
+				createContext: makeFauxCreateContext(provider),
+				conversationStreamStore,
+				attachmentStore,
+			});
+
+			await coordinator.reconcileSubmissions();
+			await coordinator.waitForIdle();
+
+			// Recovery itself dispatches no provider work; only the resumed
+			// continuation calls the provider.
+			expect(providerCalls).toBe(1);
+			const records = (await conversationStreamStore.read(agentStreamPath('assistant', 'instance-1')))
+				.batches.flatMap((batch) => batch.records);
+			// The committed partial text is materialized exactly once — never re-streamed.
+			expect(records.filter(
+				(record) => record.type === 'assistant_text_delta' && record.delta === 'Durable partial',
+			)).toHaveLength(1);
+			expect(await executionStore.submissions.getSubmission('dispatch-stream-recovery')).toMatchObject({
+				status: 'settled',
+			});
 		});
 
 		it('reuses a completed parallel tool outcome after a real process kill before graph materialization', async () => {
@@ -452,7 +469,7 @@ describe('NodeAgentCoordinator', () => {
 						tools: [lookup],
 					})),
 				}],
-				createContext: makeFauxCreateContext(provider, executionStore),
+				createContext: makeFauxCreateContext(provider),
 				conversationStreamStore,
 						attachmentStore,
 			});
@@ -477,26 +494,54 @@ describe('NodeAgentCoordinator', () => {
 			expect(records.filter((record) => record.type === 'tool_results_committed')).toHaveLength(1);
 		});
 
-		it('reuses canonical tool repair after a real process kill before journal repair', async () => {
+		// Kill matrix scenario 1 (the most important): killed after a tool turn
+		// was made durable but before ANY tool outcome was recorded. Recovery
+		// must write one explicit unknown-outcome error, commit the batch, and
+		// NEVER re-run the tool.
+		it('writes one unknown-outcome error and never re-runs a tool interrupted before any outcome', async () => {
 			const dbPath = createTempDbPath();
 			await killAtDurableBoundary('tool-repair', dbPath);
 			const adapter = sqlite(dbPath);
 			await adapter.migrate?.();
-			const { executionStore, conversationStreamStore } = await adapter.connect();
+			const { executionStore, conversationStreamStore, attachmentStore } = await adapter.connect();
+			const provider = createFauxProvider();
+			provider.setResponses([fauxAssistantMessage('Continued after repair.')]);
+			let toolCalls = 0;
+			const lookup = defineTool({
+				name: 'lookup',
+				description: 'Look up.',
+				input: v.object({}),
+				run: async () => {
+					toolCalls += 1;
+					return 'must not run';
+				},
+			});
+			const coordinator = createNodeAgentCoordinator({
+				submissions: executionStore.submissions,
+				agents: [{
+					name: 'assistant',
+					definition: defineAgent(() => ({
+						model: `${provider.getModel().provider}/${provider.getModel().id}`,
+						tools: [lookup],
+					})),
+				}],
+				createContext: makeFauxCreateContext(provider),
+				conversationStreamStore,
+				attachmentStore,
+			});
+
+			await coordinator.reconcileSubmissions();
+			await coordinator.waitForIdle();
+
+			expect(toolCalls).toBe(0);
 			const records = (await conversationStreamStore.read(agentStreamPath('assistant', 'instance-1')))
 				.batches.flatMap((batch) => batch.records);
-			expect(records.filter((record) => record.id.startsWith('record_tool_repair_'))).toHaveLength(2);
-			const submission = await executionStore.submissions.getSubmission('dispatch-tool-repair');
-			if (!submission?.attemptId) throw new Error('Expected interrupted tool submission.');
-			const replacement = await executionStore.submissions.replaceTurnJournalAttempt(
-				{ submissionId: submission.submissionId, attemptId: submission.attemptId },
-				'attempt-tool-replacement',
+			const outcomes = records.filter(
+				(record) => record.type === 'tool_outcome' && record.toolCallId === 'tool-call-1',
 			);
-			expect(replacement).not.toBeNull();
-			expect(await executionStore.submissions.updateTurnJournalPhase(
-				{ submissionId: submission.submissionId, attemptId: 'attempt-tool-replacement' },
-				'before_provider',
-			)).toBe(true);
+			expect(outcomes).toHaveLength(1);
+			expect(outcomes[0]).toMatchObject({ toolCallId: 'tool-call-1', isError: true });
+			expect(records.filter((record) => record.type === 'tool_results_committed')).toHaveLength(1);
 		});
 
 		it('finalizes canonical settlement after a real process kill before operational finalization', async () => {
@@ -699,45 +744,14 @@ describe('NodeAgentCoordinator', () => {
 			expect(submission?.error).toBeDefined();
 		});
 
-	describe('turn journal during tool-use turns', () => {
-	;
-
-		it('does not invoke the provider when journal ownership is rejected', async () => {
+	describe('tool-use turns', () => {
+		it('records each tool outcome before committing the batch during a tool-use turn', async () => {
 			const dbPath = createTempDbPath();
 			const adapter = sqlite(dbPath);
 			await adapter.migrate?.();
 			const { executionStore, conversationStreamStore, attachmentStore } = await adapter.connect();
 			const provider = createFauxProvider();
-			let providerCalls = 0;
-			provider.setResponses([() => {
-				providerCalls += 1;
-				return fauxAssistantMessage('Must not run.');
-			}]);
-			executionStore.submissions.beginTurnJournal = async () => false;
-			const coordinator = createNodeAgentCoordinator({
-				submissions: executionStore.submissions,
-				agents: [{
-					name: 'assistant',
-					definition: defineAgent(() => ({ model: `${provider.getModel().provider}/${provider.getModel().id}` })),
-				}],
-				createContext: makeFauxCreateContext(provider, executionStore),
-				conversationStreamStore,
-						attachmentStore,
-			});
-
-			await coordinator.admitDispatch(makeDispatchInput({ dispatchId: 'dispatch-journal-rejected' }));
-			await coordinator.waitForIdle();
-
-			expect(providerCalls).toBe(0);
-		});
-
-		it('records journal phase transitions through tool_request_recorded during a tool-use turn', async () => {
-			const dbPath = createTempDbPath();
-			const adapter = sqlite(dbPath);
-			await adapter.migrate?.();
-			const { executionStore, conversationStreamStore, attachmentStore } = await adapter.connect();
-			const provider = createFauxProvider();
-			const toolCallId = `tool:journal-${crypto.randomUUID()}`;
+			const toolCallId = `tool:outcome-${crypto.randomUUID()}`;
 			provider.setResponses([
 				fauxAssistantMessage(fauxToolCall('lookup', { q: 'x' }, { id: toolCallId }), {
 					stopReason: 'toolUse',
@@ -750,10 +764,9 @@ describe('NodeAgentCoordinator', () => {
 				input: v.object({ q: v.string() }),
 				run: async () => 'found it',
 			});
-			const phases: string[] = [];
 			const coordinator = createNodeAgentCoordinator({
 				submissions: executionStore.submissions,
-						agents: [
+				agents: [
 					{
 						name: 'assistant',
 						definition: defineAgent(() => ({
@@ -762,28 +775,15 @@ describe('NodeAgentCoordinator', () => {
 						})),
 					},
 				],
-				createContext: makeFauxCreateContext(provider, executionStore),
+				createContext: makeFauxCreateContext(provider),
 				conversationStreamStore,
-						attachmentStore,
+				attachmentStore,
 			});
 
-			const originalUpdate = executionStore.submissions.updateTurnJournalPhase.bind(
-				executionStore.submissions,
-			);
-			executionStore.submissions.updateTurnJournalPhase = async (attempt, phase, options) => {
-				phases.push(phase);
-				return originalUpdate(attempt, phase, options);
-			};
-
-			const input = makeDispatchInput({ dispatchId: 'dispatch:journal-phases' });
+			const input = makeDispatchInput({ dispatchId: 'dispatch:tool-outcome-order' });
 			await coordinator.admitDispatch(input);
 			await coordinator.waitForIdle();
 
-			expect(phases).toContain('provider_started');
-			expect(phases).toContain('tool_request_recorded');
-			expect(phases.filter((p) => p === 'before_provider').length).toBeGreaterThanOrEqual(1);
-			const journal = await executionStore.submissions.getTurnJournal(input.dispatchId);
-			expect(journal?.committed).toBe(true);
 			const records = (await conversationStreamStore.read(
 				agentStreamPath(input.agent, input.id),
 			)).batches.flatMap((batch) => batch.records);

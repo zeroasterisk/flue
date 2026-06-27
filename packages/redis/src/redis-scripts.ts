@@ -119,42 +119,9 @@ end
 return 1
 `;
 
-export const journalScript = `${guard}
-require_type(KEYS[1], 'hash')
-if #KEYS > 1 then require_type(KEYS[2], 'set') end
-if #KEYS > 2 then require_type(KEYS[3], 'hash') end
-local operation = ARGV[1]
-if operation == 'begin' then
-  if redis.call('HGET', KEYS[3], 'status') ~= 'running' or redis.call('HGET', KEYS[3], 'attemptId') ~= ARGV[5] then return 0 end
-  local revision = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0') + 1
-  redis.call('SADD', KEYS[2], ARGV[2])
-  redis.call('DEL', KEYS[1])
-  redis.call('HSET', KEYS[1], 'submissionId', ARGV[2], 'sessionKey', ARGV[3], 'kind', ARGV[4],
-    'attemptId', ARGV[5], 'operationId', ARGV[6], 'turnId', ARGV[7], 'phase', ARGV[8],
-    'revision', revision, 'createdAt', ARGV[9], 'updatedAt', ARGV[9], 'committed', 0)
-  if ARGV[10] ~= '' then redis.call('HSET', KEYS[1], 'checkpointLeafId', ARGV[10]) end
-  if ARGV[11] ~= '' then redis.call('HSET', KEYS[1], 'toolRequest', ARGV[11]) end
-  return 1
-end
-if redis.call('HGET', KEYS[1], 'attemptId') ~= ARGV[2] or redis.call('HGET', KEYS[1], 'committed') ~= '0' then return 0 end
-local revision = tonumber(redis.call('HGET', KEYS[1], 'revision')) + 1
-if operation == 'phase' then
-  redis.call('HSET', KEYS[1], 'phase', ARGV[3], 'revision', revision, 'updatedAt', ARGV[4])
-  if ARGV[5] ~= '' then redis.call('HSET', KEYS[1], 'checkpointLeafId', ARGV[5]) end
-  if ARGV[6] ~= '' then redis.call('HSET', KEYS[1], 'toolRequest', ARGV[6]) end
-elseif operation == 'commit' then
-  redis.call('HSET', KEYS[1], 'phase', 'committed', 'revision', revision, 'updatedAt', ARGV[3], 'committed', 1, 'committedLeafId', ARGV[4])
-end
-return 1
-`;
-
 export const replaceAttemptScript = `${guard}
 require_type(KEYS[1], 'hash')
-require_type(KEYS[2], 'hash')
 if redis.call('HGET', KEYS[1], 'status') ~= 'running' or redis.call('HGET', KEYS[1], 'attemptId') ~= ARGV[1] then return 0 end
-if redis.call('HGET', KEYS[2], 'attemptId') == ARGV[1] and redis.call('HGET', KEYS[2], 'committed') == '0' then
-  redis.call('HSET', KEYS[2], 'attemptId', ARGV[2], 'updatedAt', ARGV[3], 'revision', tonumber(redis.call('HGET', KEYS[2], 'revision')) + 1)
-end
 redis.call('HSET', KEYS[1], 'attemptId', ARGV[2], 'startedAt', ARGV[3], 'attemptCount', tonumber(redis.call('HGET', KEYS[1], 'attemptCount')) + 1)
 redis.call('HDEL', KEYS[1], 'recoveryRequestedAt')
 if ARGV[4] ~= '' then redis.call('HSET', KEYS[1], 'ownerId', ARGV[4], 'leaseExpiresAt', ARGV[5]) end

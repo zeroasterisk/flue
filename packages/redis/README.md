@@ -68,7 +68,7 @@ not public orchestration.
 Hashes hold authoritative metadata and immutable generation manifests. Sorted
 sets maintain submission, run, and event ordering; sets maintain bounded cleanup
 ownership. Lua scripts serialize admission, claims, lifecycle and lease
-transitions, journals, run indexes, and event append/close.
+transitions, run indexes, and event append/close.
 
 Direct-submission payloads and image chunks are staged into immutable generation
 hashes with ordinary or pipelined commands, then published atomically during

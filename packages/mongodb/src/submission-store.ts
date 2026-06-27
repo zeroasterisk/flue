@@ -1,12 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import type {
 	AgentAttemptMarker,
 	AgentDispatchAdmission,
 	AgentSubmission,
 	AgentSubmissionStore,
-	AgentTurnJournal,
-	AgentTurnJournalPhase,
-	CreateTurnJournalInput,
 	DirectAgentSubmissionInput,
 	DispatchAgentSubmissionInput,
 	DispatchInput,
@@ -44,30 +40,6 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 	async getSubmission(submissionId: string): Promise<AgentSubmission | null> {
 		const row = await this.c('submissions').findOne({ submissionId });
 		return row ? this.parseSubmission(row) : null;
-	}
-
-	async getTurnJournal(submissionId: string): Promise<AgentTurnJournal | null> {
-		const row = await this.c('journals').findOne({ submissionId });
-		if (!row) return null;
-		const toolRequest = row.toolRequest
-			? await this.values.read(row.toolRequest as unknown as StoredValue)
-			: undefined;
-		return {
-			submissionId: String(row.submissionId),
-			sessionKey: String(row.sessionKey),
-			kind: row.kind as 'dispatch' | 'direct',
-			attemptId: String(row.attemptId),
-			operationId: String(row.operationId),
-			turnId: String(row.turnId),
-			phase: row.phase as AgentTurnJournalPhase,
-			revision: Number(row.revision),
-			createdAt: Number(row.createdAt),
-			updatedAt: Number(row.updatedAt),
-			...(row.checkpointLeafId ? { checkpointLeafId: String(row.checkpointLeafId) } : {}),
-			...(toolRequest !== undefined ? { toolRequest } : {}),
-			committed: Boolean(row.committed),
-			...(row.committedLeafId ? { committedLeafId: String(row.committedLeafId) } : {}),
-		};
 	}
 
 	async markSubmissionCanonicalReady(submissionId: string): Promise<AgentSubmission | null> {
@@ -116,127 +88,7 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 		return output;
 	}
 
-	async beginTurnJournal(input: CreateTurnJournalInput): Promise<boolean> {
-		const pointer =
-			input.toolRequest === undefined
-				? undefined
-				: await this.values.stage(
-						`journal:${input.submissionId}:${randomUUID()}:tool`,
-						input.toolRequest,
-					);
-		const now = Date.now();
-		let committed = false;
-		try {
-			const outcome = await this.runner.transaction(async (tx) => {
-				const submission = await tx.collection(collectionName(this.prefix, 'submissions')).findOne({
-					submissionId: input.submissionId,
-					status: 'running',
-					attemptId: input.attemptId,
-				});
-				if (!submission) return { written: false, previous: null };
-				const fenced = await tx.collection(collectionName(this.prefix, 'submissions')).updateOne(
-					{ _id: submission._id, status: 'running', attemptId: input.attemptId },
-					{ $inc: { journalWriteRevision: 1 } },
-				);
-				if (fenced.modifiedCount !== 1) return { written: false, previous: null };
-				if (pointer) await this.values.publish(pointer, tx);
-				const journals = tx.collection(collectionName(this.prefix, 'journals'));
-				const previous = await journals.findOne({ submissionId: input.submissionId });
-				await journals.updateOne(
-					{ submissionId: input.submissionId },
-					{
-						$set: {
-							_id: input.submissionId,
-							submissionId: input.submissionId,
-							sessionKey: input.sessionKey,
-							kind: input.kind,
-							attemptId: input.attemptId,
-							operationId: input.operationId,
-							turnId: input.turnId,
-							phase: input.phase,
-							createdAt: previous?.createdAt ?? now,
-							updatedAt: now,
-							checkpointLeafId: input.checkpointLeafId ?? null,
-							toolRequest: pointer ?? null,
-							committed: false,
-							committedLeafId: null,
-						},
-						$inc: { revision: 1 },
-					},
-					{ upsert: true },
-				);
-				return { written: true, previous };
-			});
-			committed = outcome.written;
-			if (!outcome.written) {
-				if (pointer) await this.values.discardStaged(pointer);
-				return false;
-			}
-			if (outcome.previous?.toolRequest)
-				await this.values.retire(outcome.previous.toolRequest as unknown as StoredValue).catch(() => undefined);
-			return true;
-		} catch (error) {
-			if (!committed && pointer) await this.values.discardStaged(pointer);
-			throw error;
-		}
-	}
-
-	async updateTurnJournalPhase(
-		attempt: SubmissionAttemptRef,
-		phase: AgentTurnJournalPhase,
-		options: { checkpointLeafId?: string; toolRequest?: unknown } = {},
-	): Promise<boolean> {
-		const pointer =
-			options.toolRequest === undefined
-				? undefined
-				: await this.values.stage(
-						`journal:${attempt.submissionId}:${randomUUID()}:tool`,
-						options.toolRequest,
-					);
-		const set: MongoDocument = { phase, updatedAt: Date.now() };
-		if (options.checkpointLeafId !== undefined) set.checkpointLeafId = options.checkpointLeafId;
-		if (pointer) set.toolRequest = pointer;
-		let published = false;
-		try {
-			const outcome = await this.runner.transaction(async (tx) => {
-				const journals = tx.collection(collectionName(this.prefix, 'journals'));
-				const old = pointer
-					? await journals.findOne({
-							submissionId: attempt.submissionId,
-							attemptId: attempt.attemptId,
-							committed: false,
-						})
-					: null;
-				if (pointer) await this.values.publish(pointer, tx);
-				const result = await journals.updateOne(
-					{ submissionId: attempt.submissionId, attemptId: attempt.attemptId, committed: false },
-					{ $set: set, $inc: { revision: 1 } },
-				);
-				return { old, matched: result.matchedCount === 1 };
-			});
-			published = outcome.matched;
-			if (!outcome.matched && pointer) await this.values.retire(pointer);
-			else if (outcome.old?.toolRequest && pointer)
-				await this.values
-					.retire(outcome.old.toolRequest as unknown as StoredValue)
-					.catch(() => undefined);
-			return outcome.matched;
-		} catch (error) {
-			if (!published && pointer) await this.values.discardStaged(pointer);
-			throw error;
-		}
-	}
-
-	async commitTurnJournal(
-		attempt: SubmissionAttemptRef,
-		committedLeafId: string,
-	): Promise<boolean> {
-		return this.journalUpdate(attempt, {
-			$set: { phase: 'committed', updatedAt: Date.now(), committed: true, committedLeafId },
-			$inc: { revision: 1 },
-		});
-	}
-	async replaceTurnJournalAttempt(
+	async replaceSubmissionAttempt(
 		attempt: SubmissionAttemptRef,
 		nextAttemptId: string,
 		lease?: { ownerId: string; leaseExpiresAt: number },
@@ -248,21 +100,13 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 				startedAt: Date.now(),
 			};
 			if (lease) Object.assign(set, lease);
-			const updated = await tx
+			return tx
 				.collection(collectionName(this.prefix, 'submissions'))
 				.findOneAndUpdate(
 					{ submissionId: attempt.submissionId, status: 'running', attemptId: attempt.attemptId },
 					{ $set: set, $inc: { attemptCount: 1 } },
 					{ returnDocument: 'after' },
 				);
-			if (updated)
-				await tx
-					.collection(collectionName(this.prefix, 'journals'))
-					.updateOne(
-						{ submissionId: attempt.submissionId, attemptId: attempt.attemptId, committed: false },
-						{ $set: { attemptId: nextAttemptId, updatedAt: Date.now() }, $inc: { revision: 1 } },
-					);
-			return updated;
 		});
 		return row ? this.parseSubmission(row) : null;
 	}
@@ -529,22 +373,6 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 				submissionId: attempt.submissionId,
 				attemptId: attempt.attemptId,
 				status: 'running',
-				...extra,
-			},
-			update,
-		);
-		return result.matchedCount === 1;
-	}
-	private async journalUpdate(
-		attempt: SubmissionAttemptRef,
-		update: MongoDocument,
-		extra: MongoDocument = {},
-	): Promise<boolean> {
-		const result = await this.c('journals').updateOne(
-			{
-				submissionId: attempt.submissionId,
-				attemptId: attempt.attemptId,
-				committed: false,
 				...extra,
 			},
 			update,

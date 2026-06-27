@@ -70,7 +70,7 @@ interface AgentExecutionStore {
 
 Lifecycle transitions are gated by the owning attempt. Input application, recovery requests, requeue-before-input, completion, and failure must reject stale attempts. The first terminal state wins.
 
-Each submission has one turn-journal slot. Journal replacement, phase changes, commit, and attempt replacement must preserve attempt ownership. Settlement reservation records the exact canonical settlement before finalization. Attempt markers and leases provide durable evidence for recovery and ownership.
+Recovery replaces a running attempt through a single fenced compare-and-set that must preserve attempt ownership. Settlement reservation records the exact canonical settlement before finalization. Attempt markers and leases provide durable evidence for recovery and ownership.
 
 ## `ConversationStreamStore`
 

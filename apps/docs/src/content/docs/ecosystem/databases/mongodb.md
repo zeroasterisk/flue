@@ -129,7 +129,7 @@ that bypasses the adapter's BSON-limit handling.
 
 ## What gets stored
 
-MongoDB stores append-only canonical conversation records, immutable attachment payloads, accepted direct and dispatched submissions, recovery journals and leases, workflow runs and indexes, and persisted event streams. Sessions append for the agent-instance lifetime; there are no session generations, transcript snapshots, per-session deletion, or recursive session-tree cleanup.
+MongoDB stores append-only canonical conversation records, immutable attachment payloads, accepted direct and dispatched submissions, recovery claims and leases, workflow runs and indexes, and persisted event streams. Sessions append for the agent-instance lifetime; there are no session generations, transcript snapshots, per-session deletion, or recursive session-tree cleanup.
 
 The adapter does not store sandbox files, external API side effects, credentials,
 or application-owned business records.

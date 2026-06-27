@@ -88,6 +88,38 @@ CREATE TABLE IF NOT EXISTS flue_conversation_stream_batches (
 const DEFAULT_READ_LIMIT = 100;
 const MAX_READ_LIMIT = 1000;
 
+/**
+ * Shared in-memory listener registry for conversation-stream `subscribe` /
+ * `notify`. Every conversation store keeps a process-local fan-out of change
+ * listeners keyed by stream path; this class encapsulates the registration,
+ * unsubscribe-and-prune, and error-swallowing notify behavior so the stores do
+ * not each re-implement the same `Map<string, Set<() => void>>`.
+ */
+export class StreamListenerRegistry {
+	private listeners = new Map<string, Set<() => void>>();
+
+	subscribe(path: string, listener: () => void): () => void {
+		let listeners = this.listeners.get(path);
+		if (!listeners) {
+			listeners = new Set();
+			this.listeners.set(path, listeners);
+		}
+		listeners.add(listener);
+		return () => {
+			listeners?.delete(listener);
+			if (listeners?.size === 0) this.listeners.delete(path);
+		};
+	}
+
+	notify(path: string): void {
+		for (const listener of this.listeners.get(path) ?? []) {
+			try {
+				listener();
+			} catch {}
+		}
+	}
+}
+
 export function ensureSqlConversationStreamTables(sql: SqlStorage): void {
 	migrateFlueSqlSchema(sql, () => {
 		sql.exec(CREATE_STREAMS_TABLE);
@@ -115,7 +147,7 @@ interface InMemoryConversationStream {
 
 export class InMemoryConversationStreamStore implements ConversationStreamStore {
 	private streams = new Map<string, InMemoryConversationStream>();
-	private listeners = new Map<string, Set<() => void>>();
+	private listeners = new StreamListenerRegistry();
 
 	async createStream(path: string, identity: ConversationStreamIdentity): Promise<void> {
 		const existing = this.streams.get(path);
@@ -205,7 +237,7 @@ export class InMemoryConversationStreamStore implements ConversationStreamStore 
 			attemptId: input.submission?.attemptId ?? null,
 		});
 		stream.nextProducerSequence += 1;
-		this.notify(input.path);
+		this.listeners.notify(input.path);
 		return { offset };
 	}
 
@@ -251,20 +283,11 @@ export class InMemoryConversationStreamStore implements ConversationStreamStore 
 
 	async delete(path: string): Promise<void> {
 		this.streams.delete(path);
-		this.notify(path);
+		this.listeners.notify(path);
 	}
 
 	subscribe(path: string, listener: () => void): () => void {
-		let listeners = this.listeners.get(path);
-		if (!listeners) {
-			listeners = new Set();
-			this.listeners.set(path, listeners);
-		}
-		listeners.add(listener);
-		return () => {
-			listeners?.delete(listener);
-			if (listeners?.size === 0) this.listeners.delete(path);
-		};
+		return this.listeners.subscribe(path, listener);
 	}
 
 	private assertSubmissionOwnership(
@@ -292,18 +315,13 @@ export class InMemoryConversationStreamStore implements ConversationStreamStore 
 	private fail(operation: string, path: string, reason: string): never {
 		throw new ConversationStreamStoreError({ operation, path, reason });
 	}
-
-	private notify(path: string): void {
-		for (const listener of this.listeners.get(path) ?? []) {
-			try {
-				listener();
-			} catch {}
-		}
-	}
 }
 
+// Bespoke (not built on `defineSqlConversationStreamStore`): Cloudflare Durable
+// Object SQLite requires synchronous `transactionSync`, so this store cannot use
+// the async SQL builder and keeps its own synchronous fence implementation.
 export class SqliteConversationStreamStore implements ConversationStreamStore {
-	private listeners = new Map<string, Set<() => void>>();
+	private listeners = new StreamListenerRegistry();
 
 	constructor(
 		private sql: SqlStorage,
@@ -427,7 +445,7 @@ export class SqliteConversationStreamStore implements ConversationStreamStore {
 			);
 			return { offset: formatOffset(seq), appended: true };
 		});
-		if (result.appended) this.notify(input.path);
+		if (result.appended) this.listeners.notify(input.path);
 		return { offset: result.offset };
 	}
 
@@ -492,20 +510,11 @@ export class SqliteConversationStreamStore implements ConversationStreamStore {
 			this.sql.exec('DELETE FROM flue_conversation_stream_batches WHERE path = ?', path);
 			this.sql.exec('DELETE FROM flue_conversation_streams WHERE path = ?', path);
 		});
-		this.notify(path);
+		this.listeners.notify(path);
 	}
 
 	subscribe(path: string, listener: () => void): () => void {
-		let listeners = this.listeners.get(path);
-		if (!listeners) {
-			listeners = new Set();
-			this.listeners.set(path, listeners);
-		}
-		listeners.add(listener);
-		return () => {
-			listeners?.delete(listener);
-			if (listeners?.size === 0) this.listeners.delete(path);
-		};
+		return this.listeners.subscribe(path, listener);
 	}
 
 	private assertSubmissionAuthorization(
@@ -566,13 +575,5 @@ export class SqliteConversationStreamStore implements ConversationStreamStore {
 
 	private fail(operation: string, path: string, reason: string): never {
 		throw new ConversationStreamStoreError({ operation, path, reason });
-	}
-
-	private notify(path: string): void {
-		for (const listener of this.listeners.get(path) ?? []) {
-			try {
-				listener();
-			} catch {}
-		}
 	}
 }
