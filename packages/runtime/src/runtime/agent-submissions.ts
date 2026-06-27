@@ -7,11 +7,10 @@ import type {
 } from '../agent-execution-store.ts';
 import type { FlueContextInternal } from '../client.ts';
 import type { ConversationRecordWriter } from '../conversation-writer.ts';
-import { createAttachmentRef, type AttachmentStore } from './attachment-store.ts';
-import { agentStreamPath } from './event-stream-store.ts';
 import {
 	FlueError,
 	SubmissionInterruptedError,
+	SubmissionOwnershipError,
 	SubmissionRetryExhaustedError,
 	SubmissionTimeoutError,
 } from '../errors.ts';
@@ -24,7 +23,9 @@ import type {
 	DirectAgentPayload,
 	PromptResponse,
 } from '../types.ts';
+import { type AttachmentStore, createAttachmentRef } from './attachment-store.ts';
 import type { DispatchInput } from './dispatch-queue.ts';
+import { agentStreamPath } from './event-stream-store.ts';
 import { assertAgentDispatchAdmissionInput } from './handle-agent.ts';
 
 export interface DispatchAgentSubmissionInput extends DispatchInput {
@@ -293,8 +294,7 @@ function createSubmissionJournalCallbacks(
 	return {
 		beforeProvider: async (state) => {
 			if (state.turnId !== journalTurnId) {
-				journalTurnId = state.turnId;
-				await submissions.beginTurnJournal({
+				const created = await submissions.beginTurnJournal({
 					submissionId: submission.submissionId,
 					sessionKey: submission.sessionKey,
 					kind: submission.kind,
@@ -304,26 +304,36 @@ function createSubmissionJournalCallbacks(
 					phase: 'before_provider',
 					checkpointLeafId: state.checkpointLeafId,
 				});
+				if (!created) throw new SubmissionOwnershipError({ boundary: 'before_provider' });
+				journalTurnId = state.turnId;
 			}
 		},
 		providerStarted: async (state) => {
-			await submissions.updateTurnJournalPhase(attempt, 'provider_started', {
+			if (!(await submissions.updateTurnJournalPhase(attempt, 'provider_started', {
 				checkpointLeafId: state.checkpointLeafId,
-			});
+			}))) {
+				throw new SubmissionOwnershipError({ boundary: 'provider_started' });
+			}
 		},
 		toolRequestRecorded: async (state) => {
-			await submissions.updateTurnJournalPhase(attempt, 'tool_request_recorded', {
+			if (!(await submissions.updateTurnJournalPhase(attempt, 'tool_request_recorded', {
 				checkpointLeafId: state.checkpointLeafId,
 				toolRequest: state.toolRequest,
-			});
+			}))) {
+				throw new SubmissionOwnershipError({ boundary: 'tool_request_recorded' });
+			}
 		},
 		checkpointReady: async (state) => {
-			await submissions.updateTurnJournalPhase(attempt, 'before_provider', {
+			if (!(await submissions.updateTurnJournalPhase(attempt, 'before_provider', {
 				checkpointLeafId: state.checkpointLeafId,
-			});
+			}))) {
+				throw new SubmissionOwnershipError({ boundary: 'checkpoint_ready' });
+			}
 		},
 		committed: async (state) => {
-			await submissions.commitTurnJournal(attempt, state.committedLeafId);
+			if (!(await submissions.commitTurnJournal(attempt, state.committedLeafId))) {
+				throw new SubmissionOwnershipError({ boundary: 'committed' });
+			}
 		},
 	};
 }
@@ -447,6 +457,32 @@ export async function reconcileInterruptedSubmission(
 			undefined,
 			conversationWriter,
 		);
+	}
+
+	if (
+		submission.inputAppliedAt === undefined &&
+		state !== 'absent' &&
+		(journal === null || journal.phase === 'before_provider')
+	) {
+		const replacement = await submissions.replaceTurnJournalAttempt(
+			attempt,
+			crypto.randomUUID(),
+			lease,
+		);
+		if (replacement?.attemptId) {
+			const replacementAttempt = {
+				submissionId: replacement.submissionId,
+				attemptId: replacement.attemptId,
+			};
+			if (!(await submissions.markSubmissionInputApplied(replacementAttempt, {
+				maxRetry: replacement.maxRetry,
+				timeoutAt: replacement.timeoutAt,
+			}))) {
+				return { disposition: 'stale' };
+			}
+			return { disposition: 'replacement', submission: replacement };
+		}
+		return { disposition: 'stale' };
 	}
 
 	// Check turn journal for pre-commit interruption that can be retried.

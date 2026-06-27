@@ -127,7 +127,18 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 		const now = Date.now();
 		let committed = false;
 		try {
-			const old = await this.runner.transaction(async (tx) => {
+			const outcome = await this.runner.transaction(async (tx) => {
+				const submission = await tx.collection(collectionName(this.prefix, 'submissions')).findOne({
+					submissionId: input.submissionId,
+					status: 'running',
+					attemptId: input.attemptId,
+				});
+				if (!submission) return { written: false, previous: null };
+				const fenced = await tx.collection(collectionName(this.prefix, 'submissions')).updateOne(
+					{ _id: submission._id, status: 'running', attemptId: input.attemptId },
+					{ $inc: { journalWriteRevision: 1 } },
+				);
+				if (fenced.modifiedCount !== 1) return { written: false, previous: null };
 				if (pointer) await this.values.publish(pointer, tx);
 				const journals = tx.collection(collectionName(this.prefix, 'journals'));
 				const previous = await journals.findOne({ submissionId: input.submissionId });
@@ -154,11 +165,15 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 					},
 					{ upsert: true },
 				);
-				return previous;
+				return { written: true, previous };
 			});
-			committed = true;
-			if (old?.toolRequest)
-				await this.values.retire(old.toolRequest as unknown as StoredValue).catch(() => undefined);
+			committed = outcome.written;
+			if (!outcome.written) {
+				if (pointer) await this.values.discardStaged(pointer);
+				return false;
+			}
+			if (outcome.previous?.toolRequest)
+				await this.values.retire(outcome.previous.toolRequest as unknown as StoredValue).catch(() => undefined);
 			return true;
 		} catch (error) {
 			if (!committed && pointer) await this.values.discardStaged(pointer);

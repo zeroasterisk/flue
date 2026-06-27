@@ -375,7 +375,11 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 			integer(
 				await this.backend.eval(
 					journalScript,
-					[this.backend.keys.journal(input.submissionId), this.backend.keys.journals()],
+					[
+						this.backend.keys.journal(input.submissionId),
+						this.backend.keys.journals(),
+						this.backend.keys.submission(input.submissionId),
+					],
 					[
 						'begin',
 						input.submissionId,

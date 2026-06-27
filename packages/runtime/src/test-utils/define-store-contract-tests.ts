@@ -589,6 +589,25 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 		// ── Turn journal lifecycle ────────────────────────────────────────
 
 		describe('turn journal lifecycle', () => {
+			it('rejects journal creation when the attempt no longer owns the submission', async () => {
+				const store = await create();
+				await admitDispatchReady(store,dispatchInput());
+				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
+
+				expect(
+					await store.submissions.beginTurnJournal({
+						submissionId: 'dispatch-1',
+						sessionKey: 'agent-session:["agent-1","default","default"]',
+						kind: 'dispatch',
+						attemptId: 'attempt-stale',
+						operationId: 'op-1',
+						turnId: 'turn-1',
+						phase: 'before_provider',
+					}),
+				).toBe(false);
+				expect(await store.submissions.getTurnJournal('dispatch-1')).toBeNull();
+			});
+
 			it('creates, advances, and commits a turn journal through all phases', async () => {
 				const store = await create();
 				await admitDispatchReady(store,dispatchInput());

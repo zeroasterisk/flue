@@ -108,6 +108,8 @@ updates(name: string, id: string, options: AgentConversationUpdateOptions): Flue
 
 Streams durable conversation updates strictly after the required `offset`. Initialize local state with `history()`, then apply updates with `reduceAgentConversationUpdate()`.
 
+Starting an updates connection currently reconstructs the canonical stream prefix through that offset. For very large agent-instance streams, measure reconnect latency and avoid unnecessary reconnect loops until snapshot-assisted prefix loading ships.
+
 ```ts
 const snapshot = await client.agents.history('support', 'ticket-42');
 let state = createAgentConversationState(snapshot);

@@ -103,7 +103,7 @@ interface ConversationSnapshotStore<State = unknown> {
 }
 ```
 
-Snapshots are disposable materialized caches of a canonical stream prefix. They may be replaced or deleted without changing transcript semantics and must never become an independent source of truth. `delete(path)` removes the whole instance snapshot only; there is no per-session deletion contract.
+Snapshots are optional disposable caches of a canonical stream prefix. They may be replaced or deleted without changing transcript semantics and must never become an independent source of truth. The built-in runtime currently replays the canonical stream rather than writing automatic full-log snapshots. `delete(path)` removes the whole instance snapshot only; there is no per-session deletion contract.
 
 ## `AttachmentStore`
 

@@ -8,16 +8,15 @@ import {
 } from '@earendil-works/pi-ai';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ConversationRecordWriter } from '../src/conversation-writer.ts';
 import {
 	defineAgent,
-	defineAgentProfile,
 	defineTool,
 	ModelNotConfiguredError,
 	observe,
 	SessionBusyError,
-	SubagentNotDeclaredError,
 } from '../src/index.ts';
-import { createFlueContext } from '../src/internal.ts';
+import { createFlueContext, InMemoryAttachmentStore, InMemoryConversationStreamStore } from '../src/internal.ts';
 import { getInternalSession } from '../src/session.ts';
 import type { SessionEnv } from '../src/types.ts';
 import { createNoopSessionEnv } from './fixtures/session-env.ts';
@@ -481,6 +480,219 @@ describe('session.task()', () => {
 
 		expect(first.text).toBe('First response.');
 		expect(second.text).toBe('Second response.');
+	});
+
+	it('reuses an already committed interrupted-stream recovery after restart', async () => {
+		const provider = createProvider([{ id: 'reviewer' }]);
+		const store = new InMemoryConversationStreamStore();
+		const writer = await ConversationRecordWriter.create({
+			store,
+			path: 'agents/assistant/recovery-instance',
+			identity: { agentName: 'assistant', instanceId: 'recovery-instance' },
+			producerId: 'producer-1',
+		});
+		const timestamp = new Date().toISOString();
+		await writer.append([
+			{
+				v: 1,
+				id: 'record-created',
+				type: 'conversation_created',
+				conversationId: 'conversation-recovery',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				affinityKey: 'affinity-recovery',
+				createdAt: timestamp,
+			},
+			{
+				v: 1,
+				id: 'record-user',
+				type: 'user_message',
+				conversationId: 'conversation-recovery',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				submissionId: 'submission-recovery',
+				attemptId: 'attempt-recovery',
+				messageId: 'entry_user',
+				parentId: null,
+				content: [{ type: 'text', text: 'Continue' }],
+			},
+			{
+				v: 1,
+				id: 'record-assistant-started',
+				type: 'assistant_message_started',
+				conversationId: 'conversation-recovery',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				submissionId: 'submission-recovery',
+				attemptId: 'attempt-recovery',
+				turnId: 'turn-recovery',
+				messageId: 'entry_partial',
+				parentId: 'entry_user',
+				modelInfo: { api: 'faux', provider: provider.getModel().provider, model: 'reviewer' },
+			},
+			{
+				v: 1,
+				id: 'record-text-started',
+				type: 'assistant_text_started',
+				conversationId: 'conversation-recovery',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				submissionId: 'submission-recovery',
+				attemptId: 'attempt-recovery',
+				messageId: 'entry_partial',
+				blockId: 'block_partial',
+				blockIndex: 0,
+			},
+			{
+				v: 1,
+				id: 'record-text-delta',
+				type: 'assistant_text_delta',
+				conversationId: 'conversation-recovery',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				submissionId: 'submission-recovery',
+				attemptId: 'attempt-recovery',
+				messageId: 'entry_partial',
+				blockId: 'block_partial',
+				sequence: 0,
+				delta: 'Partial',
+			},
+		], { submission: { submissionId: 'submission-recovery', attemptId: 'attempt-recovery' } });
+		const ctx = createFlueContext({
+			id: 'recovery-instance',
+			env: {},
+			agentConfig: { resolveModel: () => provider.getModel('reviewer') },
+			createDefaultEnv: async () => createNoopSessionEnv(),
+			conversationWriter: writer,
+			attachmentStore: new InMemoryAttachmentStore(),
+		});
+		const harness = await ctx.initializeRootHarness(
+			defineAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
+		);
+		const internal = getInternalSession(await harness.session());
+		if (!internal) throw new Error('Expected internal session.');
+
+		expect(await internal.recoverInterruptedStream({
+			submissionId: 'submission-recovery',
+			attemptId: 'attempt-recovery',
+		}, 'turn-recovery')).toBe(true);
+		const offset = writer.offset;
+		expect(await internal.recoverInterruptedStream({
+			submissionId: 'submission-recovery',
+			attemptId: 'attempt-recovery',
+		}, 'turn-recovery')).toBe(true);
+		expect(writer.offset).toBe(offset);
+	});
+
+	it('reuses an already committed interrupted-tool repair after restart', async () => {
+		const provider = createProvider([{ id: 'reviewer' }]);
+		const store = new InMemoryConversationStreamStore();
+		const writer = await ConversationRecordWriter.create({
+			store,
+			path: 'agents/assistant/tool-repair-instance',
+			identity: { agentName: 'assistant', instanceId: 'tool-repair-instance' },
+			producerId: 'producer-1',
+		});
+		const timestamp = new Date().toISOString();
+		await writer.append([
+			{
+				v: 1,
+				id: 'record-tool-created',
+				type: 'conversation_created',
+				conversationId: 'conversation-tool-repair',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				affinityKey: 'affinity-tool-repair',
+				createdAt: timestamp,
+			},
+			{
+				v: 1,
+				id: 'record-tool-user',
+				type: 'user_message',
+				conversationId: 'conversation-tool-repair',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				messageId: 'entry_tool_user',
+				parentId: null,
+				content: [{ type: 'text', text: 'Use tools' }],
+			},
+			{
+				v: 1,
+				id: 'record-tool-assistant-started',
+				type: 'assistant_message_started',
+				conversationId: 'conversation-tool-repair',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				messageId: 'entry_tool_assistant',
+				parentId: 'entry_tool_user',
+				modelInfo: { api: 'faux', provider: provider.getModel().provider, model: 'reviewer' },
+			},
+			{
+				v: 1,
+				id: 'record-tool-call',
+				type: 'assistant_tool_call',
+				conversationId: 'conversation-tool-repair',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				messageId: 'entry_tool_assistant',
+				blockId: 'block_tool',
+				blockIndex: 0,
+				toolCallId: 'tool-call-1',
+				name: 'lookup',
+				arguments: {},
+			},
+			{
+				v: 1,
+				id: 'record-tool-assistant-completed',
+				type: 'assistant_message_completed',
+				conversationId: 'conversation-tool-repair',
+				harness: 'default',
+				session: 'default',
+				timestamp,
+				messageId: 'entry_tool_assistant',
+				stopReason: 'toolUse',
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			},
+		]);
+		const ctx = createFlueContext({
+			id: 'tool-repair-instance',
+			env: {},
+			agentConfig: { resolveModel: () => provider.getModel('reviewer') },
+			createDefaultEnv: async () => createNoopSessionEnv(),
+			conversationWriter: writer,
+			attachmentStore: new InMemoryAttachmentStore(),
+		});
+		const harness = await ctx.initializeRootHarness(
+			defineAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
+		);
+		const internal = getInternalSession(await harness.session());
+		if (!internal) throw new Error('Expected internal session.');
+		const input = {
+			kind: 'dispatch' as const,
+			submissionId: 'submission-tool-repair',
+			dispatchId: 'submission-tool-repair',
+			agent: 'assistant',
+			id: 'tool-repair-instance',
+			input: {},
+			acceptedAt: timestamp,
+		};
+		const request = { toolCalls: [{ type: 'toolCall' as const, id: 'tool-call-1', name: 'lookup' }] };
+		const attempt = { submissionId: 'submission-tool-repair', attemptId: 'attempt-tool-repair' };
+
+		const repairedLeaf = await internal.repairInterruptedToolCalls(input, request, attempt);
+		const offset = writer.offset;
+		expect(repairedLeaf).toBe('entry_tool_repair_entry_tool_assistant_tool-call-1');
+		expect(await internal.repairInterruptedToolCalls(input, request, attempt)).toBe(repairedLeaf);
+		expect(writer.offset).toBe(offset);
 	});
 
 	it('correlates a model task tool call with its task start observation', async () => {

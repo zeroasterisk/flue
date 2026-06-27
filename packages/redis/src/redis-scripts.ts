@@ -122,8 +122,10 @@ return 1
 export const journalScript = `${guard}
 require_type(KEYS[1], 'hash')
 if #KEYS > 1 then require_type(KEYS[2], 'set') end
+if #KEYS > 2 then require_type(KEYS[3], 'hash') end
 local operation = ARGV[1]
 if operation == 'begin' then
+  if redis.call('HGET', KEYS[3], 'status') ~= 'running' or redis.call('HGET', KEYS[3], 'attemptId') ~= ARGV[5] then return 0 end
   local revision = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0') + 1
   redis.call('SADD', KEYS[2], ARGV[2])
   redis.call('DEL', KEYS[1])

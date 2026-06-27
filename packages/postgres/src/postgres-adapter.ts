@@ -586,12 +586,23 @@ class PgSubmissionStore implements AgentSubmissionStore {
 		const now = Date.now();
 		const toolRequestJson =
 			input.toolRequest === undefined ? null : JSON.stringify(input.toolRequest);
-		const rows = await this.runner.query(
-			`INSERT INTO flue_agent_turn_journals
+		const rows = await this.runner.transaction(async (tx) => {
+			const owner = await tx.query(
+				`SELECT submission_id FROM flue_agent_submissions
+				 WHERE submission_id = $1 AND status = 'running' AND attempt_id = $2 FOR UPDATE`,
+				[input.submissionId, input.attemptId],
+			);
+			if (!owner[0]) return [];
+			return tx.query(
+				`INSERT INTO flue_agent_turn_journals
 			 (submission_id, session_key, kind, attempt_id, operation_id, turn_id,
 			  phase, revision, created_at, updated_at, checkpoint_leaf_id,
 			  tool_request_json, committed, committed_leaf_id)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, 0, NULL)
+			 SELECT $1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11, 0, NULL
+			 WHERE EXISTS (
+			   SELECT 1 FROM flue_agent_submissions
+			   WHERE submission_id = $12 AND status = 'running' AND attempt_id = $13
+			 )
 			 ON CONFLICT (submission_id) DO UPDATE SET
 			   attempt_id = EXCLUDED.attempt_id,
 			   operation_id = EXCLUDED.operation_id,
@@ -616,8 +627,11 @@ class PgSubmissionStore implements AgentSubmissionStore {
 				now,
 				input.checkpointLeafId ?? null,
 				toolRequestJson,
+				input.submissionId,
+				input.attemptId,
 			],
-		);
+			);
+		});
 		return rows.length > 0;
 	}
 

@@ -986,10 +986,8 @@ export class OperationFailedError extends FlueError {
  *   ran out. No provider work ever happened, so the generic retry-exhaustion
  *   error would misdescribe the failure; the shared `attemptCount`/
  *   `maxAttempts` budget itself is intentional.
- * - `'before_input_marker'` — interrupted after the submission input was
- *   persisted to the session but before the input-application marker was
- *   recorded. Recovery cannot prove the input was never applied, so it does
- *   not replay it.
+ * - `'before_input_marker'` — interrupted with inconsistent pre-marker state
+ *   that canonical replay could not safely repair.
  * - `'after_input_application'` — interrupted after input application
  *   without a completed response that recovery could safely resume. When the
  *   interruption left tool calls whose outcomes could not be confirmed,
@@ -1027,13 +1025,10 @@ export class SubmissionInterruptedError extends FlueError {
 		} else if (input.phase === 'before_input_marker') {
 			super({
 				type: 'submission_interrupted',
-				message:
-					'Submission was interrupted after its input was persisted but before input application was confirmed. ' +
-					'The input was not replayed.',
+				message: 'Submission was interrupted before input application could be safely recovered.',
 				details:
-					'The attempt was interrupted after the submission input was written to the session but before the ' +
-					'input-application marker was recorded. Recovery cannot prove the input was never applied, so it ' +
-					'does not replay it.',
+					'The canonical conversation and operational marker did not provide a safe recoverable input state. ' +
+					'The input was not replayed.',
 				dev: '',
 				meta: { phase: input.phase },
 			});
@@ -1075,6 +1070,18 @@ export class SubmissionRetryExhaustedError extends FlueError {
 				'completed response.',
 			dev: "The budget is configured via the agent definition's `durability.maxAttempts`.",
 			meta: { attemptCount, maxAttempts },
+		});
+	}
+}
+
+export class SubmissionOwnershipError extends FlueError {
+	constructor({ boundary }: { boundary: string }) {
+		super({
+			type: 'submission_ownership_lost',
+			message: 'Submission ownership was lost before external work could continue.',
+			details: 'The interrupted attempt did not invoke additional model or tool work.',
+			dev: `The durable ownership transition failed at "${boundary}".`,
+			meta: { boundary },
 		});
 	}
 }

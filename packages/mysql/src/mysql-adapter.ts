@@ -725,7 +725,14 @@ class MysqlSubmissionStore implements AgentSubmissionStore {
 		const now = Date.now();
 		const toolRequestJson =
 			input.toolRequest === undefined ? null : JSON.stringify(input.toolRequest);
-		await this.runner.query(
+		return this.runner.transaction(async (tx) => {
+			const owner = await tx.query(
+				`SELECT submission_id FROM flue_agent_submissions
+				 WHERE submission_id = ? AND status = 'running' AND attempt_id = ? FOR UPDATE`,
+				[input.submissionId, input.attemptId],
+			);
+			if (!owner[0]) return false;
+			await tx.query(
 			`INSERT INTO flue_agent_turn_journals
 			 (submission_id, session_key, kind, attempt_id, operation_id, turn_id,
 			  phase, revision, created_at, updated_at, checkpoint_leaf_id,
@@ -749,8 +756,9 @@ class MysqlSubmissionStore implements AgentSubmissionStore {
 				input.checkpointLeafId ?? null,
 				toolRequestJson,
 			],
-		);
-		return true;
+			);
+			return true;
+		});
 	}
 
 	async updateTurnJournalPhase(

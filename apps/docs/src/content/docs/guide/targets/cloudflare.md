@@ -101,13 +101,13 @@ Cloudflare agents durably admit direct HTTP prompts together with `dispatch(...)
 
 ```txt
 direct HTTP prompt ─────────────────────┐
-                                        ├→ durable per-session queue → stored session history
+                                        ├→ durable per-instance queue → canonical stream
 dispatch(...) input ────────────────────┘
 ```
 
 The submitting connection observes the work but does not own it. If a client disconnects after admission, backend work can continue. Agent events are durably stored and can be replayed from any offset via the Durable Streams protocol.
 
-When a Durable Object resumes after interruption, Flue checks stored input and session history before deciding what to do next. It requeues only when it can prove the input was not applied, recognizes already-completed output, and records an interruption instead of blindly repeating uncertain model or tool work.
+When a Durable Object resumes after interruption, Flue compares stored input, canonical conversation progress, and the operational turn journal before deciding what to do next. It requeues only when it can prove the input was not applied, recognizes already-completed output, and records an interruption instead of blindly repeating uncertain model or tool work.
 
 For the full recovery model, see [Durable Agents](/docs/concepts/durable-execution/).
 

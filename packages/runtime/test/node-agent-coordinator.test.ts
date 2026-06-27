@@ -1,3 +1,4 @@
+import { fork } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +7,6 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 	registerFauxProvider,
-	Type,
 } from '@earendil-works/pi-ai';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,7 +22,6 @@ import { sqlite } from '../src/node/agent-execution-store.ts';
 import { agentStreamPath } from '../src/runtime/event-stream-store.ts';
 import type { CreateAgentContextFn } from '../src/runtime/handle-agent.ts';
 import { generateSessionAffinityKey } from '../src/runtime/ids.ts';
-import { createSessionStorageKey } from '../src/session-identity.ts';
 import { defineTool } from '../src/tool.ts';
 import { createNoopSessionEnv } from './fixtures/session-env.ts';
 
@@ -72,6 +71,28 @@ function createTempDbPath(): string {
 	const dir = mkdtempSync(join(tmpdir(), 'flue-node-coordinator-'));
 	tempDirs.push(dir);
 	return join(dir, 'agent.db');
+}
+
+async function killAtDurableBoundary(
+	mode: 'input-marker' | 'stream-recovery' | 'tool-repair' | 'settlement',
+	dbPath: string,
+): Promise<void> {
+	const child = fork(
+		join(import.meta.dirname, 'fixtures', 'durable-boundary-child.mjs'),
+		[mode, dbPath],
+		{ stdio: ['ignore', 'ignore', 'inherit', 'ipc'] },
+	);
+	await new Promise<void>((resolve, reject) => {
+		child.once('error', reject);
+		child.once('exit', (code, signal) => {
+			if (signal !== 'SIGKILL') reject(new Error(`Boundary child exited before kill (${code}, ${signal}).`));
+		});
+		child.once('message', (message) => {
+			if (message !== 'ready') return;
+			child.kill('SIGKILL');
+			child.once('exit', () => resolve());
+		});
+	});
 }
 
 /** Open (or reopen) a file-backed execution store via the sqlite() adapter. */
@@ -213,7 +234,7 @@ describe('NodeAgentCoordinator', () => {
 		await coordinator.shutdown();
 	});
 
-	it('rebuilds canonical state when the disposable snapshot is deleted', async () => {
+	it('rebuilds canonical state without an automatic full-log snapshot', async () => {
 		const dbPath = createTempDbPath();
 		const provider = createFauxProvider();
 		provider.setResponses([fauxAssistantMessage('Snapshot reply')]);
@@ -227,8 +248,7 @@ describe('NodeAgentCoordinator', () => {
 		await adapter.migrate?.();
 		const { conversationStreamStore, conversationSnapshotStore } = await adapter.connect();
 		const path = agentStreamPath('assistant', 'instance-1');
-		const snapshot = await conversationSnapshotStore.load(path);
-		expect(snapshot).not.toBeNull();
+		expect(await conversationSnapshotStore.load(path)).toBeNull();
 		await conversationSnapshotStore.delete(path);
 		const read = await conversationStreamStore.read(path);
 		expect(read.batches.flatMap((batch) => batch.records).map((record) => record.type)).toContain('assistant_message_completed');
@@ -286,6 +306,167 @@ describe('NodeAgentCoordinator', () => {
 	});
 
 	describe('interrupt and recover', () => {
+		it('repairs canonical input after a real process kill before the input marker', async () => {
+			const dbPath = createTempDbPath();
+			await killAtDurableBoundary('input-marker', dbPath);
+			let providerCalls = 0;
+			const provider = createFauxProvider();
+			provider.setResponses([() => {
+				providerCalls += 1;
+				return fauxAssistantMessage('Recovered after kill.');
+			}]);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
+
+			await coordinator.reconcileSubmissions();
+
+			expect(providerCalls).toBe(1);
+			expect(await executionStore.submissions.getSubmission('dispatch-input-marker')).toMatchObject({
+				status: 'settled',
+				inputAppliedAt: expect.any(Number),
+			});
+		});
+
+		it('reuses canonical stream recovery after a real process kill before journal repair', async () => {
+			const dbPath = createTempDbPath();
+			await killAtDurableBoundary('stream-recovery', dbPath);
+			const adapter = sqlite(dbPath);
+			await adapter.migrate?.();
+			const { executionStore, conversationStreamStore } = await adapter.connect();
+			const path = agentStreamPath('assistant', 'instance-1');
+			const before = await conversationStreamStore.read(path);
+			const recoveryRecordCount = before.batches.flatMap((batch) => batch.records).filter(
+				(record) => record.id.startsWith('record_recovery_'),
+			).length;
+			const submission = await executionStore.submissions.getSubmission('dispatch-stream-recovery');
+			if (!submission?.attemptId) throw new Error('Expected interrupted stream submission.');
+			const replacement = await executionStore.submissions.replaceTurnJournalAttempt(
+				{ submissionId: submission.submissionId, attemptId: submission.attemptId },
+				'attempt-stream-replacement',
+			);
+			expect(replacement).not.toBeNull();
+			await executionStore.submissions.updateTurnJournalPhase(
+				{ submissionId: submission.submissionId, attemptId: 'attempt-stream-replacement' },
+				'before_provider',
+			);
+			const after = await conversationStreamStore.read(path);
+			expect(after.batches.flatMap((batch) => batch.records).filter(
+				(record) => record.id.startsWith('record_recovery_'),
+			)).toHaveLength(recoveryRecordCount);
+		});
+
+		it('reuses canonical tool repair after a real process kill before journal repair', async () => {
+			const dbPath = createTempDbPath();
+			await killAtDurableBoundary('tool-repair', dbPath);
+			const adapter = sqlite(dbPath);
+			await adapter.migrate?.();
+			const { executionStore, conversationStreamStore } = await adapter.connect();
+			const records = (await conversationStreamStore.read(agentStreamPath('assistant', 'instance-1')))
+				.batches.flatMap((batch) => batch.records);
+			expect(records.filter((record) => record.id.startsWith('record_tool_repair_'))).toHaveLength(2);
+			const submission = await executionStore.submissions.getSubmission('dispatch-tool-repair');
+			if (!submission?.attemptId) throw new Error('Expected interrupted tool submission.');
+			const replacement = await executionStore.submissions.replaceTurnJournalAttempt(
+				{ submissionId: submission.submissionId, attemptId: submission.attemptId },
+				'attempt-tool-replacement',
+			);
+			expect(replacement).not.toBeNull();
+			expect(await executionStore.submissions.updateTurnJournalPhase(
+				{ submissionId: submission.submissionId, attemptId: 'attempt-tool-replacement' },
+				'before_provider',
+			)).toBe(true);
+		});
+
+		it('finalizes canonical settlement after a real process kill before operational finalization', async () => {
+			const dbPath = createTempDbPath();
+			await killAtDurableBoundary('settlement', dbPath);
+			const adapter = sqlite(dbPath);
+			await adapter.migrate?.();
+			const { executionStore, conversationStreamStore } = await adapter.connect();
+			const obligations = await executionStore.submissions.listPendingSubmissionSettlements();
+			expect(obligations).toHaveLength(1);
+			const obligation = obligations[0];
+			if (!obligation) throw new Error('Expected settlement obligation.');
+			expect(await executionStore.submissions.finalizeSubmissionSettlement(
+				{ submissionId: obligation.submissionId, attemptId: obligation.attemptId },
+				obligation.recordId,
+			)).toBe(true);
+			const records = (await conversationStreamStore.read(agentStreamPath('assistant', 'instance-1')))
+				.batches.flatMap((batch) => batch.records);
+			expect(records.filter((record) => record.id === obligation.recordId)).toHaveLength(1);
+		});
+
+		it('repairs the input marker when canonical input committed before the marker', async () => {
+			const dbPath = createTempDbPath();
+			const adapter = sqlite(dbPath);
+			await adapter.migrate?.();
+			const { executionStore, conversationStreamStore } = await adapter.connect();
+			const input = makeDispatchInput({ dispatchId: 'dispatch-input-marker' });
+			await executionStore.submissions.admitDispatch(input);
+			await executionStore.submissions.markSubmissionCanonicalReady(input.dispatchId);
+			await executionStore.submissions.claimSubmission({
+				submissionId: input.dispatchId,
+				attemptId: 'attempt-before-marker',
+				ownerId: 'test-owner',
+				leaseExpiresAt: 1,
+			});
+			const path = agentStreamPath(input.agent, input.id);
+			await conversationStreamStore.createStream(path, { agentName: input.agent, instanceId: input.id });
+			const claim = await conversationStreamStore.acquireProducer(path, 'crashed-owner');
+			const timestamp = new Date().toISOString();
+			await conversationStreamStore.append({
+				path,
+				producerId: claim.producerId,
+				producerEpoch: claim.producerEpoch,
+				incarnation: claim.incarnation,
+				producerSequence: claim.nextProducerSequence,
+				submission: { submissionId: input.dispatchId, attemptId: 'attempt-before-marker' },
+				records: [
+					{
+						v: 1,
+						id: 'record-conversation-created',
+						type: 'conversation_created',
+						conversationId: 'conversation-input-marker',
+						harness: 'default',
+						session: 'default',
+						timestamp,
+						affinityKey: generateSessionAffinityKey(),
+						createdAt: timestamp,
+					},
+					{
+						v: 1,
+						id: `record_dispatch_input_${input.dispatchId}`,
+						type: 'signal',
+						conversationId: 'conversation-input-marker',
+						harness: 'default',
+						session: 'default',
+						timestamp,
+						submissionId: input.dispatchId,
+						attemptId: 'attempt-before-marker',
+						dispatchId: input.dispatchId,
+						messageId: 'entry_dispatch_ZGlzcGF0Y2gtaW5wdXQtbWFya2Vy',
+						parentId: null,
+						signalType: 'dispatch_input',
+						content: '<dispatch type="dispatch_input">input</dispatch>',
+					},
+				],
+			});
+
+			let providerCalls = 0;
+			const provider = createFauxProvider();
+			provider.setResponses([() => {
+				providerCalls += 1;
+				return fauxAssistantMessage('Recovered reply.');
+			}]);
+			const { coordinator, executionStore: recoveredStore } = await createFauxCoordinator(dbPath, provider);
+			await coordinator.reconcileSubmissions();
+
+			expect(providerCalls).toBe(1);
+			expect(await recoveredStore.submissions.getSubmission(input.dispatchId)).toMatchObject({
+				status: 'settled',
+				inputAppliedAt: expect.any(Number),
+			});
+		});
+
 		it('reconciles an interrupted submission by requeuing when canonical input is absent', async () => {
 			const dbPath = createTempDbPath();
 			// First process will be "interrupted" — we manually admit+claim without processing.
@@ -388,6 +569,36 @@ describe('NodeAgentCoordinator', () => {
 
 	describe('turn journal during tool-use turns', () => {
 	;
+
+		it('does not invoke the provider when journal ownership is rejected', async () => {
+			const dbPath = createTempDbPath();
+			const adapter = sqlite(dbPath);
+			await adapter.migrate?.();
+			const { executionStore, conversationStreamStore, conversationSnapshotStore, attachmentStore } = await adapter.connect();
+			const provider = createFauxProvider();
+			let providerCalls = 0;
+			provider.setResponses([() => {
+				providerCalls += 1;
+				return fauxAssistantMessage('Must not run.');
+			}]);
+			executionStore.submissions.beginTurnJournal = async () => false;
+			const coordinator = createNodeAgentCoordinator({
+				submissions: executionStore.submissions,
+				agents: [{
+					name: 'assistant',
+					definition: defineAgent(() => ({ model: `${provider.getModel().provider}/${provider.getModel().id}` })),
+				}],
+				createContext: makeFauxCreateContext(provider, executionStore),
+				conversationStreamStore,
+				conversationSnapshotStore,
+				attachmentStore,
+			});
+
+			await coordinator.admitDispatch(makeDispatchInput({ dispatchId: 'dispatch-journal-rejected' }));
+			await coordinator.waitForIdle();
+
+			expect(providerCalls).toBe(0);
+		});
 
 		it('records journal phase transitions through tool_request_recorded during a tool-use turn', async () => {
 			const executionStore = await openExecutionStore(createTempDbPath());

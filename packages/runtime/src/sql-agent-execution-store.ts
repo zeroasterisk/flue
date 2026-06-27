@@ -126,7 +126,11 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 					 (submission_id, session_key, kind, attempt_id, operation_id, turn_id,
 						  phase, revision, created_at, updated_at, checkpoint_leaf_id,
 						  tool_request_json, committed, committed_leaf_id)
-							 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0, NULL)
+						 SELECT ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0, NULL
+						 WHERE EXISTS (
+						   SELECT 1 FROM flue_agent_submissions
+						   WHERE submission_id = ? AND status = 'running' AND attempt_id = ?
+						 )
 						 ON CONFLICT(submission_id) DO UPDATE SET
 						  attempt_id = excluded.attempt_id,
 						  operation_id = excluded.operation_id,
@@ -150,6 +154,8 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 					now,
 					input.checkpointLeafId ?? null,
 					input.toolRequest === undefined ? null : JSON.stringify(input.toolRequest),
+					input.submissionId,
+					input.attemptId,
 				)
 				.toArray().length > 0
 		);

@@ -158,5 +158,4 @@ for the exact adapter contract.
 Choose Turso when you want a managed, replicated SQLite without running a
 server, and optionally embedded replicas for low-latency reads. For a local
 file or a libSQL server you operate yourself, use the same adapter via the
-[libSQL guide](/docs/ecosystem/databases/libsql/). For a multi-replica Node
-deployment on Postgres, see [`@flue/postgres`](/docs/ecosystem/databases/postgres/).
+[libSQL guide](/docs/ecosystem/databases/libsql/). For external durable storage that supports process or host replacement, see [`@flue/postgres`](/docs/ecosystem/databases/postgres/). Node still requires one live owner per agent instance.

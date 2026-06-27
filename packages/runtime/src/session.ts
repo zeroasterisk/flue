@@ -86,6 +86,7 @@ import {
 	redactObservationDetailImages,
 } from './event-redaction.ts';
 import { type FlueExecutionContext, interceptExecution } from './execution-interceptor.ts';
+import { renderSignalMessage } from './message-rendering.ts';
 import { assertImagesWithinLimit } from './persisted-images.ts';
 import {
 	buildPackagedSkillPrompt,
@@ -119,7 +120,6 @@ import {
 } from './runtime/providers.ts';
 import { createFlueFs } from './sandbox.ts';
 import { valibotToJsonSchema } from './schema.ts';
-import { renderSignalMessage } from './message-rendering.ts';
 import { execShellWithEvents, getErrorMessage } from './shell.ts';
 import { getSkillReferenceDirectory } from './skill-package.ts';
 import {
@@ -950,7 +950,7 @@ export class Session implements FlueSession, AgentSubmissionSession {
 							const messageId = generateConversationEntryId();
 							const images = toolResult.content.flatMap((content, index) =>
 								content.type === 'image'
-									? [{ id: `att_tool_${toolResult.toolCallId}_${index}`, mimeType: content.mimeType, data: content.data }]
+									? [{ id: `att_${messageId}_${index}`, mimeType: content.mimeType, data: content.data }]
 									: [],
 							);
 							const refs = await this.persistCanonicalAttachments(images);
@@ -1123,6 +1123,18 @@ export class Session implements FlueSession, AgentSubmissionSession {
 					(entry) => entry.type === 'message' && entry.message.role === 'assistant' && entry.message.stopReason === 'toolUse',
 				);
 				if (assistant?.type === 'message') {
+					const repairedResultIds = toolRequest.toolCalls.map(
+						(toolCall) => `entry_tool_repair_${assistant.id}_${toolCall.id}`,
+					);
+					const repairedLeafId = repairedResultIds.at(-1);
+					if (
+						repairedLeafId &&
+						path.at(-1)?.id === repairedLeafId &&
+						repairedResultIds.every((entryId) => conversation.entries.has(entryId))
+					) {
+						await this.rebuildCanonicalContext();
+						return repairedLeafId;
+					}
 					const assistantIndex = path.findIndex((entry) => entry.id === assistant.id);
 					const knownResults = path.slice(assistantIndex + 1).filter(
 						(entry) => entry.type === 'message' && entry.message.role === 'toolResult',
@@ -1279,6 +1291,15 @@ export class Session implements FlueSession, AgentSubmissionSession {
 					)
 					: undefined;
 				if (!partial) return false;
+				const continuedEntryId = `entry_recovery_${partial.id}_stream_continued`;
+				if (
+					conversation?.activeLeafId === continuedEntryId &&
+					conversation.entries.has(`entry_recovery_${partial.id}_stream_interrupted`) &&
+					conversation.entries.has(continuedEntryId)
+				) {
+					await this.rebuildCanonicalContext();
+					return true;
+				}
 				let parentId = partial.id;
 				const records: ConversationRecord[] = [];
 				for (const signalType of ['stream_interrupted', 'stream_continued'] as const) {
@@ -1356,7 +1377,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 			await this.rebuildCanonicalContext();
 			return true;
 		}
-		return false;
 	}
 
 	async recordSubmissionTerminal(input: AgentSubmissionInterruption): Promise<void> {
@@ -2394,7 +2414,7 @@ export class Session implements FlueSession, AgentSubmissionSession {
 		const resultMessageId = generateConversationEntryId();
 		const refs = await this.persistCanonicalAttachments(
 				toolResult.content.flatMap((content, index) => content.type === 'image'
-					? [{ id: `att_tool_${toolCallId}_${index}`, mimeType: content.mimeType, data: content.data }]
+					? [{ id: `att_${resultMessageId}_${index}`, mimeType: content.mimeType, data: content.data }]
 					: []),
 		);
 		let imageIndex = 0;

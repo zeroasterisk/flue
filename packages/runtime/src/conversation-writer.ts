@@ -1,7 +1,4 @@
 import {
-	CONVERSATION_REDUCER_VERSION,
-	CONVERSATION_SNAPSHOT_VERSION,
-	encodeReducedInstanceState,
 	loadReducedConversationState,
 } from './conversation-reader.ts';
 import type {
@@ -105,18 +102,6 @@ export class ConversationRecordWriter {
 		return matches[0];
 	}
 
-	async saveSnapshot(): Promise<void> {
-		if (!this.snapshots || !this.reducedState) return;
-		await this.snapshots.save(this.path, {
-			version: CONVERSATION_SNAPSHOT_VERSION,
-			reducerVersion: CONVERSATION_REDUCER_VERSION,
-			streamOffset: this.reducedState.recordsThroughOffset,
-			streamIncarnation: this.claim.incarnation,
-			state: encodeReducedInstanceState(this.reducedState),
-			createdAt: new Date().toISOString(),
-		});
-	}
-
 	get offset(): string {
 		return this.reducedState?.recordsThroughOffset ?? this.claim.offset;
 	}
@@ -192,7 +177,6 @@ export class ConversationRecordWriter {
 				if (reduced) {
 					reduced.recordsThroughOffset = result.offset;
 					this.reducedState = reduced;
-					void this.saveSnapshot().catch(() => {});
 				}
 				return result;
 			} catch (firstError) {

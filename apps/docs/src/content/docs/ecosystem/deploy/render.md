@@ -57,9 +57,9 @@ Render ignores `sync: false` variables when updating an existing Blueprint, so r
 
 ## Persistence
 
-The Node target keeps agent sessions and accepted submissions in memory by default. That state is lost on every restart, deploy, and free-plan spin-down, and it is not shared across instances — an in-memory service that scales past one instance routes follow-up requests to processes that never saw the original session.
+The Node target keeps canonical agent conversations and accepted submissions in memory by default. That state is lost on every restart, deploy, and free-plan spin-down.
 
-For durable, shared session history, add a Render Postgres database to the Blueprint and wire its connection string into the web service with `fromDatabase`:
+For durable process or host replacement, add a Render Postgres database to the Blueprint and wire its connection string into the web service with `fromDatabase`. A shared database does not enable active-active ownership of one agent instance: route each instance to one live Node process and avoid overlapping owners during replacement.
 
 ```yaml title="render.yaml"
 databases:
