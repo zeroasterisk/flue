@@ -984,14 +984,32 @@ function resolveMessageAttachments(
 	if ((message.role !== 'user' && message.role !== 'toolResult') || !Array.isArray(message.content)) {
 		return message;
 	}
+	const attachments = [...(entry.attachmentRefs?.values() ?? [])];
+	let manifestProjected = false;
 	const content = message.content.map((block) => {
+		if (block.type === 'text' && !manifestProjected && attachments.length > 0) {
+			manifestProjected = true;
+			return { ...block, text: attachmentManifest(block.text, attachments) };
+		}
 		if (block.type !== 'image') return block;
 		const ref = entry.attachmentRefs?.get(block.data);
 		if (!ref) return block;
 		if (!options.resolveAttachment) throw new AttachmentNotAvailableError({ attachmentId: ref.id });
 		return { type: 'image' as const, ...options.resolveAttachment(ref) };
 	});
+	if (!manifestProjected && attachments.length > 0) {
+		content.unshift({ type: 'text', text: attachmentManifest('', attachments) });
+	}
 	return { ...message, content } as AgentMessage;
+}
+
+function attachmentManifest(text: string, attachments: readonly AttachmentRef[]): string {
+	if (attachments.length === 0) return text;
+	const manifest = attachments
+		.map((attachment) => `<image id="${attachment.id}" mimeType="${attachment.mimeType}" />`)
+		.join('\n');
+	const projection = `\n\n<attachments>\n${manifest}\n</attachments>`;
+	return text.endsWith(projection) ? text : `${text}${projection}`;
 }
 
 function isCompleteToolBatch(

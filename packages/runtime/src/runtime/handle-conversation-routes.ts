@@ -23,6 +23,7 @@ const SECURITY_HEADERS = {
 	'Cross-Origin-Resource-Policy': 'cross-origin',
 };
 const LONG_POLL_TIMEOUT_MS = 30_000;
+const DURABLE_POLL_INTERVAL_MS = 250;
 const SSE_HEARTBEAT_MS = 15_000;
 
 export async function handleAgentConversationRead(options: {
@@ -34,7 +35,7 @@ export async function handleAgentConversationRead(options: {
 	const view = url.searchParams.get('view') ?? 'history';
 	if (view === 'history') return historyResponse(options, selectorFrom(url));
 	if (view === 'updates') return updatesResponse(options, selectorFrom(url));
-	if (view === 'activity') return activityResponse(options);
+	if (view === 'activity') return activityResponse(options, selectorFrom(url));
 	return errorResponse(
 		new InvalidRequestError({ reason: 'Invalid agent conversation view. Use history, updates, or activity.' }),
 	);
@@ -118,20 +119,23 @@ async function updatesResponse(
 	});
 	let read = await options.store.read(options.path, { offset });
 	if (live === 'long-poll' && read.batches.length === 0 && !read.closed) {
-		const wait = await waitForData(options.store, options.path, options.request.signal);
-		if (wait === 'aborted') return new Response(null, { status: 499, headers: SECURITY_HEADERS });
-		if (wait === 'data') read = await options.store.read(options.path, { offset });
+		const waited = await waitForData(options.store, options.path, offset, options.request.signal);
+		if (waited === 'aborted') return new Response(null, { status: 499, headers: SECURITY_HEADERS });
+		read = waited;
 	}
 	const projected = projectRead(state, read, selector, false);
 	state = projected.state;
 	return dsJsonResponse(projected.items, read, projected.offset);
 }
 
-async function activityResponse(options: {
-	store: ConversationStreamStore;
-	path: string;
-	request: Request;
-}): Promise<Response> {
+async function activityResponse(
+	options: {
+		store: ConversationStreamStore;
+		path: string;
+		request: Request;
+	},
+	selector: AgentConversationSelector,
+): Promise<Response> {
 	const url = new URL(options.request.url);
 	if (url.searchParams.has('tail')) {
 		return errorResponse(new InvalidRequestError({ reason: 'Activity streams do not accept tail.' }));
@@ -143,21 +147,21 @@ async function activityResponse(options: {
 	const meta = await options.store.getMeta(options.path);
 	if (!meta) return errorResponse(new StreamNotFoundError({ path: options.path }));
 	if (live === 'sse') {
-		return sseResponse(options.store, options.path, offset, {}, options.request.signal, true);
+		return sseResponse(options.store, options.path, offset, selector, options.request.signal, true);
 	}
+	const state = await loadReducedConversationPrefix({
+		store: options.store,
+		path: options.path,
+		offset,
+	});
 	let read = await options.store.read(options.path, { offset });
 	if (live === 'long-poll' && read.batches.length === 0 && !read.closed) {
-		const wait = await waitForData(options.store, options.path, options.request.signal);
-		if (wait === 'aborted') return new Response(null, { status: 499, headers: SECURITY_HEADERS });
-		if (wait === 'data') read = await options.store.read(options.path, { offset });
+		const waited = await waitForData(options.store, options.path, offset, options.request.signal);
+		if (waited === 'aborted') return new Response(null, { status: 499, headers: SECURITY_HEADERS });
+		read = waited;
 	}
-	return dsJsonResponse(
-		read.batches.flatMap((batch) =>
-			batch.records.map((record) => ({ v: 1, type: 'conversation_activity', record })),
-		),
-		read,
-		read.nextOffset,
-	);
+	const projected = projectRead(state, read, selector, true);
+	return dsJsonResponse(projected.items, read, projected.offset);
 }
 
 function projectRead(
@@ -174,7 +178,14 @@ function projectRead(
 		state = reduceConversationRecords(state, batch.records, batch.offset);
 		items.push(
 			...(raw
-				? batch.records.map((record) => ({ v: 1, type: 'conversation_activity', record }))
+				? batch.records
+						.filter(
+							(record) =>
+								record.conversationId ===
+								(projectAgentConversationSnapshot(state, selector)?.conversationId ??
+									projectAgentConversationSnapshot(previousState, selector)?.conversationId),
+						)
+						.map((record) => ({ v: 1, type: 'conversation_activity', record }))
 				: projectAgentConversationBatch({
 						state,
 						previousState,
@@ -308,27 +319,45 @@ function liveMode(url: URL): 'long-poll' | 'sse' | null | Response {
 	);
 }
 
-function waitForData(
+async function waitForData(
 	store: ConversationStreamStore,
 	path: string,
+	offset: string,
 	signal: AbortSignal,
-): Promise<'data' | 'timeout' | 'aborted'> {
-	return new Promise((resolve) => {
-		if (signal.aborted) return resolve('aborted');
-		let settled = false;
-		const finish = (value: 'data' | 'timeout' | 'aborted') => {
-			if (settled) return;
-			settled = true;
-			unsubscribe();
-			clearTimeout(timer);
-			signal.removeEventListener('abort', onAbort);
-			resolve(value);
-		};
-		const unsubscribe = store.subscribe(path, () => finish('data'));
-		const timer = setTimeout(() => finish('timeout'), LONG_POLL_TIMEOUT_MS);
-		const onAbort = () => finish('aborted');
-		signal.addEventListener('abort', onAbort, { once: true });
+): Promise<ConversationStreamReadResult | 'aborted'> {
+	if (signal.aborted) return 'aborted';
+	const deadline = Date.now() + LONG_POLL_TIMEOUT_MS;
+	let pending = false;
+	let wake: (() => void) | undefined;
+	const unsubscribe = store.subscribe(path, () => {
+		pending = true;
+		wake?.();
 	});
+	const onAbort = () => wake?.();
+	signal.addEventListener('abort', onAbort, { once: true });
+	try {
+		while (true) {
+			pending = false;
+			const read = await store.read(path, { offset });
+			if (signal.aborted) return 'aborted';
+			if (read.batches.length > 0 || read.closed || Date.now() >= deadline) return read;
+			if (pending) continue;
+			await new Promise<void>((resolve) => {
+				let timer: ReturnType<typeof setTimeout>;
+				const finish = () => {
+					clearTimeout(timer);
+					resolve();
+				};
+				wake = finish;
+				timer = setTimeout(finish, Math.min(DURABLE_POLL_INTERVAL_MS, deadline - Date.now()));
+				if (pending || signal.aborted) finish();
+			});
+			wake = undefined;
+		}
+	} finally {
+		unsubscribe();
+		signal.removeEventListener('abort', onAbort);
+	}
 }
 
 function errorResponse(error: InvalidRequestError | StreamNotFoundError): Response {

@@ -8,6 +8,7 @@ import {
 } from '@earendil-works/pi-ai';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { projectConversationUi } from '../src/conversation-projections.ts';
 import { ConversationRecordWriter } from '../src/conversation-writer.ts';
 import {
 	defineAgent,
@@ -881,6 +882,103 @@ describe('session.task()', () => {
 		} finally {
 			stopObserving();
 		}
+	});
+
+	it('keeps ordinary prompt text canonical while projecting the attachment manifest to the model', async () => {
+		const provider = createProvider([{ id: 'reviewer' }]);
+		const store = new InMemoryConversationStreamStore();
+		const attachments = new InMemoryAttachmentStore();
+		const writer = await ConversationRecordWriter.create({
+			store,
+			path: 'agents/assistant/canonical-prompt-instance',
+			identity: { agentName: 'assistant', instanceId: 'canonical-prompt-instance' },
+			producerId: 'producer-1',
+		});
+		let modelText = '';
+		provider.setResponses([(context) => {
+			const prompt = context.messages[0];
+			modelText = prompt && Array.isArray(prompt.content)
+				? prompt.content.find((block) => block.type === 'text')?.text ?? ''
+				: '';
+			return fauxAssistantMessage('Done.');
+		}]);
+		const ctx = createFlueContext({
+			id: 'canonical-prompt-instance',
+			env: {},
+			agentConfig: { resolveModel: () => provider.getModel('reviewer') },
+			createDefaultEnv: async () => createNoopSessionEnv(),
+			conversationWriter: writer,
+			attachmentStore: attachments,
+		});
+		const harness = await ctx.initializeRootHarness(
+			defineAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
+		);
+		const session = await harness.session();
+
+		await session.prompt('Inspect this image.', {
+			images: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }],
+		});
+
+		const conversation = await writer.getConversation(session.conversationId);
+		if (!conversation) throw new Error('Expected conversation.');
+		expect(projectConversationUi(conversation, writer.offset).messages[0]?.parts).toEqual([
+			{ type: 'text', text: 'Inspect this image.', state: 'done' },
+			{ type: 'attachment', attachment: expect.objectContaining({ id: expect.stringMatching(/^att_prompt_/), mimeType: 'image/png' }) },
+		]);
+		expect(modelText).toMatch(/^Inspect this image\.\n\n<attachments>\n<image id="att_prompt_[^"]+" mimeType="image\/png" \/>\n<\/attachments>$/);
+	});
+
+	it('projects equivalent attachment context for direct input and restart replay', async () => {
+		const provider = createProvider([{ id: 'reviewer' }]);
+		const store = new InMemoryConversationStreamStore();
+		const attachments = new InMemoryAttachmentStore();
+		const writer = await ConversationRecordWriter.create({
+			store,
+			path: 'agents/assistant/direct-replay-instance',
+			identity: { agentName: 'assistant', instanceId: 'direct-replay-instance' },
+			producerId: 'producer-1',
+		});
+		const contexts: unknown[] = [];
+		provider.setResponses([
+			(context) => {
+				contexts.push(context.messages[0]);
+				return fauxAssistantMessage('First response.');
+			},
+			(context) => {
+				contexts.push(context.messages[0]);
+				return fauxAssistantMessage('Second response.');
+			},
+		]);
+		const createContextForWriter = () => createFlueContext({
+			id: 'direct-replay-instance',
+			env: {},
+			agentConfig: { resolveModel: () => provider.getModel('reviewer') },
+			createDefaultEnv: async () => createNoopSessionEnv(),
+			conversationWriter: writer,
+			attachmentStore: attachments,
+		});
+		const firstHarness = await createContextForWriter().initializeRootHarness(
+			defineAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
+		);
+		const firstInternal = getInternalSession(await firstHarness.session());
+		if (!firstInternal) throw new Error('Expected internal session.');
+		await firstInternal.processSubmissionInput({
+			kind: 'direct',
+			submissionId: 'direct-image',
+			agent: 'assistant',
+			id: 'direct-replay-instance',
+			payload: {
+				message: 'Inspect direct image.',
+				images: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }],
+			},
+			acceptedAt: new Date().toISOString(),
+		});
+		const secondHarness = await createContextForWriter().initializeRootHarness(
+			defineAgent(() => ({ model: `${provider.getModel().provider}/reviewer` })),
+		);
+		await (await secondHarness.session()).prompt('Continue after restart.');
+
+		expect(contexts[1]).toEqual(contexts[0]);
 	});
 
 	it('passes a visible parent image to the child when the task tool receives its attachment ID', async () => {

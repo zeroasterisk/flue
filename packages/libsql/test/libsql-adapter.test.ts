@@ -14,7 +14,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PersistedSchemaVersionError } from '@flue/runtime/adapter';
+import { ConversationStreamStoreError, PersistedSchemaVersionError } from '@flue/runtime/adapter';
 import {
 	defineAttachmentStoreContractTests,
 	defineConversationStreamStoreContractTests,
@@ -183,6 +183,28 @@ function createLibsqlRunner(
 }
 
 // ─── Adapter factory tests ──────────────────────────────────────────────────
+
+describe('LibsqlConversationStreamStore', () => {
+	it('reports structured identity conflicts when creating an existing path', async () => {
+		const adapter = libsql(createLibsqlRunner());
+		await adapter.migrate?.();
+		const stream = (await adapter.connect()).conversationStreamStore;
+		if (!stream) throw new Error('Expected libSQL conversation stream store.');
+		await stream.createStream('agents/echo/1', { agentName: 'echo', instanceId: '1' });
+
+		const error = await stream
+			.createStream('agents/echo/1', { agentName: 'echo', instanceId: '2' })
+			.catch((caught: unknown) => caught);
+
+		expect(error).toBeInstanceOf(ConversationStreamStoreError);
+		expect((error as ConversationStreamStoreError).meta).toEqual({
+			operation: 'create',
+			path: 'agents/echo/1',
+			reason: 'Stream identity conflicts.',
+		});
+		await adapter.close?.();
+	});
+});
 
 describe('libsql() PersistenceAdapter', () => {
 	it('creates a store and closes cleanly via libsql', async () => {

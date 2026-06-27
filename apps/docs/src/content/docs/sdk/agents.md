@@ -3,7 +3,7 @@ title: client.agents
 description: Invoke persistent agent instances and read their conversations.
 ---
 
-Direct agent APIs interact with persistent agent instances. They use an agent name and instance id. Each agent instance is a single conversation. Direct agent interactions do not create workflow runs and do not emit `runId`.
+Direct agent APIs interact with persistent agent instances. They use an agent name and instance id; conversation selectors can address a harness and session within that instance. Direct agent interactions do not create workflow runs and do not emit `runId`.
 
 ## `client.agents.prompt(...)`
 

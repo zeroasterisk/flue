@@ -178,6 +178,9 @@ export function createNodeAgentCoordinator(options: {
 				path,
 				identity: { agentName: input.agent, instanceId: input.id },
 				producerId: ownerId,
+				onFailed: () => {
+					if (conversationWriters.get(path) === writer) conversationWriters.delete(path);
+				},
 			});
 			conversationWriters.set(path, writer);
 			void writer.catch(() => {

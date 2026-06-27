@@ -202,6 +202,47 @@ describe('createCloudflareAgentRuntime()', () => {
 		});
 	});
 
+	it('recovers on the same coordinator after writer creation fails', async () => {
+		const { storage } = makeFakeSql();
+		const recovery = makeRecoveryContext({ inspection: 'absent' });
+		const runtime = makeRuntime({
+			createdAgent: {} as never,
+			createContext: () => recovery.ctx,
+		});
+		const instance = makeInstance(storage);
+		const prepared = runtime.prepare({
+			storage: instance.ctx.storage,
+			className: 'FlueAssistantAgent',
+			agentName: 'assistant',
+		});
+		const acquireProducer = prepared.conversationStreamStore.acquireProducer.bind(
+			prepared.conversationStreamStore,
+		);
+		let failCreation = true;
+		prepared.conversationStreamStore.acquireProducer = async (...args) => {
+			if (failCreation) {
+				failCreation = false;
+				throw new Error('transient writer creation failure');
+			}
+			return acquireProducer(...args);
+		};
+		runtime.attach(instance, prepared);
+		await prepared.executionStore.submissions.admitDirect(directInput());
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await runtime.onStart(instance, () => {});
+		await runtime.onStart(instance, () => {});
+
+		expect(consoleError).toHaveBeenCalledWith(
+			'[flue:submission-reconciliation]',
+			expect.objectContaining({ operation: 'materialize_submission' }),
+			expect.any(Error),
+		);
+		expect(await prepared.executionStore.submissions.getSubmission('direct-1')).toMatchObject({
+			canonicalReadyAt: expect.any(Number),
+		});
+	});
+
 	it('restores a pending wake before inherited startup when unsettled work exists', async () => {
 		const events: string[] = [];
 		const { storage } = makeFakeSql();

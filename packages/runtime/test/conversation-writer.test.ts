@@ -117,6 +117,38 @@ describe('ConversationRecordWriter', () => {
 		vi.useRealTimers();
 	});
 
+	it('notifies its owner once when an append generation becomes terminal', async () => {
+		const failure = new Error('adapter failed');
+		const base = new InMemoryConversationStreamStore();
+		const store: ConversationStreamStore = {
+			...base,
+			createStream: base.createStream.bind(base),
+			acquireProducer: base.acquireProducer.bind(base),
+			append: async () => {
+				throw failure;
+			},
+			read: base.read.bind(base),
+			getMeta: base.getMeta.bind(base),
+			close: base.close.bind(base),
+			delete: base.delete.bind(base),
+			subscribe: base.subscribe.bind(base),
+		};
+		const onFailed = vi.fn();
+		const writer = await ConversationRecordWriter.create({
+			store,
+			path: 'agents/assistant/instance-terminal',
+			identity: { agentName: 'assistant', instanceId: 'instance-terminal' },
+			producerId: 'producer-1',
+			onFailed,
+		});
+
+		await expect(writer.append([userRecord('record-1')])).rejects.toBe(failure);
+		await expect(writer.append([userRecord('record-2')])).rejects.toBe(failure);
+		expect(writer.failed).toBe(true);
+		expect(onFailed).toHaveBeenCalledOnce();
+		expect(onFailed).toHaveBeenCalledWith(writer);
+	});
+
 	it('preserves successful append and batched flush behavior', async () => {
 		vi.useFakeTimers();
 		const store = new InMemoryConversationStreamStore();

@@ -5,7 +5,14 @@ import type {
 	ConversationStreamReadResult,
 	ConversationStreamStore,
 } from '@flue/runtime/adapter';
-import { clampLimit, DEFAULT_READ_LIMIT, formatOffset, MAX_READ_LIMIT, parseOffset } from '@flue/runtime/adapter';
+import {
+	ConversationStreamStoreError,
+	clampLimit,
+	DEFAULT_READ_LIMIT,
+	formatOffset,
+	MAX_READ_LIMIT,
+	parseOffset,
+} from '@flue/runtime/adapter';
 import type { LibsqlQuery, LibsqlRunner } from './libsql-adapter.ts';
 
 export class LibsqlConversationStreamStore implements ConversationStreamStore {
@@ -18,7 +25,7 @@ export class LibsqlConversationStreamStore implements ConversationStreamStore {
 		await this.runner.transaction(async (tx) => {
 			const rows = await tx.query('SELECT identity_json FROM flue_conversation_streams WHERE path = ?', [path]);
 			if (rows[0]) {
-				if (rows[0].identity_json !== data) throw failure(path, 'Stream identity conflicts.');
+				if (rows[0].identity_json !== data) throw failure(path, 'Stream identity conflicts.', 'create');
 				return;
 			}
 			await tx.query('INSERT INTO flue_conversation_streams (path, identity_json, incarnation) VALUES (?, ?, ?)', [path, data, crypto.randomUUID()]);
@@ -34,7 +41,7 @@ export class LibsqlConversationStreamStore implements ConversationStreamStore {
 				[producerId, path],
 			);
 			const row = rows[0];
-			if (!row) throw failure(path, 'Stream does not exist or is closed.');
+			if (!row) throw failure(path, 'Stream does not exist or is closed.', 'acquire_producer');
 			return {
 				producerId,
 				producerEpoch: Number(row.producer_epoch),
@@ -108,7 +115,7 @@ export class LibsqlConversationStreamStore implements ConversationStreamStore {
 		const rawOffset = options?.offset ?? '-1';
 		if (rawOffset === 'now') return { batches: [], nextOffset: meta.nextOffset, upToDate: true, closed: meta.closed };
 		const startAfter = parseOffset(rawOffset);
-		if (!Number.isSafeInteger(startAfter) || startAfter > parseOffset(meta.nextOffset)) throw failure(path, 'Read offset is beyond the canonical stream head.');
+		if (!Number.isSafeInteger(startAfter) || startAfter > parseOffset(meta.nextOffset)) throw failure(path, 'Read offset is beyond the canonical stream head.', 'read');
 		const limit = clampLimit(options?.limit, DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
 		const rows = await this.runner.query(
 			`SELECT seq, data FROM flue_conversation_stream_batches
@@ -206,6 +213,10 @@ function parseSessionInstance(value: unknown): string | undefined {
 	} catch { return undefined; }
 }
 
-function failure(path: string, reason: string): TypeError {
-	return new TypeError(`[flue] Canonical conversation stream "${path}" failed: ${reason}`);
+function failure(
+	path: string,
+	reason: string,
+	operation = 'append',
+): ConversationStreamStoreError {
+	return new ConversationStreamStoreError({ operation, path, reason });
 }

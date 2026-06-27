@@ -2380,17 +2380,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 		return available;
 	}
 
-	private attachmentManifest(
-		text: string,
-		attachments: readonly import('./conversation-records.ts').AttachmentRef[],
-	): string {
-		if (attachments.length === 0) return text;
-		const manifest = attachments
-			.map((attachment) => `<image id="${attachment.id}" mimeType="${attachment.mimeType}" />`)
-			.join('\n');
-		return `${text}\n\n<attachments>\n${manifest}\n</attachments>`;
-	}
-
 	private async persistCanonicalAttachments(
 		attachments: ReadonlyArray<{ id: string; mimeType: string; data: string }>,
 	): Promise<import('./conversation-records.ts').AttachmentRef[]> {
@@ -3242,37 +3231,49 @@ export class Session implements FlueSession, AgentSubmissionSession {
 			},
 			async ({ resolvedModel }) => {
 				const beforeLeafId = await this.conversationWriter.getConversationLeaf(this.conversationId);
-				let canonicalPromptText = args.promptText;
-				{
-					const messageId = generateConversationEntryId();
-					const refs = await this.persistCanonicalAttachments(
-						(args.images ?? []).map((image, index) => ({
-							id: `att_prompt_${messageId}_${index}`,
-							mimeType: image.mimeType,
-							data: image.data,
-						})),
-					);
-					canonicalPromptText = this.attachmentManifest(args.promptText, refs);
-					await this.appendCanonical([{
-						...this.canonicalEnvelope('user_message'),
-						type: 'user_message',
-						messageId,
-						parentId: beforeLeafId,
-						content: [
-							{ type: 'text', text: canonicalPromptText },
-							...refs.map((attachment) => ({ type: 'attachment' as const, attachment })),
-						],
-					}]);
+				const messageId = generateConversationEntryId();
+				const refs = await this.persistCanonicalAttachments(
+					(args.images ?? []).map((image, index) => ({
+						id: `att_prompt_${messageId}_${index}`,
+						mimeType: image.mimeType,
+						data: image.data,
+					})),
+				);
+				await this.appendCanonical([{
+					...this.canonicalEnvelope('user_message'),
+					type: 'user_message',
+					messageId,
+					parentId: beforeLeafId,
+					content: [
+						{ type: 'text', text: args.promptText },
+						...refs.map((attachment) => ({ type: 'attachment' as const, attachment })),
+					],
+				}]);
+				await this.rebuildCanonicalContext();
+				const projectedPrompt = this.agentLoop.state.messages.pop();
+				if (projectedPrompt?.role !== 'user') {
+					throw new Error('[flue] Canonical prompt projection is missing its user message.');
 				}
+				this.agentLoopMessageCheckpointCursor = this.agentLoop.state.messages.length;
+				const projectedContent = Array.isArray(projectedPrompt.content)
+					? projectedPrompt.content
+					: [{ type: 'text' as const, text: projectedPrompt.content }];
+				const projectedText = projectedContent
+					.filter((block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text')
+					.map((block) => block.text)
+					.join('\n');
+				const projectedImages = projectedContent.filter(
+					(block): block is ImageContent => block.type === 'image',
+				);
 				const model: PromptModel = { provider: resolvedModel.provider, id: resolvedModel.id };
 
 				if (resultBundle) {
 					const result = await this.runWithResultTools(
-						canonicalPromptText,
+						projectedText,
+						projectedImages,
 						resultBundle,
 						args.errorLabel,
 						args.signal,
-						args.images,
 					);
 					return {
 						data: result,
@@ -3282,7 +3283,7 @@ export class Session implements FlueSession, AgentSubmissionSession {
 				}
 
 				await this.runModelTurnWithRecovery({
-					start: () => this.agentLoop.prompt(canonicalPromptText, args.images),
+					start: () => this.agentLoop.prompt(projectedText, projectedImages),
 					signal: args.signal,
 				});
 				this.throwIfError(args.errorLabel);
@@ -3309,19 +3310,19 @@ export class Session implements FlueSession, AgentSubmissionSession {
 	 */
 	private async runWithResultTools<T>(
 		initialPrompt: string,
+		initialImages: ImageContent[],
 		bundle: ResultToolBundle<T>,
 		errorLabel: string,
 		signal: AbortSignal,
-		initialImages?: ImageContent[],
 	): Promise<T> {
-		let nextPrompt: string = initialPrompt;
 		const MAX_FOLLOWUPS = 32;
 		for (let attempt = 0; attempt <= MAX_FOLLOWUPS; attempt++) {
 			if (signal.aborted) throw abortErrorFor(signal);
-			// Images attach only on the first turn — retry follow-ups carry text
-			// only, so we don't re-bill image bytes on every result-tool retry.
 			await this.runModelTurnWithRecovery({
-				start: () => this.agentLoop.prompt(nextPrompt, attempt === 0 ? initialImages : undefined),
+				start: () => this.agentLoop.prompt(
+					attempt === 0 ? initialPrompt : buildResultFollowUpPrompt(),
+					attempt === 0 ? initialImages : undefined,
+				),
 				signal,
 			});
 			this.throwIfError(errorLabel);
@@ -3333,8 +3334,6 @@ export class Session implements FlueSession, AgentSubmissionSession {
 			if (outcome.type === 'gave_up') {
 				throw new ResultUnavailableError(outcome.reason, this.getAssistantText());
 			}
-			// outcome.type === 'pending' → nudge the model and try again.
-			nextPrompt = buildResultFollowUpPrompt();
 		}
 		throw new ResultUnavailableError(
 			`Agent did not call \`finish\` or \`give_up\` after ${MAX_FOLLOWUPS + 1} attempts.`,

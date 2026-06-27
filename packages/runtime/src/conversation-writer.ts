@@ -51,6 +51,7 @@ export class ConversationRecordWriter {
 		private readonly store: ConversationStreamStore,
 		readonly path: string,
 		private claim: ConversationProducerClaim,
+		private readonly onFailed?: (writer: ConversationRecordWriter) => void,
 	) {
 		this.nextProducerSequence = claim.nextProducerSequence;
 	}
@@ -60,10 +61,11 @@ export class ConversationRecordWriter {
 		path: string;
 		identity: ConversationStreamIdentity;
 		producerId: string;
+		onFailed?: (writer: ConversationRecordWriter) => void;
 	}): Promise<ConversationRecordWriter> {
 		await options.store.createStream(options.path, options.identity);
 		const claim = await options.store.acquireProducer(options.path, options.producerId);
-		return new ConversationRecordWriter(options.store, options.path, claim);
+		return new ConversationRecordWriter(options.store, options.path, claim, options.onFailed);
 	}
 
 	async loadReducedState(): Promise<ReducedInstanceState> {
@@ -113,6 +115,10 @@ export class ConversationRecordWriter {
 
 	get offset(): string {
 		return this.reducedState?.recordsThroughOffset ?? this.claim.offset;
+	}
+
+	get failed(): boolean {
+		return this.lifecycle.status === 'failed';
 	}
 
 	append(
@@ -249,6 +255,7 @@ export class ConversationRecordWriter {
 	private fail(error: unknown): unknown {
 		if (this.lifecycle.status === 'failed') return this.lifecycle.error;
 		this.lifecycle = { status: 'failed', error };
+		this.onFailed?.(this);
 		if (this.pendingTimer) clearTimeout(this.pendingTimer);
 		this.pendingTimer = undefined;
 		this.pendingRecords = [];

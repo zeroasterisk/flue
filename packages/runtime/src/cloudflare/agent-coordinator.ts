@@ -179,6 +179,7 @@ class CloudflareAgentCoordinator {
 	) {}
 
 	private conversationWriter: ConversationRecordWriter | undefined;
+	private conversationWriterCreation: Promise<ConversationRecordWriter> | undefined;
 	private conversationMaterialization: Promise<void> = Promise.resolve();
 
 	async onStart(inherited: () => Promise<unknown> | unknown): Promise<void> {
@@ -254,13 +255,29 @@ class CloudflareAgentCoordinator {
 	}
 
 	private async ensureConversationWriter(): Promise<ConversationRecordWriter> {
-		this.conversationWriter ??= await ConversationRecordWriter.create({
-			store: this.prepared.conversationStreamStore,
-			path: agentStreamPath(this.agentName, this.instance.name),
-			identity: { agentName: this.agentName, instanceId: this.instance.name },
-			producerId: this.instance.ctx.id.toString(),
-		});
-		return this.conversationWriter;
+		if (this.conversationWriter && !this.conversationWriter.failed) return this.conversationWriter;
+		if (!this.conversationWriterCreation) {
+			const creation = ConversationRecordWriter.create({
+				store: this.prepared.conversationStreamStore,
+				path: agentStreamPath(this.agentName, this.instance.name),
+				identity: { agentName: this.agentName, instanceId: this.instance.name },
+				producerId: this.instance.ctx.id.toString(),
+				onFailed: (writer) => {
+					if (this.conversationWriter === writer) this.conversationWriter = undefined;
+				},
+			});
+			this.conversationWriterCreation = creation;
+			void creation.then(
+				(writer) => {
+					if (!writer.failed) this.conversationWriter = writer;
+					if (this.conversationWriterCreation === creation) this.conversationWriterCreation = undefined;
+				},
+				() => {
+					if (this.conversationWriterCreation === creation) this.conversationWriterCreation = undefined;
+				},
+			);
+		}
+		return this.conversationWriterCreation;
 	}
 
 	private createContext(

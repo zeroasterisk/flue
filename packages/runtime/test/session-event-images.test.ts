@@ -61,18 +61,21 @@ describe('session event image redaction', () => {
 		});
 
 		expect(JSON.stringify(events)).not.toContain(IMAGE_BYTES);
-		const userMessageEnd = events
-			.filter(
-				(event): event is Extract<FlueEvent, { type: 'message_end' }> =>
-					event.type === 'message_end',
-			)
-			.map((event) => event.message)
-			.find(
-				(message): message is Extract<AgentMessage, { role: 'user' }> => message.role === 'user',
-			);
-		expect(userMessageEnd?.content).toContainEqual(
+		const userMessageStart = events.find(
+			(event): event is Extract<FlueEvent, { type: 'message_start' }> =>
+				event.type === 'message_start' && event.message.role === 'user',
+		);
+		const userMessageEnd = events.find(
+			(event): event is Extract<FlueEvent, { type: 'message_end' }> =>
+				event.type === 'message_end' && event.message.role === 'user',
+		);
+		expect((userMessageStart?.message as Extract<AgentMessage, { role: 'user' }> | undefined)?.content).toContainEqual(
 			expect.objectContaining({ type: 'image', data: IMAGE_DATA_OMITTED, mimeType: 'image/png' }),
 		);
+		expect((userMessageEnd?.message as Extract<AgentMessage, { role: 'user' }> | undefined)?.content).toContainEqual(
+			expect.objectContaining({ type: 'image', data: IMAGE_DATA_OMITTED, mimeType: 'image/png' }),
+		);
+		expect(events.indexOf(userMessageStart as FlueEvent)).toBeLessThan(events.indexOf(userMessageEnd as FlueEvent));
 		const agentEnd = events.find(
 			(event): event is Extract<FlueEvent, { type: 'agent_end' }> => event.type === 'agent_end',
 		);

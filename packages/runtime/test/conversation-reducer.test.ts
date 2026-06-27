@@ -647,7 +647,7 @@ describe('reduceConversationRecords()', () => {
 		).toThrow(ConversationRecordInvariantError);
 	});
 
-	it('preserves attachment integrity metadata for UI and model resolution', () => {
+	it('keeps authored attachment text canonical and projects the manifest only for the model', () => {
 		const created = required(canonicalConversation()[0]);
 		const attachment = { id: 'att_01', mimeType: 'image/png', size: 42, digest: 'sha256:test' };
 		const state = reduceConversationRecords(createReducedInstanceState(), [created, {
@@ -657,11 +657,15 @@ describe('reduceConversationRecords()', () => {
 			timestamp: '2026-06-25T00:00:01.000Z',
 			messageId: 'entry_attachment',
 			parentId: null,
-			content: [{ type: 'attachment', attachment }],
+			content: [
+				{ type: 'text', text: 'Inspect this image.' },
+				{ type: 'attachment', attachment },
+			],
 		}], '2');
 		const conversation = required(state.conversations.get('conv_01'));
 
 		expect(projectConversationUi(conversation, '2').messages[0]?.parts).toEqual([
+			{ type: 'text', text: 'Inspect this image.', state: 'done' },
 			{ type: 'attachment', attachment },
 		]);
 		expect(
@@ -671,7 +675,45 @@ describe('reduceConversationRecords()', () => {
 					return { data: 'base64', mimeType: ref.mimeType };
 				},
 			}),
-		).toMatchObject([{ role: 'user', content: [{ type: 'image', data: 'base64', mimeType: 'image/png' }] }]);
+		).toMatchObject([{
+			role: 'user',
+			content: [
+				{
+					type: 'text',
+					text: 'Inspect this image.\n\n<attachments>\n<image id="att_01" mimeType="image/png" />\n</attachments>',
+				},
+				{ type: 'image', data: 'base64', mimeType: 'image/png' },
+			],
+		}]);
+	});
+
+	it('projects a legacy authored attachment manifest only once', () => {
+		const created = required(canonicalConversation()[0]);
+		const attachment = { id: 'att_legacy', mimeType: 'image/png', size: 42, digest: 'sha256:test' };
+		const text = 'Inspect this image.\n\n<attachments>\n<image id="att_legacy" mimeType="image/png" />\n</attachments>';
+		const state = reduceConversationRecords(createReducedInstanceState(), [created, {
+			...scope,
+			id: 'record_legacy_attachment_user',
+			type: 'user_message',
+			timestamp: '2026-06-25T00:00:01.000Z',
+			messageId: 'entry_legacy_attachment',
+			parentId: null,
+			content: [
+				{ type: 'text', text },
+				{ type: 'attachment', attachment },
+			],
+		}], '2');
+		const conversation = required(state.conversations.get('conv_01'));
+
+		expect(buildConversationContext(conversation, {
+			resolveAttachment: () => ({ data: 'base64', mimeType: 'image/png' }),
+		})).toMatchObject([{
+			role: 'user',
+			content: [
+				{ type: 'text', text },
+				{ type: 'image', data: 'base64', mimeType: 'image/png' },
+			],
+		}]);
 	});
 
 	it('rejects implicit branching when an entry parent is not the active leaf', () => {

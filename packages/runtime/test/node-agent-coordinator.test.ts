@@ -19,6 +19,7 @@ import {
 	type NodeAgentCoordinator,
 } from '../src/node/agent-coordinator.ts';
 import { sqlite } from '../src/node/agent-execution-store.ts';
+import type { ConversationStreamStore } from '../src/runtime/conversation-stream-store.ts';
 import { agentStreamPath } from '../src/runtime/event-stream-store.ts';
 import type { CreateAgentContextFn } from '../src/runtime/handle-agent.ts';
 import { generateSessionAffinityKey } from '../src/runtime/ids.ts';
@@ -290,6 +291,56 @@ describe('NodeAgentCoordinator', () => {
 			const submission = await executionStore.submissions.getSubmission(input.dispatchId);
 			expect(submission).toMatchObject({ status: 'settled', kind: 'dispatch' });
 			expect(submission?.error).toBeUndefined();
+		});
+
+		it('recovers on the same coordinator after a terminal append generation fails', async () => {
+			const dbPath = createTempDbPath();
+			const adapter = sqlite(dbPath);
+			await adapter.migrate?.();
+			const { executionStore, conversationStreamStore, attachmentStore } = await adapter.connect();
+			const provider = createFauxProvider();
+			provider.setResponses([fauxAssistantMessage('Recovered admission.')]);
+			const append = conversationStreamStore.append.bind(conversationStreamStore);
+			let remainingFailures = 2;
+			const failingStore: ConversationStreamStore = {
+				...conversationStreamStore,
+				createStream: conversationStreamStore.createStream.bind(conversationStreamStore),
+				acquireProducer: conversationStreamStore.acquireProducer.bind(conversationStreamStore),
+				append: async (input) => {
+					if (remainingFailures-- > 0) throw new Error('transient append failure');
+					return append(input);
+				},
+				read: conversationStreamStore.read.bind(conversationStreamStore),
+				getMeta: conversationStreamStore.getMeta.bind(conversationStreamStore),
+				close: conversationStreamStore.close.bind(conversationStreamStore),
+				delete: conversationStreamStore.delete.bind(conversationStreamStore),
+				subscribe: conversationStreamStore.subscribe.bind(conversationStreamStore),
+			};
+			const coordinator = createNodeAgentCoordinator({
+				submissions: executionStore.submissions,
+				agents: [{
+					name: 'assistant',
+					definition: defineAgent(() => ({
+						model: `${provider.getModel().provider}/${provider.getModel().id}`,
+					})),
+				}],
+				createContext: makeFauxCreateContext(provider, executionStore),
+				conversationStreamStore: failingStore,
+				attachmentStore,
+			});
+			const input = makeDispatchInput({ dispatchId: 'dispatch-writer-recovery' });
+
+			await expect(coordinator.admitDispatch(input)).rejects.toThrow('transient append failure');
+			await coordinator.reconcileSubmissions();
+
+			expect(await executionStore.submissions.getSubmission(input.dispatchId)).toMatchObject({
+				status: 'settled',
+				canonicalReadyAt: expect.any(Number),
+			});
+			const records = (await conversationStreamStore.read(agentStreamPath('assistant', 'instance-1')))
+				.batches.flatMap((batch) => batch.records);
+			expect(records.filter((record) => record.type === 'conversation_created')).toHaveLength(1);
+			expect(records.filter((record) => record.type === 'signal')).toHaveLength(1);
 		});
 
 		it('recovers an admitted submission whose canonical readiness was not marked', async () => {
