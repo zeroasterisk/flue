@@ -36,6 +36,32 @@ describe('createFlueClient', () => {
 		});
 	});
 
+	describe('default global fetch', () => {
+		it('calls the global fetch with the correct receiver in a browser-like global', async () => {
+			// Regression for "Illegal invocation" in browsers: when no custom fetch
+			// is supplied, the SDK must invoke the global `fetch` with `globalThis`
+			// as its receiver, not the HttpClient instance.
+			const original = globalThis.fetch;
+			let calledWithCorrectReceiver = false;
+			globalThis.fetch = function (this: unknown) {
+				if (this !== globalThis) {
+					throw new TypeError("Failed to execute 'fetch': Illegal invocation");
+				}
+				calledWithCorrectReceiver = true;
+				return Promise.resolve(Response.json({ result: { ok: true } }));
+			} as typeof fetch;
+			try {
+				const client = createFlueClient({ baseUrl: 'https://flue.test' });
+				await expect(
+					client.agents.prompt('hello', 'inst-1', { message: 'hi' }),
+				).resolves.toEqual({ result: { ok: true } });
+				expect(calledWithCorrectReceiver).toBe(true);
+			} finally {
+				globalThis.fetch = original;
+			}
+		});
+	});
+
 	describe('agents.send()', () => {
 		it('sends images in the accepted prompt body', async () => {
 			const seen: Request[] = [];
