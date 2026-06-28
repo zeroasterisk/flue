@@ -89,6 +89,12 @@ export interface NodeRuntime extends RuntimeBase {
 		agentName: string,
 		instanceId: string,
 	) => AttachedAgentSubmissionAdmission;
+	/**
+	 * Abort all in-flight and queued durable work for an agent instance.
+	 * Resolves `true` when there was unsettled work to abort. Terminal
+	 * settlement (the distinct aborted outcome) happens asynchronously.
+	 */
+	abortAgentInstance: (agentName: string, instanceId: string) => Promise<boolean>;
 	runStore: RunStore;
 	eventStreamStore: EventStreamStore;
 	conversationStreamStore: ConversationStreamStore;
@@ -273,6 +279,9 @@ export function flue(): Hono {
 		validated('query', InvocationQuerySchema),
 		agentRouteHandler,
 	);
+	// Abort all in-flight/queued work for an agent instance. A distinct (longer)
+	// path, so it never collides with the agent prompt/stream routes above.
+	app.all('/agents/:name/:id/abort', abortRouteHandler);
 	// Opt-in attachment byte download. A distinct (longer) path, so it never
 	// collides with the agent prompt/stream routes above.
 	app.all('/agents/:name/:id/attachments/:attachmentId', attachmentsRouteHandler);
@@ -469,6 +478,47 @@ const agentRouteHandler: MiddlewareHandler = async (c) => {
 			method: c.req.method,
 			path: new URL(c.req.url).pathname,
 		});
+	});
+};
+
+const abortRouteHandler: MiddlewareHandler = async (c) => {
+	const rt = runtimeConfig;
+	if (!rt) {
+		throw new Error(
+			'[flue] flue() route invoked before runtime was configured. ' +
+				'This usually means flue() was used outside a Flue-built server entry.',
+		);
+	}
+
+	if (c.req.method !== 'POST') {
+		throw new MethodNotAllowedError({ method: c.req.method, allowed: ['POST'] });
+	}
+
+	const name = c.req.param('name') ?? '';
+	const id = c.req.param('id') ?? '';
+
+	validateAgentRequest({
+		method: c.req.method,
+		name,
+		id,
+		registeredAgents: registeredAgentsForTransport(rt),
+	});
+	const request = c.req.raw.clone();
+
+	const record = rt.agents.find((agent) => agent.name === name);
+	return runAttachedMiddleware(c, record?.route, async () => {
+		if (rt.target === 'node') {
+			const aborted = await rt.abortAgentInstance(name, id);
+			return Response.json({ aborted });
+		}
+		// Cloudflare: forward to the owning agent DO, which recognizes the
+		// abort path and settles via its coordinator.
+		const response = await rt.routeAgentRequest(request, c.env, {
+			agentName: name,
+			instanceId: id,
+		});
+		if (response) return response;
+		throw new RouteNotFoundError({ method: c.req.method, path: new URL(c.req.url).pathname });
 	});
 };
 

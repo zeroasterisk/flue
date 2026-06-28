@@ -212,6 +212,16 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 			{ inputAppliedAt: null },
 		);
 	}
+	async requestSessionAbort(sessionKey: string): Promise<string[]> {
+		const filter = { sessionKey, status: { $in: ['queued', 'running'] } };
+		const rows = await this.c('submissions').find(filter);
+		if (rows.length === 0) return [];
+		await this.c('submissions').updateMany(filter, [
+			{ $set: { abortRequestedAt: { $ifNull: ['$abortRequestedAt', Date.now()] } } },
+		]);
+		return rows.map((row) => String(row.submissionId));
+	}
+
 	async listPendingSubmissionSettlements(): Promise<import('@flue/runtime/adapter').SubmissionSettlementObligation[]> {
 		return (await this.c('submissions').find({ kind: 'direct', status: 'terminalizing' }, { sort: { sequence: 1 } })).map((row) => ({ submissionId: String(row.submissionId), sessionKey: String(row.sessionKey), attemptId: String(row.attemptId), recordId: String(row.settlementRecordId), record: row.settlementRecord as import('@flue/runtime/adapter').SubmissionSettledRecord }));
 	}
@@ -415,6 +425,7 @@ export class MongoSubmissionStore implements AgentSubmissionStore {
 			...(row.attemptId ? { attemptId: String(row.attemptId) } : {}),
 			...(row.inputAppliedAt ? { inputAppliedAt: Number(row.inputAppliedAt) } : {}),
 			...(row.recoveryRequestedAt ? { recoveryRequestedAt: Number(row.recoveryRequestedAt) } : {}),
+			...(row.abortRequestedAt ? { abortRequestedAt: Number(row.abortRequestedAt) } : {}),
 			...(row.startedAt ? { startedAt: Number(row.startedAt) } : {}),
 			...(row.error ? { error: String(row.error) } : {}),
 			attemptCount: Number(row.attemptCount),

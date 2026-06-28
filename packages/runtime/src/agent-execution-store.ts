@@ -43,6 +43,17 @@ export interface AgentSubmission {
 	readonly attemptId?: string;
 	readonly inputAppliedAt?: number;
 	readonly recoveryRequestedAt?: number;
+	/**
+	 * When set, abort was requested for this submission. This is a durable
+	 * abort+recovery *signal*, NOT a terminal classification: the aborted
+	 * outcome is read only from the settlement (a `submission_aborted` advisory,
+	 * plus a direct `submission_settled` record with `outcome: 'aborted'`). A
+	 * submission that completes or fails while this is set still settles
+	 * completed/failed — the flag merely tells the owning attempt to stop and
+	 * tells recovery to settle aborted rather than retry. May be present while
+	 * `queued` (an abort arrived before the submission was ever claimed).
+	 */
+	readonly abortRequestedAt?: number;
 	readonly startedAt?: number;
 	readonly error?: string;
 	readonly attemptCount: number;
@@ -64,6 +75,8 @@ export interface SubmissionAttemptRef {
 	readonly submissionId: string;
 	readonly attemptId: string;
 }
+
+
 
 export interface SubmissionClaimRef extends SubmissionAttemptRef {
 	readonly ownerId: string;
@@ -195,6 +208,19 @@ export interface AgentSubmissionStore {
 	 * by `attempt`; otherwise `false`.
 	 */
 	requestSubmissionRecovery(attempt: SubmissionAttemptRef): Promise<boolean>;
+	/**
+	 * Record an abort request for every unsettled submission in a session.
+	 * Atomically stamps `abortRequestedAt` (COALESCE — first request wins) on
+	 * each `queued` or `running` submission with the given `sessionKey` and
+	 * returns their submission ids. It does NOT settle anything and does NOT
+	 * change `status`: terminal settlement always happens through an
+	 * attempt-based path (the pre-execution abort check when a queued submission
+	 * is claimed, the in-flight abort settle, or the recovery abort branch) so a
+	 * durable canonical terminal record always exists. `terminalizing` and
+	 * `settled` submissions are left untouched (a committed outcome must not be
+	 * overridden). Idempotent; returns an empty array when nothing is unsettled.
+	 */
+	requestSessionAbort(sessionKey: string): Promise<string[]>;
 	/**
 	 * Return a running submission to queued — clearing its attempt, owner,
 	 * and lease — ONLY while input has not been applied and `attempt` owns

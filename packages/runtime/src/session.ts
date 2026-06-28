@@ -1309,15 +1309,18 @@ export class Session implements FlueSession, AgentSubmissionSession {
 			body += `\n\nInterrupted tool call(s):\n${toolList}`;
 		}
 		{
-			const recordId = `record_submission_interrupted_${input.submissionId}`;
+			const aborted = input.reason === 'aborted';
+			const signalType = aborted ? 'submission_aborted' : 'submission_interrupted';
+			const slug = aborted ? 'submission_aborted' : 'submission_interrupted';
+			const recordId = `record_${slug}_${input.submissionId}`;
 			if (await this.conversationWriter.hasRecord(recordId)) return;
 			const parentId = await this.conversationWriter.getConversationLeaf(this.conversationId);
 			await this.appendCanonical([{
 				...this.canonicalEnvelope('signal', recordId),
 				type: 'signal',
-				messageId: `entry_submission_interrupted_${input.submissionId}`,
+				messageId: `entry_${slug}_${input.submissionId}`,
 				parentId,
-				signalType: 'submission_interrupted',
+				signalType,
 				content: body,
 				attributes: {
 					submissionId: input.submissionId,

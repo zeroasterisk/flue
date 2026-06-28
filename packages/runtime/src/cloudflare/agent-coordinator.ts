@@ -15,6 +15,9 @@ import {
 	reconcileInterruptedSubmission,
 	submissionSyntheticRequest,
 } from '../runtime/agent-submissions.ts';
+import { SUBMISSION_HARNESS_NAME, SUBMISSION_SESSION_NAME } from '../adapter-helpers.ts';
+import { createSessionStorageKey } from '../session-identity.ts';
+import { SubmissionAbortedError } from '../errors.ts';
 import type { AttachmentStore } from '../runtime/attachment-store.ts';
 import type { ConversationStreamStore } from '../runtime/conversation-stream-store.ts';
 import type { AgentInteractionStart } from '../runtime/dev-lifecycle-logger.ts';
@@ -182,6 +185,15 @@ class CloudflareAgentCoordinator {
 	private conversationWriter: ConversationRecordWriter | undefined;
 	private conversationWriterCreation: Promise<ConversationRecordWriter> | undefined;
 	private conversationMaterialization: Promise<void> = Promise.resolve();
+	/**
+	 * Abort controllers for in-flight attempt fibers in this isolate, keyed by
+	 * submissionId, so an incoming cancel request can abort the running attempt.
+	 * The DO is single-threaded but interleaves at `await` points, so a cancel
+	 * request can set the controller while the fiber is suspended on provider
+	 * I/O. If the isolate is evicted the controller is gone and the abort
+	 * falls back to the durable `abortRequestedAt` + reconcile path.
+	 */
+	private activeControllers = new Map<string, AbortController>();
 
 	async onStart(inherited: () => Promise<unknown> | unknown): Promise<void> {
 		await this.restoreSubmissionWake();
@@ -197,6 +209,11 @@ class CloudflareAgentCoordinator {
 
 	async onRequest(request: Request): Promise<Response | null> {
 		if (isInternalDispatchRequest(request)) return this.admitDispatch(request);
+
+		if (isAbortRequest(request, this.agentName, this.instance.name)) {
+			const aborted = await this.abortInstance();
+			return Response.json({ aborted });
+		}
 
 		const method = request.method;
 		if (method === 'GET' || method === 'HEAD') {
@@ -529,6 +546,8 @@ class CloudflareAgentCoordinator {
 		if (this.activeAttempts.has(attemptKey)) return;
 		this.assertAgentsDurabilityApi('runFiber');
 		this.activeAttempts.add(attemptKey);
+		const controller = new AbortController();
+		this.activeControllers.set(submission.submissionId, controller);
 		let running: Promise<void>;
 		try {
 			// Flue's own durable evidence that this attempt started; deleted at
@@ -537,10 +556,11 @@ class CloudflareAgentCoordinator {
 			await this.submissions.insertAttemptMarker(attempt);
 			running = this.instance.runFiber(FLUE_AGENT_SUBMISSION_ATTEMPT_FIBER, async (fiberCtx) => {
 				fiberCtx.stash({ submissionId: submission.submissionId, attemptId: submission.attemptId });
-				await this.processSubmissionEntry(submission);
+				await this.processSubmissionEntry(submission, controller.signal);
 			});
 		} catch (error) {
 			this.activeAttempts.delete(attemptKey);
+			this.activeControllers.delete(submission.submissionId);
 			await this.deleteAttemptMarkerSafely(attempt);
 			throw error;
 		}
@@ -560,8 +580,32 @@ class CloudflareAgentCoordinator {
 			})
 			.finally(() => {
 				this.activeAttempts.delete(attemptKey);
+				this.activeControllers.delete(submission.submissionId);
 				void this.deleteAttemptMarkerSafely(attempt);
 			});
+	}
+
+	async abortInstance(): Promise<boolean> {
+		// One DO instance owns one agent instance; external submissions share one
+		// durable session, so a single session-scoped stamp covers the running
+		// head and every queued submission behind it.
+		const sessionKey = createSessionStorageKey(
+			this.instance.name,
+			SUBMISSION_HARNESS_NAME,
+			SUBMISSION_SESSION_NAME,
+		);
+		const affected = await this.submissions.requestSessionAbort(sessionKey);
+		if (affected.length === 0) return false;
+		// Abort any of those attempt fibers live in this isolate — processSubmission's
+		// catch settles them aborted. Queued ones settle via the pre-execution abort
+		// check once claimed; an evicted running attempt is driven by the durable
+		// flag through reconciliation below.
+		for (const submissionId of affected) {
+			this.activeControllers.get(submissionId)?.abort(new SubmissionAbortedError());
+		}
+		await this.armSubmissionWake({ idempotent: false });
+		await this.reconcileSubmissions({ driverAlreadyArmed: true });
+		return true;
 	}
 
 	/**
@@ -620,7 +664,10 @@ class CloudflareAgentCoordinator {
 		return operation;
 	}
 
-	private async processSubmissionEntry(submission: AgentSubmission): Promise<void> {
+	private async processSubmissionEntry(
+		submission: AgentSubmission,
+		signal?: AbortSignal,
+	): Promise<void> {
 		const conversationWriter = await this.ensureConversationWriter();
 		await processSubmission({
 			submissions: this.submissions,
@@ -635,6 +682,7 @@ class CloudflareAgentCoordinator {
 			observers: this.observers,
 			conversationWriter,
 			onInteractionStart: this.options.onInteractionStart,
+			signal,
 			wrapExecution: (fn) => this.runWithInstanceContext(fn),
 			onSettled: () => {
 				void this.reconcileSubmissions().catch((error) => {
@@ -734,5 +782,22 @@ function isInternalDispatchRequest(request: Request): boolean {
 	return (
 		request.method === 'POST' &&
 		new URL(request.url).pathname === CLOUDFLARE_AGENT_INTERNAL_DISPATCH_PATH
+	);
+}
+
+/**
+ * Whether the request is an abort for this agent instance
+ * (`POST .../agents/<name>/<id>/abort`). Matched by exact tail position (not a
+ * loose substring) so an agent or instance named "abort" cannot misroute.
+ */
+function isAbortRequest(request: Request, agentName: string, instanceName: string): boolean {
+	if (request.method !== 'POST') return false;
+	const segments = new URL(request.url).pathname.split('/');
+	const n = segments.length;
+	if (n < 4) return false;
+	return (
+		segments[n - 1] === 'abort' &&
+		decodeURIComponent(segments[n - 2] as string) === instanceName &&
+		decodeURIComponent(segments[n - 3] as string) === agentName
 	);
 }

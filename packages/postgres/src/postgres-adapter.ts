@@ -206,6 +206,7 @@ async function ensureTables(runner: PostgresRunner): Promise<void> {
 				attempt_id TEXT,
 				input_applied_at BIGINT,
 				recovery_requested_at BIGINT,
+				abort_requested_at BIGINT,
 				started_at BIGINT,
 				settled_at BIGINT,
 				error TEXT,
@@ -421,6 +422,7 @@ const submissionColumns = [
 	'attempt_id',
 	'input_applied_at',
 	'recovery_requested_at',
+	'abort_requested_at',
 	'started_at',
 	'error',
 	'attempt_count',
@@ -680,6 +682,17 @@ class PgSubmissionStore implements AgentSubmissionStore {
 		return rows.length > 0;
 	}
 
+	async requestSessionAbort(sessionKey: string): Promise<string[]> {
+		const rows = await this.runner.query(
+			`UPDATE flue_agent_submissions
+			 SET abort_requested_at = COALESCE(abort_requested_at, $1)
+			 WHERE session_key = $2 AND status IN ('queued', 'running')
+			 RETURNING submission_id`,
+			[Date.now(), sessionKey],
+		);
+		return rows.map((row) => String(row.submission_id));
+	}
+
 	async listPendingSubmissionSettlements(): Promise<SubmissionSettlementObligation[]> {
 		const rows = await this.runner.query(`SELECT submission_id, session_key, attempt_id, settlement_record_id, settlement_record FROM flue_agent_submissions WHERE kind = 'direct' AND status = 'terminalizing' ORDER BY sequence ASC`);
 		return rows.map(parseSettlementObligation);
@@ -930,6 +943,8 @@ function parseSubmission(row: SqlRow, chunks: readonly PersistedChunkRow[]): Age
 	const inputAppliedAt = row.input_applied_at != null ? Number(row.input_applied_at) : undefined;
 	const recoveryRequestedAt =
 		row.recovery_requested_at != null ? Number(row.recovery_requested_at) : undefined;
+	const abortRequestedAt =
+		row.abort_requested_at != null ? Number(row.abort_requested_at) : undefined;
 	const startedAt = row.started_at != null ? Number(row.started_at) : undefined;
 	const ownerId = row.owner_id != null ? String(row.owner_id) : undefined;
 	const leaseExpiresAt = Number(row.lease_expires_at);
@@ -989,6 +1004,7 @@ function parseSubmission(row: SqlRow, chunks: readonly PersistedChunkRow[]): Age
 		...(attemptId !== undefined ? { attemptId } : {}),
 		...(inputAppliedAt !== undefined ? { inputAppliedAt } : {}),
 		...(recoveryRequestedAt !== undefined ? { recoveryRequestedAt } : {}),
+		...(abortRequestedAt !== undefined ? { abortRequestedAt } : {}),
 		...(startedAt !== undefined ? { startedAt } : {}),
 		...(error !== undefined ? { error } : {}),
 		attemptCount,

@@ -9,6 +9,7 @@ import type { FlueContextInternal } from '../client.ts';
 import type { ConversationRecordWriter } from '../conversation-writer.ts';
 import {
 	FlueError,
+	SubmissionAbortedError,
 	SubmissionInterruptedError,
 	SubmissionRetryExhaustedError,
 	SubmissionTimeoutError,
@@ -52,13 +53,16 @@ export interface AgentSubmissionInterruption {
 		| 'interrupted_before_input_marker'
 		| 'interrupted_after_input_application'
 		| 'exhausted_retry_budget'
-		| 'exceeded_timeout';
+		| 'exceeded_timeout'
+		| 'aborted';
 	readonly message: string;
 	/** Tool calls that were requested but whose outcomes could not be confirmed. */
 	readonly interruptedTools?: ReadonlyArray<{ readonly name: string; readonly id: string }>;
 }
 
 export type AgentSubmissionInspection = 'absent' | 'completed' | 'continuable' | 'uncertain';
+
+
 
 export interface ProcessAgentSubmissionOptions {
 	submissionAttempt?: SubmissionAttemptRef;
@@ -307,6 +311,28 @@ export async function reconcileInterruptedSubmission(
 			await submissions.completeSubmission(attempt);
 		}
 		return { disposition: 'completed', result: inspected.result };
+	}
+
+	// Abort requested before the owner could settle (it crashed, or the abort
+	// never reached a halt point). Settle as the distinct aborted outcome rather
+	// than retrying/resuming. Placed AFTER the completed-canonical check — a
+	// finished response still settles as success — and BEFORE the
+	// retry/timeout/resume branches so a crash-interrupted abort is never
+	// resurrected and the attempt budget/timeout cannot pre-empt it. A lost
+	// settle CAS returns `stale` and never falls through to a resurrecting branch.
+	if (submission.abortRequestedAt !== undefined) {
+		const abortCtx = createContext(dispatchId);
+		if (submission.kind === 'direct') abortCtx.setSubmissionId?.(submission.submissionId);
+		const settled = await settleAbortedWithContext(
+			submissions,
+			submission,
+			attempt,
+			agent,
+			abortCtx,
+			conversationWriter,
+		);
+		if (!settled) return { disposition: 'stale' };
+		return { disposition: 'failed', error: new SubmissionAbortedError() };
 	}
 
 	// Check retry budget. Pre-input exhaustion gets its own terminal error:
@@ -616,6 +642,24 @@ export async function processSubmission(opts: ProcessSubmissionOptions): Promise
 		})(ctx);
 
 	try {
+		// Pre-execution abort: a queued submission that was abort-flagged is still
+		// claimed (creating an attempt) so settlement is uniform and
+		// attempt-based; settle it as aborted before running any model work. This
+		// also covers an abort that landed between claim and processing.
+		if (persisted.abortRequestedAt !== undefined) {
+			const settled = await settleAbortedWithContext(
+				submissions,
+				submission,
+				attempt,
+				agent,
+				ctx,
+				opts.conversationWriter,
+			);
+			if (submission.kind === 'direct' && settled) {
+				observers.fail(submission.submissionId, new SubmissionAbortedError());
+			}
+			return;
+		}
 		let result: unknown;
 		try {
 			const run = () =>
@@ -639,6 +683,26 @@ export async function processSubmission(opts: ProcessSubmissionOptions): Promise
 			if (opts.isShutdownAbort?.(error)) {
 				if (submission.kind === 'direct') observers.fail(submission.submissionId, error);
 				throw error;
+			}
+			// Abort: keyed on the coordinator signal's reason (robust even when the
+			// provider rejects with a generic AbortError) rather than the thrown
+			// error's shape. Settles the distinct aborted outcome instead of a
+			// failure. Shutdown abort above intentionally takes precedence — the
+			// submission stays running and recovery settles it aborted via the
+			// durable abort flag.
+			if (opts.signal?.reason instanceof SubmissionAbortedError) {
+				const settled = await settleAbortedWithContext(
+					submissions,
+					submission,
+					attempt,
+					agent,
+					ctx,
+					opts.conversationWriter,
+				);
+				if (submission.kind === 'direct' && settled) {
+					observers.fail(submission.submissionId, new SubmissionAbortedError());
+				}
+				return;
 			}
 			const settled =
 				submission.kind === 'direct'
@@ -728,11 +792,66 @@ async function failInterruptedSubmission(
 	return { disposition: 'failed', error };
 }
 
+/**
+ * Settle a submission as the distinct `aborted` terminal outcome. Shared by the
+ * pre-execution abort check, the in-flight abort catch, and the recovery abort
+ * branch.
+ *
+ * Both kinds record a `submission_aborted` conversation advisory (best-effort —
+ * a persistent save failure must not wedge settlement in a reconciliation loop)
+ * so the abort is always visible in the message timeline. Direct submissions
+ * additionally settle through the two-phase outbox with `outcome: 'aborted'`,
+ * the durable terminal record a reconnecting waiter observes; dispatch
+ * submissions settle the operational row with `failSubmission`.
+ *
+ * Returns whether the terminal settle CAS won. Callers that lost the CAS must
+ * not proceed as if they settled it (the first terminal state wins).
+ */
+async function settleAbortedWithContext(
+	submissions: AgentSubmissionStore,
+	submission: AgentSubmission,
+	attempt: SubmissionAttemptRef,
+	agent: AgentDefinition,
+	ctx: FlueContextInternal,
+	conversationWriter?: ConversationRecordWriter,
+): Promise<boolean> {
+	const error = new SubmissionAbortedError();
+	// Visible timeline advisory for both kinds.
+	try {
+		await createAgentSubmissionSessionHandler(agent, submission.input, (s) =>
+			s.recordSubmissionTerminal({
+				submissionId: submission.submissionId,
+				kind: submission.kind,
+				reason: 'aborted',
+				message: error.message,
+			}),
+		)(ctx);
+	} catch (advisoryError) {
+		console.error(
+			'[flue:submission-abort] Failed to record abort advisory for submission',
+			submission.submissionId,
+			advisoryError,
+		);
+	}
+	if (submission.kind === 'direct') {
+		return settleDirectSubmission(
+			submissions,
+			attempt,
+			ctx,
+			'aborted',
+			undefined,
+			error,
+			conversationWriter,
+		);
+	}
+	return submissions.failSubmission(attempt, error);
+}
+
 async function settleDirectSubmission(
 	submissions: AgentSubmissionStore,
 	attempt: SubmissionAttemptRef,
 	ctx: FlueContextInternal,
-	outcome: 'completed' | 'failed',
+	outcome: 'completed' | 'failed' | 'aborted',
 	result?: unknown,
 	error?: unknown,
 	conversationWriter?: ConversationRecordWriter,

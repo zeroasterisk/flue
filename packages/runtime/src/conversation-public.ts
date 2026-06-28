@@ -13,7 +13,7 @@ import type { PromptUsage } from './types.ts';
 
 interface AgentConversationSettlement {
 	submissionId: string;
-	outcome: 'completed' | 'failed';
+	outcome: 'completed' | 'failed' | 'aborted';
 	result?: unknown;
 	error?: unknown;
 }
@@ -68,7 +68,7 @@ export type ConversationStreamChunk =
 			type: 'submission-settled';
 			conversationId: string;
 			submissionId: string;
-			outcome: 'completed' | 'failed';
+			outcome: 'completed' | 'failed' | 'aborted';
 			result?: unknown;
 			error?: unknown;
 	  };

@@ -441,6 +441,28 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 		return this.lifecycle(attempt, 'requeue', Date.now());
 	}
 
+	async requestSessionAbort(sessionKey: string): Promise<string[]> {
+		const ids = await this.backend.zrange(this.backend.keys.sessionUnsettled(sessionKey));
+		const now = String(Date.now());
+		const affected: string[] = [];
+		for (const id of ids) {
+			const status = await this.backend.command('HGET', [
+				this.backend.keys.submission(id),
+				'status',
+			]);
+			if (status === 'queued' || status === 'running') {
+				// COALESCE-equivalent: first abort request wins.
+				await this.backend.command('HSETNX', [
+					this.backend.keys.submission(id),
+					'abortRequestedAt',
+					now,
+				]);
+				affected.push(id);
+			}
+		}
+		return affected;
+	}
+
 	async listPendingSubmissionSettlements(): Promise<import('@flue/runtime/adapter').SubmissionSettlementObligation[]> {
 		const output: import('@flue/runtime/adapter').SubmissionSettlementObligation[] = [];
 		for (const id of await this.backend.zrange(this.backend.keys.submissionStatus('terminalizing'))) {
@@ -808,6 +830,7 @@ class RedisSubmissionStore implements AgentSubmissionStore {
 			...(row.attemptId ? { attemptId: row.attemptId } : {}),
 			...(row.inputAppliedAt ? { inputAppliedAt: integer(row.inputAppliedAt) } : {}),
 			...(row.recoveryRequestedAt ? { recoveryRequestedAt: integer(row.recoveryRequestedAt) } : {}),
+			...(row.abortRequestedAt ? { abortRequestedAt: integer(row.abortRequestedAt) } : {}),
 			...(row.startedAt ? { startedAt: integer(row.startedAt) } : {}),
 			...(row.error ? { error: row.error } : {}),
 			attemptCount: integer(row.attemptCount),

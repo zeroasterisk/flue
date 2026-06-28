@@ -55,7 +55,7 @@ export interface FlueConversationMessage {
 /** Terminal outcome of one tracked agent submission within a conversation. */
 export interface FlueConversationSettlement {
 	submissionId: string;
-	outcome: 'completed' | 'failed';
+	outcome: 'completed' | 'failed' | 'aborted';
 	result?: unknown;
 	error?: unknown;
 }

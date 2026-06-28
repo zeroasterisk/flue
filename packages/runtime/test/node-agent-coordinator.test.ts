@@ -376,6 +376,100 @@ describe('NodeAgentCoordinator', () => {
 		});
 	});
 
+	describe('cancellation', () => {
+		it('aborts queued work for an instance before the provider runs, recording an abort advisory', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createFauxProvider();
+			// One head-of-line dispatch blocks on a gate so a second dispatch to
+			// the same instance stays queued. Aborting the instance must settle the
+			// queued one without ever invoking its provider response.
+			let releaseGate!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				releaseGate = resolve;
+			});
+			let signalBlockerStarted!: () => void;
+			const blockerStarted = new Promise<void>((resolve) => {
+				signalBlockerStarted = resolve;
+			});
+			const providerCalls: string[] = [];
+			provider.setResponses([
+				async () => {
+					providerCalls.push('blocker');
+					signalBlockerStarted();
+					await gate;
+					return fauxAssistantMessage('Blocker done.');
+				},
+				async () => {
+					providerCalls.push('target-should-not-run');
+					return fauxAssistantMessage('Should not happen.');
+				},
+			]);
+			const { coordinator, executionStore } = await createFauxCoordinator(dbPath, provider);
+
+			await coordinator.admitDispatch(makeDispatchInput({ dispatchId: 'abort-blocker' }));
+			// Wait until the blocker is genuinely inside its provider call (past its
+			// own pre-execution abort check) so the abort can't pre-empt it instead.
+			await blockerStarted;
+			await coordinator.admitDispatch(makeDispatchInput({ dispatchId: 'abort-target' }));
+
+			// The target is head-of-line blocked behind the running blocker.
+			expect(await executionStore.submissions.getSubmission('abort-target')).toMatchObject({
+				status: 'queued',
+			});
+
+			expect(await coordinator.abortInstance('assistant', 'instance-1')).toBe(true);
+
+			releaseGate();
+			await coordinator.waitForIdle();
+
+			// The queued target never reached its provider response.
+			expect(providerCalls).toEqual(['blocker']);
+			expect(await executionStore.submissions.getSubmission('abort-target')).toMatchObject({
+				status: 'settled',
+			});
+
+			const adapter = sqlite(dbPath);
+			await adapter.migrate?.();
+			const { conversationStreamStore } = await adapter.connect();
+			const read = await conversationStreamStore.read(agentStreamPath('assistant', 'instance-1'));
+			const records = read.batches.flatMap((batch) => batch.records);
+			const aborted = records.find(
+				(record) =>
+					record.type === 'signal' &&
+					record.signalType === 'submission_aborted' &&
+					record.attributes?.submissionId === 'abort-target',
+			);
+			expect(aborted).toBeDefined();
+
+			await coordinator.shutdown();
+		});
+
+		it('reports nothing to abort when the instance has only settled work', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createFauxProvider();
+			provider.setResponses([fauxAssistantMessage('Done.')]);
+			const { coordinator } = await createFauxCoordinator(dbPath, provider);
+
+			await coordinator.admitDispatch(makeDispatchInput({ dispatchId: 'abort-late' }));
+			await coordinator.waitForIdle();
+
+			expect(await coordinator.abortInstance('assistant', 'instance-1')).toBe(false);
+
+			await coordinator.shutdown();
+		});
+
+		it('reports nothing to abort for an instance with no submissions', async () => {
+			const dbPath = createTempDbPath();
+			const provider = createFauxProvider();
+			provider.setResponses([fauxAssistantMessage('Done.')]);
+			const { coordinator } = await createFauxCoordinator(dbPath, provider);
+
+			expect(await coordinator.abortInstance('assistant', 'never-used-instance')).toBe(false);
+
+			await coordinator.shutdown();
+		});
+	});
+
 	describe('interrupt and recover', () => {
 		it('repairs canonical input after a real process kill before the input marker', async () => {
 			const dbPath = createTempDbPath();

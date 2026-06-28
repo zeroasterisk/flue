@@ -176,7 +176,7 @@ export interface FlueSerializedError {
 export type AgentSubmissionSettledEvent = {
 	type: 'submission_settled';
 	submissionId: string;
-	outcome: 'completed' | 'failed';
+	outcome: 'completed' | 'failed' | 'aborted';
 	result?: unknown;
 	error?: FlueSerializedError;
 };

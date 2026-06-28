@@ -56,7 +56,7 @@ export type ConversationStreamChunk =
 			type: 'submission-settled';
 			conversationId: string;
 			submissionId: string;
-			outcome: 'completed' | 'failed';
+			outcome: 'completed' | 'failed' | 'aborted';
 			result?: unknown;
 			error?: unknown;
 	  };

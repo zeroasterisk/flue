@@ -83,6 +83,7 @@ describe('createSqlAgentExecutionStore()', () => {
 				'canonical_ready_at',
 				'input_applied_at',
 				'recovery_requested_at',
+				'abort_requested_at',
 				'started_at',
 				'settled_at',
 				'error',
@@ -274,7 +275,7 @@ describe('createSqlAgentExecutionStore()', () => {
 		expect(() =>
 			createSqlAgentExecutionStore({ sql, transactionSync }, 'FlueAssistantAgent'),
 		).toThrow(
-			'[flue] Cloudflare durable agent class "FlueAssistantAgent" could not initialize its SQLite execution store. Underlying error: This database records an unrecognized schema version ("unversioned"; this runtime supports version 7).',
+			'[flue] Cloudflare durable agent class "FlueAssistantAgent" could not initialize its SQLite execution store. Underlying error: This database records an unrecognized schema version ("unversioned"; this runtime supports version 8).',
 		);
 	});
 });

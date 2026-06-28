@@ -71,6 +71,18 @@ export interface WorkflowWaitResult extends WorkflowInvokeResult {
 /** Options for one catch-up read of workflow-run events (no live tailing). */
 export type RunEventsOptions = Omit<FlueStreamOptions, 'live'>;
 
+/** Result of aborting an agent instance's durable work. */
+export interface AgentAbortResult {
+	/**
+	 * `true` when there was in-flight or queued work that is now being aborted;
+	 * `false` when the instance was idle (nothing to abort). Terminal settlement
+	 * (the distinct aborted outcome) happens asynchronously — observe it via
+	 * `wait()` (which rejects with the submission_aborted error), `observe()`, or
+	 * `history()`.
+	 */
+	aborted: boolean;
+}
+
 /** Options for creating a client for deployed Flue application routes. */
 export type CreateFlueClientOptions = HttpClientOptions;
 
@@ -86,6 +98,17 @@ export interface FlueClient {
 			admission: AgentSendResult,
 			options?: AgentWaitOptions,
 		): Promise<TResult>;
+		/**
+		 * Aborts all in-flight and queued durable work for an agent instance
+		 * (the agent's currently running submission and any queued behind it).
+		 * Resolves once the abort intent is recorded; the work settles to the
+		 * distinct aborted outcome asynchronously.
+		 */
+		abort(
+			name: string,
+			id: string,
+			options?: { signal?: AbortSignal },
+		): Promise<AgentAbortResult>;
 		/** Reads one materialized conversation snapshot for the agent instance. */
 		history(
 			name: string,
@@ -190,6 +213,12 @@ export function createFlueClient(options: CreateFlueClientOptions): FlueClient {
 			prompt: (name, id, opts) => promptAgent(http, name, id, opts),
 			send: (name, id, opts) => sendAgent(http, name, id, opts),
 			wait: (admission, opts) => waitForAgentSubmission(http, admission, opts),
+			abort: (name, id, opts = {}) =>
+				http.json<AgentAbortResult>({
+					method: 'POST',
+					path: `/agents/${encodeURIComponent(name)}/${encodeURIComponent(id)}/abort`,
+					signal: opts.signal,
+				}),
 			history: async (name, id, opts = {}) =>
 				rewriteSnapshotAttachmentUrls(
 					await http.json<FlueConversationSnapshot>({

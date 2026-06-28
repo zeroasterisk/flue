@@ -1119,6 +1119,28 @@ export class SubmissionTimeoutError extends FlueError {
 	}
 }
 
+/**
+ * A durable submission was aborted. Abort is requested per agent instance
+ * (`abort(name, id)`), stops all in-flight and queued work for that instance,
+ * and is a distinct terminal outcome — not a failure. A submission that has
+ * already settled (or committed its terminal record) is never aborted; an abort
+ * that loses the race to a completed response settles as completed instead.
+ *
+ * Delivered to a waiting `wait()`/observer and recorded as the durable terminal
+ * outcome: a `submission_aborted` conversation advisory (both kinds) plus, for
+ * direct submissions, a `submission_settled` record with `outcome: 'aborted'`.
+ */
+export class SubmissionAbortedError extends FlueError {
+	constructor() {
+		super({
+			type: 'submission_aborted',
+			message: 'Submission was aborted.',
+			details: 'The operation was stopped before it produced a completed response.',
+			dev: '',
+		});
+	}
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ERROR FRAMEWORK UTILITIES
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

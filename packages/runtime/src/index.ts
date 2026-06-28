@@ -31,6 +31,7 @@ export {
 	SkillDefinitionValidationError,
 	SkillNotRegisteredError,
 	SubagentNotDeclaredError,
+	SubmissionAbortedError,
 	SubmissionInterruptedError,
 	SubmissionRetryExhaustedError,
 	SubmissionTimeoutError,

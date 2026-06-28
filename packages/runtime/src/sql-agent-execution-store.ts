@@ -377,6 +377,20 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 		);
 	}
 
+	async requestSessionAbort(sessionKey: string): Promise<string[]> {
+		const rows = this.sql
+			.exec(
+				`UPDATE flue_agent_submissions
+				 SET abort_requested_at = COALESCE(abort_requested_at, ?)
+				 WHERE session_key = ? AND status IN ('queued', 'running')
+				 RETURNING submission_id`,
+				Date.now(),
+				sessionKey,
+			)
+			.toArray();
+		return rows.map((row) => String(row.submission_id));
+	}
+
 	async requeueSubmissionBeforeInputApplied(attempt: SubmissionAttemptRef): Promise<boolean> {
 		return (
 			this.sql
@@ -587,7 +601,7 @@ class AgentSubmissionStoreImpl implements AgentSubmissionStore {
 }
 
 const submissionColumns =
-	'sequence, submission_id, session_key, kind, payload, status, accepted_at, canonical_ready_at, attempt_id, input_applied_at, recovery_requested_at, started_at, error, attempt_count, max_retry, timeout_at, owner_id, lease_expires_at';
+	'sequence, submission_id, session_key, kind, payload, status, accepted_at, canonical_ready_at, attempt_id, input_applied_at, recovery_requested_at, abort_requested_at, started_at, error, attempt_count, max_retry, timeout_at, owner_id, lease_expires_at';
 
 function submissionColumnsFor(table: string): string {
 	return submissionColumns
@@ -647,6 +661,9 @@ function parseSubmission(
 		(row.recovery_requested_at !== null &&
 			row.recovery_requested_at !== undefined &&
 			typeof row.recovery_requested_at !== 'number') ||
+		(row.abort_requested_at !== null &&
+			row.abort_requested_at !== undefined &&
+			typeof row.abort_requested_at !== 'number') ||
 		(row.started_at !== null &&
 			row.started_at !== undefined &&
 			typeof row.started_at !== 'number') ||
@@ -692,6 +709,9 @@ function parseSubmission(
 		...(typeof row.recovery_requested_at === 'number'
 			? { recoveryRequestedAt: row.recovery_requested_at }
 			: {}),
+		...(typeof row.abort_requested_at === 'number'
+			? { abortRequestedAt: row.abort_requested_at }
+			: {}),
 		...(typeof row.started_at === 'number' ? { startedAt: row.started_at } : {}),
 		...(typeof row.error === 'string' ? { error: row.error } : {}),
 		attemptCount: row.attempt_count,
@@ -716,6 +736,7 @@ function ensureSubmissionTable(sql: SqlStorage): void {
 		 attempt_id TEXT,
 		 input_applied_at INTEGER,
 		 recovery_requested_at INTEGER,
+		 abort_requested_at INTEGER,
 		 started_at INTEGER,
 		 settled_at INTEGER,
 		 error TEXT,

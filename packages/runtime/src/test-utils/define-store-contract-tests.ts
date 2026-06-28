@@ -373,6 +373,86 @@ export function defineStoreContractTests(label: string, backend: StoreContractTe
 			});
 		});
 
+		describe('session abort requests', () => {
+			it('stamps an abort intent on a queued submission without changing its status', async () => {
+				const store = await create();
+				const admitted = await admitDispatchReady(store, dispatchInput());
+				const sessionKey =
+					admitted.kind === 'submission' ? admitted.submission.sessionKey : '';
+
+				const affected = await store.submissions.requestSessionAbort(sessionKey);
+
+				expect(affected).toEqual(['dispatch-1']);
+				expect(await store.submissions.getSubmission('dispatch-1')).toMatchObject({
+					status: 'queued',
+					abortRequestedAt: expect.any(Number),
+				});
+			});
+
+			it('stamps the running head and every queued submission in the session at once', async () => {
+				const store = await create();
+				// Same instance/session: dispatch-1 runs, the rest queue behind it.
+				const admitted = await admitDispatchReady(store, dispatchInput());
+				await admitDispatchReady(store, dispatchInput({ dispatchId: 'dispatch-2' }));
+				await admitDispatchReady(store, dispatchInput({ dispatchId: 'dispatch-3' }));
+				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
+				const sessionKey =
+					admitted.kind === 'submission' ? admitted.submission.sessionKey : '';
+
+				const affected = await store.submissions.requestSessionAbort(sessionKey);
+
+				expect(new Set(affected)).toEqual(new Set(['dispatch-1', 'dispatch-2', 'dispatch-3']));
+				expect(await store.submissions.getSubmission('dispatch-1')).toMatchObject({
+					status: 'running',
+					attemptId: 'attempt-1',
+					abortRequestedAt: expect.any(Number),
+				});
+				expect(await store.submissions.getSubmission('dispatch-3')).toMatchObject({
+					status: 'queued',
+					abortRequestedAt: expect.any(Number),
+				});
+			});
+
+			it('keeps the first abort timestamp when the request is repeated', async () => {
+				const store = await create();
+				const admitted = await admitDispatchReady(store, dispatchInput());
+				const sessionKey =
+					admitted.kind === 'submission' ? admitted.submission.sessionKey : '';
+
+				await store.submissions.requestSessionAbort(sessionKey);
+				const stampedAt = (await store.submissions.getSubmission('dispatch-1'))?.abortRequestedAt;
+				await store.submissions.requestSessionAbort(sessionKey);
+
+				expect((await store.submissions.getSubmission('dispatch-1'))?.abortRequestedAt).toBe(
+					stampedAt,
+				);
+			});
+
+			it('leaves settled submissions untouched and does not resurrect them', async () => {
+				const store = await create();
+				const admitted = await admitDispatchReady(store, dispatchInput());
+				await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-1'));
+				await store.submissions.completeSubmission(attempt('dispatch-1', 'attempt-1'));
+				const sessionKey =
+					admitted.kind === 'submission' ? admitted.submission.sessionKey : '';
+
+				expect(await store.submissions.requestSessionAbort(sessionKey)).toEqual([]);
+				// A settled submission is an immovable sink: never offered for
+				// re-processing and cannot be re-claimed.
+				expect(await store.submissions.listRunnableSubmissions()).toHaveLength(0);
+				expect(await store.submissions.listExpiredSubmissions()).toHaveLength(0);
+				expect(
+					await store.submissions.claimSubmission(claim('dispatch-1', 'attempt-2')),
+				).toBeNull();
+			});
+
+			it('returns an empty array for a session with no unsettled submissions', async () => {
+				const store = await create();
+
+				expect(await store.submissions.requestSessionAbort('no-such-session')).toEqual([]);
+			});
+		});
+
 		describe('direct settlement obligation', () => {
 			const settlementRecord = (outcome: 'completed' | 'failed') => ({
 				v: 1 as const,

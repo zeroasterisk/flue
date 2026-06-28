@@ -56,6 +56,7 @@ export function nodeRuntime(overrides: Partial<NodeRuntime> = {}): NodeRuntime {
 		createAgentAdmission: () => {
 			throw new Error('Unexpected agent admission.');
 		},
+		abortAgentInstance: async () => false,
 		createWorkflowContext: () => {
 			throw new Error('Unexpected workflow context creation.');
 		},

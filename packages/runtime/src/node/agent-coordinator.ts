@@ -16,6 +16,9 @@ import {
 	reconcileInterruptedSubmission,
 	submissionSyntheticRequest,
 } from '../runtime/agent-submissions.ts';
+import { SUBMISSION_HARNESS_NAME, SUBMISSION_SESSION_NAME } from '../adapter-helpers.ts';
+import { createSessionStorageKey } from '../session-identity.ts';
+import { SubmissionAbortedError } from '../errors.ts';
 import type { AttachmentStore } from '../runtime/attachment-store.ts';
 import type { ConversationStreamStore } from '../runtime/conversation-stream-store.ts';
 import type { AgentInteractionStart } from '../runtime/dev-lifecycle-logger.ts';
@@ -35,6 +38,15 @@ export interface NodeAgentCoordinator {
 	reconcileSubmissions(): Promise<void>;
 	/** Admit a dispatch. The submission is persisted durably; processing is asynchronous. */
 	admitDispatch(input: DispatchInput): Promise<AgentDispatchAdmission>;
+	/**
+	 * Abort all in-flight and queued durable work for an agent instance. Records
+	 * the durable abort intent on every unsettled submission for the instance
+	 * and aborts any attempt running in this process. Terminal settlement (the
+	 * distinct aborted outcome) happens asynchronously; observe it via the
+	 * conversation/result. Resolves `true` when there was unsettled work to
+	 * abort, `false` when the instance was idle.
+	 */
+	abortInstance(agentName: string, instanceId: string): Promise<boolean>;
 	/**
 	 * Create a durable admission hook for a specific agent instance. The returned
 	 * function accepts a direct prompt payload, persists it as a durable submission,
@@ -600,6 +612,37 @@ export function createNodeAgentCoordinator(options: {
 				activityLease?.release();
 				throw error;
 			}
+		},
+
+		async abortInstance(agentName: string, instanceId: string): Promise<boolean> {
+			// External submissions for an instance share one durable session, so
+			// one session-scoped stamp covers the running head and every queued
+			// submission behind it.
+			const sessionKey = createSessionStorageKey(
+				instanceId,
+				SUBMISSION_HARNESS_NAME,
+				SUBMISSION_SESSION_NAME,
+			);
+			const affected = await submissions.requestSessionAbort(sessionKey);
+			if (affected.length === 0) return false;
+			// Abort any of those attempts running in this process at a halt point —
+			// processSubmission's catch settles them aborted. Queued ones settle via
+			// the pre-execution abort check once claimed; a stranded running owner
+			// is handled by reconciliation.
+			let hasInactive = false;
+			for (const submissionId of affected) {
+				const active = activeSubmissions.get(submissionId);
+				if (active) active.abort.abort(new SubmissionAbortedError());
+				else hasInactive = true;
+			}
+			ensureClaimLoop();
+			wake();
+			if (hasInactive) {
+				void reconcileRunningSubmissions().catch((error) => {
+					console.error('[flue:submission-abort] reconcile after abort failed:', error);
+				});
+			}
+			return true;
 		},
 
 		createAdmission(agentName: string, instanceId: string): AttachedAgentSubmissionAdmission {

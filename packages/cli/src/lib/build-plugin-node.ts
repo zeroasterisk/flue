@@ -278,6 +278,8 @@ configureFlueRuntime({
   workflows,
   createAgentAdmission: (agentName, instanceId) =>
     agentCoordinator.createAdmission(agentName, instanceId),
+  abortAgentInstance: (agentName, instanceId) =>
+    agentCoordinator.abortInstance(agentName, instanceId),
   dispatchQueue,
   activityGate,
   admitWorkflow: ({ workflowName, input }) => {

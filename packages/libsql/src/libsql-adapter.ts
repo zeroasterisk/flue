@@ -227,6 +227,7 @@ async function ensureTables(runner: LibsqlRunner): Promise<void> {
 				attempt_id TEXT,
 				input_applied_at INTEGER,
 				recovery_requested_at INTEGER,
+				abort_requested_at INTEGER,
 				started_at INTEGER,
 				settled_at INTEGER,
 				error TEXT,
@@ -458,6 +459,7 @@ const submissionColumns = [
 	'attempt_id',
 	'input_applied_at',
 	'recovery_requested_at',
+	'abort_requested_at',
 	'started_at',
 	'error',
 	'attempt_count',
@@ -681,6 +683,17 @@ class LibsqlSubmissionStore implements AgentSubmissionStore {
 			[Date.now(), attempt.submissionId, attempt.attemptId],
 		);
 		return rows.length > 0;
+	}
+
+	async requestSessionAbort(sessionKey: string): Promise<string[]> {
+		const rows = await this.runner.query(
+			`UPDATE flue_agent_submissions
+			 SET abort_requested_at = COALESCE(abort_requested_at, ?)
+			 WHERE session_key = ? AND status IN ('queued', 'running')
+			 RETURNING submission_id`,
+			[Date.now(), sessionKey],
+		);
+		return rows.map((row) => String(row.submission_id));
 	}
 
 	async requeueSubmissionBeforeInputApplied(attempt: SubmissionAttemptRef): Promise<boolean> {
@@ -938,6 +951,8 @@ function parseSubmission(row: SqlRow, chunks: readonly PersistedChunkRow[]): Age
 	const inputAppliedAt = row.input_applied_at != null ? Number(row.input_applied_at) : undefined;
 	const recoveryRequestedAt =
 		row.recovery_requested_at != null ? Number(row.recovery_requested_at) : undefined;
+	const abortRequestedAt =
+		row.abort_requested_at != null ? Number(row.abort_requested_at) : undefined;
 	const startedAt = row.started_at != null ? Number(row.started_at) : undefined;
 	const ownerId = row.owner_id != null ? String(row.owner_id) : undefined;
 	const leaseExpiresAt = Number(row.lease_expires_at);
@@ -997,6 +1012,7 @@ function parseSubmission(row: SqlRow, chunks: readonly PersistedChunkRow[]): Age
 		...(attemptId !== undefined ? { attemptId } : {}),
 		...(inputAppliedAt !== undefined ? { inputAppliedAt } : {}),
 		...(recoveryRequestedAt !== undefined ? { recoveryRequestedAt } : {}),
+		...(abortRequestedAt !== undefined ? { abortRequestedAt } : {}),
 		...(startedAt !== undefined ? { startedAt } : {}),
 		...(error !== undefined ? { error } : {}),
 		attemptCount,
