@@ -17,6 +17,12 @@ import type {
  * The shape intentionally excludes canonical persistence vocabulary (record
  * names, harness/session/turn/attempt identifiers, physical offsets) so the
  * canonical schema can evolve without changing this wire contract.
+ *
+ * Streaming assistant content is carried by `message-delta`: a delta appends to
+ * the message's current streaming part of the same `kind`, opening a new part on
+ * the first delta or on a `kind` change. There is no per-part id or sequence —
+ * `observe()` resolves any missed data by rehydrating a fresh snapshot, so
+ * incremental application only ever runs once per delta on a live connection.
  */
 export type ConversationStreamChunk =
 	| { type: 'conversation-reset'; conversationId: string; snapshot: FlueConversationSnapshot }
@@ -29,26 +35,11 @@ export type ConversationStreamChunk =
 			model?: { provider: string; id: string };
 	  }
 	| {
-			type: 'part-start';
+			type: 'message-delta';
 			conversationId: string;
 			messageId: string;
-			partId: string;
 			kind: 'text' | 'reasoning';
-	  }
-	| {
-			type: 'part-delta';
-			conversationId: string;
-			messageId: string;
-			partId: string;
-			kind: 'text' | 'reasoning';
-			sequence: number;
 			delta: string;
-	  }
-	| {
-			type: 'part-end';
-			conversationId: string;
-			messageId: string;
-			partId: string;
 	  }
 	| {
 			type: 'tool-input';
@@ -72,8 +63,8 @@ export type ConversationStreamChunk =
 
 /**
  * Thrown by the reducer when an incremental chunk cannot be applied to the
- * current state (an unknown chunk shape, or a delta sequence gap that implies
- * missing data). `observe()` recovers by rehydrating a fresh snapshot.
+ * current state (an unknown chunk shape). `observe()` recovers by rehydrating a
+ * fresh snapshot.
  */
 export class ConversationStreamError extends Error {
 	readonly recover: 'rehydrate';
@@ -84,27 +75,11 @@ export class ConversationStreamError extends Error {
 	}
 }
 
-/**
- * Private streaming-assembly state. Holds the public conversation plus the
- * bookkeeping needed to apply incremental chunks idempotently — part locations
- * and per-part next-delta sequence counters. None of this leaks into
- * {@link FlueConversationState}.
- */
-export interface ConversationStreamState {
-	conversation: FlueConversationState;
-	/** `${messageId}\u0000${partId}` -> position of the streaming part. */
-	partLocations: Map<string, { messageIndex: number; partIndex: number }>;
-	/** `${messageId}\u0000${partId}` -> next expected delta sequence. */
-	partSequences: Map<string, number>;
-}
-
 const CHUNK_TYPES = new Set<ConversationStreamChunk['type']>([
 	'conversation-reset',
 	'message-appended',
 	'message-started',
-	'part-start',
-	'part-delta',
-	'part-end',
+	'message-delta',
 	'tool-input',
 	'tool-output',
 	'tool-output-error',
@@ -134,26 +109,18 @@ export function assertConversationStreamChunk(value: ConversationStreamChunk): C
 
 export function createConversationStreamState(
 	snapshot: FlueConversationSnapshot,
-): ConversationStreamState {
+): FlueConversationState {
 	return {
-		conversation: {
-			conversationId: snapshot.conversationId,
-			messages: snapshot.messages,
-			settlements: snapshot.settlements,
-		},
-		partLocations: new Map(),
-		partSequences: new Map(),
+		conversationId: snapshot.conversationId,
+		messages: snapshot.messages,
+		settlements: snapshot.settlements,
 	};
 }
 
-function partKey(messageId: string, partId: string): string {
-	return `${messageId}\u0000${partId}`;
-}
-
 export function applyConversationChunk(
-	state: ConversationStreamState,
+	state: FlueConversationState,
 	chunk: ConversationStreamChunk,
-): ConversationStreamState {
+): FlueConversationState {
 	switch (chunk.type) {
 		case 'conversation-reset':
 			return createConversationStreamState(chunk.snapshot);
@@ -173,12 +140,8 @@ export function applyConversationChunk(
 					},
 				];
 			});
-		case 'part-start':
-			return startPart(state, chunk.messageId, chunk.partId, chunk.kind);
-		case 'part-delta':
-			return appendPartDelta(state, chunk);
-		case 'part-end':
-			return endPart(state, chunk.messageId, chunk.partId);
+		case 'message-delta':
+			return appendDelta(state, chunk);
 		case 'tool-input':
 			return appendToolInput(state, chunk);
 		case 'tool-output':
@@ -209,12 +172,12 @@ export function applyConversationChunk(
 }
 
 function mutateMessages(
-	state: ConversationStreamState,
+	state: FlueConversationState,
 	update: (messages: FlueConversationMessage[]) => FlueConversationMessage[],
-): ConversationStreamState {
-	const messages = update(state.conversation.messages);
-	if (messages === state.conversation.messages) return state;
-	return { ...state, conversation: { ...state.conversation, messages } };
+): FlueConversationState {
+	const messages = update(state.messages);
+	if (messages === state.messages) return state;
+	return { ...state, messages };
 }
 
 function upsertMessage(
@@ -228,116 +191,42 @@ function upsertMessage(
 	return next;
 }
 
-function startPart(
-	state: ConversationStreamState,
-	messageId: string,
-	partId: string,
-	kind: 'text' | 'reasoning',
-): ConversationStreamState {
-	const key = partKey(messageId, partId);
-	if (state.partLocations.has(key)) return state;
-	const messageIndex = state.conversation.messages.findIndex((message) => message.id === messageId);
-	if (messageIndex < 0) return state;
-	const message = state.conversation.messages[messageIndex] as FlueConversationMessage;
-	const part: FlueConversationPart = { type: kind, text: '', state: 'streaming' };
-	const messages = replacePart(state.conversation.messages, messageIndex, [...message.parts, part]);
-	const partLocations = new Map(state.partLocations);
-	partLocations.set(key, { messageIndex, partIndex: message.parts.length });
-	const partSequences = new Map(state.partSequences);
-	partSequences.set(key, 0);
-	return { conversation: { ...state.conversation, messages }, partLocations, partSequences };
-}
-
-function appendPartDelta(
-	state: ConversationStreamState,
-	chunk: Extract<ConversationStreamChunk, { type: 'part-delta' }>,
-): ConversationStreamState {
-	const key = partKey(chunk.messageId, chunk.partId);
-	const location = state.partLocations.get(key) ?? claimStreamingPart(state, chunk);
-	if (!location) return state;
-	const expected = state.partSequences.get(key) ?? chunk.sequence;
-	if (chunk.sequence < expected) return state; // idempotent replay
-	if (chunk.sequence > expected) {
-		throw new ConversationStreamError(
-			`Conversation delta gap on part "${chunk.partId}": expected ${expected}, received ${chunk.sequence}.`,
-		);
-	}
-	const message = state.conversation.messages[location.messageIndex] as FlueConversationMessage;
-	const existing = message.parts[location.partIndex];
-	const parts = [...message.parts];
-	if (!existing) {
-		// Claimed a fresh tail slot for a post-reset block whose `part-start`
-		// preceded the snapshot and was not materialized. Create it so the delta
-		// is rendered rather than silently dropped.
-		parts[location.partIndex] = { type: chunk.kind, text: chunk.delta, state: 'streaming' };
-	} else if (existing.type !== 'text' && existing.type !== 'reasoning') {
-		return state;
-	} else {
-		parts[location.partIndex] = { ...existing, text: existing.text + chunk.delta };
-	}
-	const messages = replacePart(state.conversation.messages, location.messageIndex, parts);
-	const partLocations = state.partLocations.has(key)
-		? state.partLocations
-		: new Map(state.partLocations).set(key, location);
-	const partSequences = new Map(state.partSequences);
-	partSequences.set(key, chunk.sequence + 1);
-	return { conversation: { ...state.conversation, messages }, partLocations, partSequences };
-}
-
 /**
- * Locate the streaming part a delta belongs to when its partId is unknown —
- * the case immediately after a snapshot reset, where the snapshot materialized
- * an in-progress block as a clean `{ type, text, state: 'streaming' }` part with
- * no id. Claims the last unclaimed streaming part of the matching kind.
+ * Appends streaming content to a message. The delta extends the message's last
+ * part when it is a streaming part of the same `kind`; otherwise it opens a new
+ * streaming part and closes the previous streaming text/reasoning part (a `kind`
+ * change is a block boundary). Two adjacent blocks of the same `kind` with no
+ * intervening boundary (no tool call, no kind change, no completion) merge into
+ * one part — block identity within a single kind is not represented on the wire.
  */
-function claimStreamingPart(
-	state: ConversationStreamState,
-	chunk: Extract<ConversationStreamChunk, { type: 'part-delta' }>,
-): { messageIndex: number; partIndex: number } | undefined {
-	const messageIndex = state.conversation.messages.findIndex(
-		(message) => message.id === chunk.messageId,
-	);
-	if (messageIndex < 0) return undefined;
-	const claimed = new Set(
-		[...state.partLocations.values()]
-			.filter((location) => location.messageIndex === messageIndex)
-			.map((location) => location.partIndex),
-	);
-	const parts = (state.conversation.messages[messageIndex] as FlueConversationMessage).parts;
-	for (let index = parts.length - 1; index >= 0; index--) {
-		const part = parts[index];
-		if (part && part.type === chunk.kind && part.state === 'streaming' && !claimed.has(index)) {
-			return { messageIndex, partIndex: index };
+function appendDelta(
+	state: FlueConversationState,
+	chunk: Extract<ConversationStreamChunk, { type: 'message-delta' }>,
+): FlueConversationState {
+	return mutateMessages(state, (messages) => {
+		const index = messages.findIndex((message) => message.id === chunk.messageId);
+		if (index < 0) return messages;
+		const message = messages[index] as FlueConversationMessage;
+		const last = message.parts[message.parts.length - 1];
+		const parts = [...message.parts];
+		if (last && last.type === chunk.kind && last.state === 'streaming') {
+			parts[parts.length - 1] = { ...last, text: last.text + chunk.delta };
+		} else {
+			if (last && (last.type === 'text' || last.type === 'reasoning') && last.state === 'streaming') {
+				parts[parts.length - 1] = { ...last, state: 'done' };
+			}
+			parts.push({ type: chunk.kind, text: chunk.delta, state: 'streaming' });
 		}
-	}
-	// No materialized streaming part to continue: point at the tail slot so
-	// `appendPartDelta` creates a fresh part there instead of dropping the delta.
-	const message = state.conversation.messages[messageIndex] as FlueConversationMessage;
-	return { messageIndex, partIndex: message.parts.length };
-}
-
-function endPart(
-	state: ConversationStreamState,
-	messageId: string,
-	partId: string,
-): ConversationStreamState {
-	const key = partKey(messageId, partId);
-	const location = state.partLocations.get(key);
-	if (!location) return state;
-	const message = state.conversation.messages[location.messageIndex] as FlueConversationMessage;
-	const existing = message.parts[location.partIndex];
-	if (!existing || (existing.type !== 'text' && existing.type !== 'reasoning')) return state;
-	if (existing.state === 'done') return state;
-	const parts = [...message.parts];
-	parts[location.partIndex] = { ...existing, state: 'done' };
-	const messages = replacePart(state.conversation.messages, location.messageIndex, parts);
-	return { ...state, conversation: { ...state.conversation, messages } };
+		const next = [...messages];
+		next[index] = { ...message, parts };
+		return next;
+	});
 }
 
 function appendToolInput(
-	state: ConversationStreamState,
+	state: FlueConversationState,
 	chunk: Extract<ConversationStreamChunk, { type: 'tool-input' }>,
-): ConversationStreamState {
+): FlueConversationState {
 	return mutateMessages(state, (messages) => {
 		const index = messages.findIndex((message) => message.id === chunk.messageId);
 		if (index < 0) return messages;
@@ -345,11 +234,21 @@ function appendToolInput(
 		if (message.parts.some((part) => part.type === 'dynamic-tool' && part.toolCallId === chunk.toolCallId)) {
 			return messages;
 		}
+		// A tool call is a block boundary: any preceding streaming text/reasoning
+		// part is complete, so mark it done rather than leaving it streaming until
+		// the whole message completes.
+		const parts = message.parts.map((part, partIndex) =>
+			partIndex === message.parts.length - 1 &&
+			(part.type === 'text' || part.type === 'reasoning') &&
+			part.state === 'streaming'
+				? { ...part, state: 'done' as const }
+				: part,
+		);
 		const next = [...messages];
 		next[index] = {
 			...message,
 			parts: [
-				...message.parts,
+				...parts,
 				{
 					type: 'dynamic-tool',
 					toolName: chunk.toolName,
@@ -364,12 +263,12 @@ function appendToolInput(
 }
 
 function applyToolResult(
-	state: ConversationStreamState,
+	state: FlueConversationState,
 	toolCallId: string,
 	update: (
 		part: Extract<FlueConversationPart, { type: 'dynamic-tool' }>,
 	) => FlueConversationPart,
-): ConversationStreamState {
+): FlueConversationState {
 	return mutateMessages(state, (messages) => {
 		const index = messages.findLastIndex((message) =>
 			message.parts.some((part) => part.type === 'dynamic-tool' && part.toolCallId === toolCallId),
@@ -388,10 +287,10 @@ function applyToolResult(
 }
 
 function completeMessage(
-	state: ConversationStreamState,
+	state: FlueConversationState,
 	messageId: string,
 	usage: PromptUsage | undefined,
-): ConversationStreamState {
+): FlueConversationState {
 	return mutateMessages(state, (messages) => {
 		const index = messages.findIndex((message) => message.id === messageId);
 		if (index < 0) return messages;
@@ -409,27 +308,17 @@ function completeMessage(
 }
 
 function applySettlement(
-	state: ConversationStreamState,
+	state: FlueConversationState,
 	chunk: Extract<ConversationStreamChunk, { type: 'submission-settled' }>,
-): ConversationStreamState {
+): FlueConversationState {
 	const settlement: FlueConversationSettlement = {
 		submissionId: chunk.submissionId,
 		outcome: chunk.outcome,
 		...(chunk.result === undefined ? {} : { result: chunk.result }),
 		...(chunk.error === undefined ? {} : { error: chunk.error }),
 	};
-	const settlements = state.conversation.settlements;
+	const settlements = state.settlements;
 	const index = settlements.findIndex((value) => value.submissionId === settlement.submissionId);
 	const next = index < 0 ? [...settlements, settlement] : settlements.map((value, i) => (i === index ? settlement : value));
-	return { ...state, conversation: { ...state.conversation, settlements: next } };
-}
-
-function replacePart(
-	messages: FlueConversationMessage[],
-	messageIndex: number,
-	parts: FlueConversationPart[],
-): FlueConversationMessage[] {
-	const next = [...messages];
-	next[messageIndex] = { ...(messages[messageIndex] as FlueConversationMessage), parts };
-	return next;
+	return { ...state, settlements: next };
 }

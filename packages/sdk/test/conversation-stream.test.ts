@@ -15,7 +15,7 @@ function emptySnapshot(): FlueConversationSnapshot {
 function reduce(chunks: ConversationStreamChunk[], snapshot = emptySnapshot()) {
 	let state = createConversationStreamState(snapshot);
 	for (const chunk of chunks) state = applyConversationChunk(state, chunk);
-	return state.conversation;
+	return state;
 }
 
 describe('applyConversationChunk()', () => {
@@ -37,45 +37,69 @@ describe('applyConversationChunk()', () => {
 		]);
 	});
 
-	it('assembles a streaming assistant text part from start, deltas, and end', () => {
+	it('assembles a streaming assistant text part from started, deltas, and completed', () => {
 		const conversation = reduce([
 			{ type: 'message-started', conversationId: 'c1', messageId: 'a1' },
-			{ type: 'part-start', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text' },
-			{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 0, delta: 'he' },
-			{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 1, delta: 'llo' },
-			{ type: 'part-end', conversationId: 'c1', messageId: 'a1', partId: 'b1' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'he' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'llo' },
+			{ type: 'message-completed', conversationId: 'c1', messageId: 'a1' },
 		]);
 		expect(conversation.messages[0]?.parts[0]).toEqual({ type: 'text', text: 'hello', state: 'done' });
 	});
 
-	it('ignores a delta whose sequence was already applied so at-least-once redelivery converges', () => {
+	it('opens a new part when the delta kind changes from reasoning to text', () => {
 		const conversation = reduce([
 			{ type: 'message-started', conversationId: 'c1', messageId: 'a1' },
-			{ type: 'part-start', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text' },
-			{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 0, delta: 'hi' },
-			{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 0, delta: 'hi' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'reasoning', delta: 'thinking' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'answer' },
+			{ type: 'message-completed', conversationId: 'c1', messageId: 'a1' },
 		]);
-		expect(conversation.messages[0]?.parts[0]).toMatchObject({ text: 'hi' });
+		expect(conversation.messages[0]?.parts).toEqual([
+			{ type: 'reasoning', text: 'thinking', state: 'done' },
+			{ type: 'text', text: 'answer', state: 'done' },
+		]);
 	});
 
-	it('throws a recoverable stream error when a delta sequence gap implies missing data', () => {
-		const state = createConversationStreamState(emptySnapshot());
-		const started = applyConversationChunk(state, { type: 'message-started', conversationId: 'c1', messageId: 'a1' });
-		const opened = applyConversationChunk(started, { type: 'part-start', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text' });
-		expect(() =>
-			applyConversationChunk(opened, {
-				type: 'part-delta',
-				conversationId: 'c1',
-				messageId: 'a1',
-				partId: 'b1',
-				kind: 'text',
-				sequence: 2,
-				delta: '!',
-			}),
-		).toThrow(ConversationStreamError);
+	it('opens a new text part after a tool call rather than extending the earlier text', () => {
+		const conversation = reduce([
+			{ type: 'message-started', conversationId: 'c1', messageId: 'a1' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'before' },
+			{ type: 'tool-input', conversationId: 'c1', messageId: 'a1', toolCallId: 't1', toolName: 'noop', input: {} },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'after' },
+			{ type: 'message-completed', conversationId: 'c1', messageId: 'a1' },
+		]);
+		expect(conversation.messages[0]?.parts).toEqual([
+			{ type: 'text', text: 'before', state: 'done' },
+			{ type: 'dynamic-tool', toolName: 'noop', toolCallId: 't1', state: 'input-available', input: {} },
+			{ type: 'text', text: 'after', state: 'done' },
+		]);
 	});
 
-	it('continues a snapshot in-progress streaming block when its partId is unknown after reset', () => {
+	it('closes a streaming reasoning part when text streaming begins, before completion', () => {
+		const conversation = reduce([
+			{ type: 'message-started', conversationId: 'c1', messageId: 'a1' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'reasoning', delta: 'thinking' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'answer' },
+		]);
+		expect(conversation.messages[0]?.parts).toEqual([
+			{ type: 'reasoning', text: 'thinking', state: 'done' },
+			{ type: 'text', text: 'answer', state: 'streaming' },
+		]);
+	});
+
+	it('closes a streaming text part when a tool call begins, before completion', () => {
+		const conversation = reduce([
+			{ type: 'message-started', conversationId: 'c1', messageId: 'a1' },
+			{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'before' },
+			{ type: 'tool-input', conversationId: 'c1', messageId: 'a1', toolCallId: 't1', toolName: 'noop', input: {} },
+		]);
+		expect(conversation.messages[0]?.parts).toEqual([
+			{ type: 'text', text: 'before', state: 'done' },
+			{ type: 'dynamic-tool', toolName: 'noop', toolCallId: 't1', state: 'input-available', input: {} },
+		]);
+	});
+
+	it('continues a snapshot in-progress streaming block when live deltas resume after a reset', () => {
 		const snapshot: FlueConversationSnapshot = {
 			v: 1,
 			conversationId: 'c1',
@@ -87,15 +111,15 @@ describe('applyConversationChunk()', () => {
 		};
 		const conversation = reduce(
 			[
-				{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 5, delta: 'fg' },
-				{ type: 'part-end', conversationId: 'c1', messageId: 'a1', partId: 'b1' },
+				{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'fg' },
+				{ type: 'message-completed', conversationId: 'c1', messageId: 'a1' },
 			],
 			snapshot,
 		);
 		expect(conversation.messages[0]?.parts[0]).toEqual({ type: 'text', text: 'abcdefg', state: 'done' });
 	});
 
-	it('creates a fresh part for a post-reset block with no materialized streaming part instead of dropping deltas', () => {
+	it('creates a fresh part for an assistant message with no materialized streaming part', () => {
 		const snapshot: FlueConversationSnapshot = {
 			v: 1,
 			conversationId: 'c1',
@@ -107,9 +131,9 @@ describe('applyConversationChunk()', () => {
 		};
 		const conversation = reduce(
 			[
-				{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 0, delta: 'he' },
-				{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 1, delta: 'llo' },
-				{ type: 'part-end', conversationId: 'c1', messageId: 'a1', partId: 'b1' },
+				{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'he' },
+				{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'llo' },
+				{ type: 'message-completed', conversationId: 'c1', messageId: 'a1' },
 			],
 			snapshot,
 		);
@@ -168,7 +192,13 @@ describe('assertConversationStreamChunk()', () => {
 	});
 
 	it('accepts a known chunk', () => {
-		const chunk: ConversationStreamChunk = { type: 'part-end', conversationId: 'c1', messageId: 'a1', partId: 'b1' };
+		const chunk: ConversationStreamChunk = {
+			type: 'message-delta',
+			conversationId: 'c1',
+			messageId: 'a1',
+			kind: 'text',
+			delta: 'hi',
+		};
 		expect(assertConversationStreamChunk(chunk)).toBe(chunk);
 	});
 });

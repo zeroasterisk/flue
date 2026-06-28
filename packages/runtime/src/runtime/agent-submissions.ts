@@ -778,8 +778,22 @@ async function settleDirectSubmission(
 		}));
 	if (!obligation) return false;
 	const existing = await conversationWriter.getRecord(eventKey);
-	if (!existing) await conversationWriter.append([obligation.record], { submission: attempt });
-	else if (JSON.stringify(existing) !== JSON.stringify(obligation.record)) return false;
+	if (!existing) {
+		await conversationWriter.append([obligation.record], { submission: attempt });
+	} else if (JSON.stringify(existing) !== JSON.stringify(obligation.record)) {
+		// A canonical settlement record with this submission's deterministic key
+		// already exists but its content differs from what this attempt computed.
+		// Attempt fencing makes this unreachable in normal operation (a settled
+		// submission is not re-processed); if it ever happens it is an invariant
+		// violation. The durable canonical record is the client-visible authority,
+		// so finalize the operational row against it rather than returning false —
+		// refusing would wedge reconciliation in an unterminable loop. Surface it
+		// loudly for diagnosis instead of swallowing it.
+		console.error(
+			'[flue:submission-settlement] Canonical settlement conflict; the existing durable record is authoritative.',
+			{ submissionId: attempt.submissionId, recordId: eventKey },
+		);
+	}
 	ctx.publishEvent(event as AttachedAgentEvent);
 	try {
 		await ctx.flushEventCallbacks();

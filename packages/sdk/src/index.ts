@@ -33,7 +33,13 @@ export type {
 	AgentConversationObservationPhase,
 	AgentConversationObservationSnapshot,
 	AgentConversationObserveOptions,
+	ConversationLiveMode,
 } from './public/observe.ts';
+// The conversation `updates` wire union is not stable application API, but
+// first-party presenters (CLI, dev console) reduce it directly, so the type is
+// exported for them. Application code should consume materialized
+// `FlueConversationState` via `observe()` rather than handling chunks.
+export type { ConversationStreamChunk } from './public/conversation-stream.ts';
 export type {
 	AgentPromptImage,
 	AgentPromptOptions,

@@ -47,22 +47,12 @@ export type ConversationStreamChunk =
 			model?: { provider: string; id: string };
 	  }
 	| {
-			type: 'part-start';
+			type: 'message-delta';
 			conversationId: string;
 			messageId: string;
-			partId: string;
 			kind: 'text' | 'reasoning';
-	  }
-	| {
-			type: 'part-delta';
-			conversationId: string;
-			messageId: string;
-			partId: string;
-			kind: 'text' | 'reasoning';
-			sequence: number;
 			delta: string;
 	  }
-	| { type: 'part-end'; conversationId: string; messageId: string; partId: string }
 	| {
 			type: 'tool-input';
 			conversationId: string;
@@ -177,17 +167,13 @@ function encodeRecord(
 						: {}),
 				},
 			];
-		case 'assistant_text_started':
-			return [{ type: 'part-start', conversationId, messageId: record.messageId, partId: record.blockId, kind: 'text' }];
-		case 'assistant_reasoning_started':
-			return [{ type: 'part-start', conversationId, messageId: record.messageId, partId: record.blockId, kind: 'reasoning' }];
 		case 'assistant_text_delta':
-			return [{ type: 'part-delta', conversationId, messageId: record.messageId, partId: record.blockId, kind: 'text', sequence: record.sequence, delta: record.delta }];
+			return [{ type: 'message-delta', conversationId, messageId: record.messageId, kind: 'text', delta: record.delta }];
 		case 'assistant_reasoning_delta':
-			return [{ type: 'part-delta', conversationId, messageId: record.messageId, partId: record.blockId, kind: 'reasoning', sequence: record.sequence, delta: record.delta }];
-		case 'assistant_text_completed':
-		case 'assistant_reasoning_completed':
-			return [{ type: 'part-end', conversationId, messageId: record.messageId, partId: record.blockId }];
+			return [{ type: 'message-delta', conversationId, messageId: record.messageId, kind: 'reasoning', delta: record.delta }];
+		// Block lifecycle (`assistant_text_started`/`assistant_*_completed`) carries no
+		// UI-visible payload: the first delta opens a streaming part, a `kind` change or
+		// `message-completed` closes it. So those records project to no chunk.
 		case 'assistant_tool_call':
 			return [{ type: 'tool-input', conversationId, messageId: record.messageId, toolCallId: record.toolCallId, toolName: record.name, input: record.arguments }];
 		case 'assistant_message_completed':

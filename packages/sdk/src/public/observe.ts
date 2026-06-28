@@ -1,13 +1,29 @@
-import type { BackoffOptions, LiveMode } from '@durable-streams/client';
+import type { BackoffOptions } from '@durable-streams/client';
 import type { FlueConversationSnapshot, FlueConversationState } from './conversation.ts';
 import {
 	applyConversationChunk,
 	type ConversationStreamChunk,
-	ConversationStreamError,
-	type ConversationStreamState,
 	createConversationStreamState,
 } from './conversation-stream.ts';
 import type { FlueEventStream } from './stream.ts';
+
+/**
+ * Live mode for conversation observation. Deliberately excludes `'sse'`.
+ *
+ * The `message-delta` protocol is append-style with no per-delta sequence: a
+ * delta extends the current streaming part. Correct application therefore
+ * requires the transport to deliver each batch atomically with its resume
+ * offset, so a reconnect never re-delivers a batch that was already applied.
+ * Long-poll (`true` / `'long-poll'`) and one-shot (`false`) satisfy this — each
+ * batch arrives with its `Stream-Next-Offset` in one response. SSE does not: it
+ * splits a batch across `data` and `control` frames, and the durable-stream
+ * client transparently reconnects from the pre-batch offset if the connection
+ * drops between them, re-delivering (and thus double-applying) the batch. Across
+ * reconnects, `observe()` rehydrates a fresh snapshot rather than resuming, so
+ * the only redelivery risk is that intra-session SSE window — which excluding
+ * SSE removes entirely.
+ */
+export type ConversationLiveMode = boolean | 'long-poll';
 
 export type AgentConversationObservationPhase =
 	| 'loading'
@@ -26,7 +42,7 @@ export interface AgentConversationObservationSnapshot {
 }
 
 export interface AgentConversationObserveOptions {
-	live?: LiveMode;
+	live?: ConversationLiveMode;
 	signal?: AbortSignal;
 	backoffOptions?: BackoffOptions;
 }
@@ -48,7 +64,7 @@ export interface AgentConversationObservationSource {
 	history(options: { signal?: AbortSignal }): Promise<FlueConversationSnapshot>;
 	updates(options: {
 		offset: string;
-		live?: LiveMode;
+		live?: ConversationLiveMode;
 		signal?: AbortSignal;
 		backoffOptions?: BackoffOptions;
 	}): FlueEventStream<ConversationStreamChunk>;
@@ -59,7 +75,7 @@ export function createAgentConversationObservation(
 	options: AgentConversationObserveOptions = {},
 ): AgentConversationObservation {
 	const listeners = new Set<() => void>();
-	let streamState: ConversationStreamState | undefined;
+	let streamState: FlueConversationState | undefined;
 	let snapshot: AgentConversationObservationSnapshot = {
 		conversation: undefined,
 		offset: undefined,
@@ -93,7 +109,13 @@ export function createAgentConversationObservation(
 		retryTimer = undefined;
 	};
 
-	const scheduleRetry = (value: number, error: Error, resume: 'hydrate' | 'updates') => {
+	// Every reconnect rehydrates a fresh snapshot rather than resuming the
+	// incremental stream. Streaming deltas append to the current part without a
+	// per-delta sequence, so resuming after a batch-granular offset could
+	// re-apply a redelivered batch; a clean snapshot reset makes application
+	// exactly-once. This mirrors the durable-stream reference (reset/refetch on
+	// reconnect) and is cheap because `history()` is server-materialized.
+	const scheduleRetry = (value: number, error: Error) => {
 		if (!isCurrent(value)) return;
 		if (controller?.signal.aborted) {
 			publish({ ...snapshot, phase: 'closed', error: undefined });
@@ -108,11 +130,7 @@ export function createAgentConversationObservation(
 		retryTimer = setTimeout(() => {
 			retryTimer = undefined;
 			if (!isCurrent(value)) return;
-			if (resume === 'updates' && streamState && snapshot.offset) {
-				void follow(value, snapshot.offset);
-			} else {
-				void hydrate(value);
-			}
+			void hydrate(value);
 		}, delay);
 	};
 
@@ -128,7 +146,7 @@ export function createAgentConversationObservation(
 				backoffOptions: options.backoffOptions,
 			});
 		} catch (error) {
-			scheduleRetry(value, toError(error), 'updates');
+			scheduleRetry(value, toError(error));
 			return;
 		}
 		stream = nextStream;
@@ -138,7 +156,7 @@ export function createAgentConversationObservation(
 				if (!streamState) throw new Error('Agent conversation updates require materialized state.');
 				streamState = applyConversationChunk(streamState, chunk);
 				publish({
-					conversation: streamState.conversation,
+					conversation: streamState,
 					offset: nextStream.offset,
 					phase: options.live === false ? 'connecting' : 'live',
 					error: undefined,
@@ -152,15 +170,11 @@ export function createAgentConversationObservation(
 				publish({ ...snapshot, offset: nextOffset, phase: 'up-to-date', error: undefined });
 				return;
 			}
-			scheduleRetry(value, new Error('Agent conversation stream ended unexpectedly.'), 'updates');
+			scheduleRetry(value, new Error('Agent conversation stream ended unexpectedly.'));
 		} catch (error) {
 			if (!isCurrent(value) || stream !== nextStream) return;
-			const nextOffset = nextStream.offset;
 			stream = undefined;
-			if (nextOffset !== offset) snapshot = { ...snapshot, offset: nextOffset };
-			// A chunk that cannot be applied incrementally means the client missed
-			// data; recover by rehydrating a fresh snapshot rather than resuming.
-			scheduleRetry(value, toError(error), error instanceof ConversationStreamError ? 'hydrate' : 'updates');
+			scheduleRetry(value, toError(error));
 		}
 	};
 
@@ -173,7 +187,7 @@ export function createAgentConversationObservation(
 			streamState = createConversationStreamState(history);
 			reconnectAttempt = 0;
 			publish({
-				conversation: streamState.conversation,
+				conversation: streamState,
 				offset: history.offset,
 				phase: 'connecting',
 				error: undefined,
@@ -188,7 +202,7 @@ export function createAgentConversationObservation(
 				publish({ conversation: undefined, offset: undefined, phase: 'absent', error: undefined });
 				return;
 			}
-			scheduleRetry(value, normalized, 'hydrate');
+			scheduleRetry(value, normalized);
 		}
 	};
 

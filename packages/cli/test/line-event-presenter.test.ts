@@ -6,8 +6,7 @@ describe('createLineEventPresenter()', () => {
 		const lines: string[] = [];
 		const presenter = createLineEventPresenter({ write: (line) => lines.push(line) });
 
-		presenter.present({ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 0, delta: 'hello' });
-		presenter.present({ type: 'part-end', conversationId: 'c1', messageId: 'a1', partId: 'b1' });
+		presenter.present({ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'hello' });
 		presenter.present({ type: 'tool-input', conversationId: 'c1', messageId: 'a1', toolCallId: 't1', toolName: 'bash', input: {} });
 		presenter.present({ type: 'tool-output', conversationId: 'c1', toolCallId: 't1', output: {} });
 

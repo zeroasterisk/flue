@@ -42,6 +42,20 @@ export interface ConversationStreamMeta {
 export interface ConversationStreamStore {
 	createStream(path: string, identity: ConversationStreamIdentity): Promise<void>;
 	acquireProducer(path: string, producerId: string): Promise<ConversationProducerClaim>;
+	/**
+	 * Appends one batch of canonical records and returns its single offset.
+	 *
+	 * **Atomicity is a hard contract requirement.** Every record in
+	 * `input.records` must be persisted together under one offset, all-or-nothing:
+	 * a crash or error must never leave a subset of the batch durable. The runtime
+	 * relies on this for multi-record batches whose partial application would
+	 * corrupt the conversation graph — most notably `ensureChildConversation()`,
+	 * which appends the child `conversation_created` and the parent
+	 * `child_session_retained` in one batch (a partial write would orphan the
+	 * child). First-party adapters satisfy this by serializing the whole batch
+	 * into a single row/document write inside one transaction; a custom adapter
+	 * that splits records across non-atomic writes violates the contract.
+	 */
 	append(input: {
 		path: string;
 		producerId: string;

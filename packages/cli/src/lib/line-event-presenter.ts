@@ -4,9 +4,7 @@ const CONVERSATION_CHUNK_TYPES = new Set<ConversationStreamChunk['type']>([
 	'conversation-reset',
 	'message-appended',
 	'message-started',
-	'part-start',
-	'part-delta',
-	'part-end',
+	'message-delta',
 	'tool-input',
 	'tool-output',
 	'tool-output-error',
@@ -59,7 +57,7 @@ export function createLineEventPresenter(options: LineEventPresenterOptions): Li
 		flushThinking();
 	};
 
-	const partKinds = new Map<string, 'text' | 'reasoning'>();
+	let streamingKind: 'text' | 'reasoning' | undefined;
 	const toolNames = new Map<string, string>();
 
 	return {
@@ -67,17 +65,11 @@ export function createLineEventPresenter(options: LineEventPresenterOptions): Li
 		present(event) {
 			if (isConversationChunk(event)) {
 				switch (event.type) {
-					case 'part-start':
-						partKinds.set(event.partId, event.kind);
+					case 'message-delta':
 						if (event.kind === 'reasoning') {
 							flushText();
-							options.write(dim('thinking'));
-						}
-						return;
-					case 'part-delta':
-						partKinds.set(event.partId, event.kind);
-						if (event.kind === 'reasoning') {
-							flushText();
+							if (streamingKind !== 'reasoning') options.write(dim('thinking'));
+							streamingKind = 'reasoning';
 							thinkingBuffer = consumeCompleteLines(
 								thinkingBuffer + event.delta,
 								options.write,
@@ -86,6 +78,7 @@ export function createLineEventPresenter(options: LineEventPresenterOptions): Li
 						} else {
 							flushThinking();
 							beginText();
+							streamingKind = 'text';
 							textBuffer = consumeCompleteLines(
 								textBuffer + event.delta,
 								options.write,
@@ -93,13 +86,10 @@ export function createLineEventPresenter(options: LineEventPresenterOptions): Li
 							);
 						}
 						return;
-					case 'part-end':
-						if (partKinds.get(event.partId) === 'reasoning') flushThinking();
-						else flushText();
-						return;
 					case 'tool-input':
 						toolNames.set(event.toolCallId, event.toolName);
 						flush();
+						streamingKind = undefined;
 						options.write(`${dim('tool')} ${event.toolName}`);
 						return;
 					case 'tool-output':
@@ -111,6 +101,7 @@ export function createLineEventPresenter(options: LineEventPresenterOptions): Li
 					case 'message-completed':
 					case 'submission-settled':
 						flush();
+						streamingKind = undefined;
 						return;
 					default:
 						return;

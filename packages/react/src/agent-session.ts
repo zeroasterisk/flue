@@ -1,8 +1,8 @@
 import {
 	type AgentConversationObservation,
 	type AgentPromptImage,
+	type ConversationLiveMode,
 	type FlueClient,
-	type LiveMode,
 } from '@flue/sdk';
 import {
 	type AgentReducerEvent,
@@ -29,7 +29,7 @@ export class AgentSession {
 		private client: FlueClient,
 		private name: string,
 		private id: string,
-		private live: LiveMode = true,
+		private live: ConversationLiveMode = true,
 	) {}
 
 	start(): void {

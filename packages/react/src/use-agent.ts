@@ -1,4 +1,4 @@
-import type { FlueClient, LiveMode } from '@flue/sdk';
+import type { ConversationLiveMode, FlueClient } from '@flue/sdk';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { type AgentSnapshot, emptyAgentState } from './agent-reducer.ts';
 import { AgentSession, type SendMessageOptions } from './agent-session.ts';
@@ -15,7 +15,7 @@ const emptySubscribe = () => () => {};
 export interface UseFlueAgentOptions {
 	name: string;
 	id?: string;
-	live?: LiveMode;
+	live?: ConversationLiveMode;
 	client?: FlueClient;
 }
 

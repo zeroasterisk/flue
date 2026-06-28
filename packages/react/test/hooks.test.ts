@@ -87,11 +87,11 @@ describe('useFlueAgent()', () => {
 		const observe = vi.fn().mockReturnValue(observation);
 		const flue = client({ agents: { observe } as unknown as FlueClient['agents'] });
 		const { unmount } = renderHook(() =>
-			useFlueAgent({ name: 'agent', id: 'id', live: 'sse', client: flue }),
+			useFlueAgent({ name: 'agent', id: 'id', live: 'long-poll', client: flue }),
 		);
 
 		await waitFor(() => expect(observe).toHaveBeenCalledTimes(1));
-		expect(observe).toHaveBeenCalledWith('agent', 'id', { live: 'sse' });
+		expect(observe).toHaveBeenCalledWith('agent', 'id', { live: 'long-poll' });
 		unmount();
 	});
 

@@ -130,6 +130,33 @@ export function defineConversationStreamStoreContractTests(
 			});
 		});
 
+		it('assigns one indivisible offset to a multi-record batch', async () => {
+			// The whole batch must be one atomic offset unit: both records live at a
+			// single offset and resuming strictly after it returns nothing. A store
+			// that split a batch across per-record offsets — the partial-application
+			// hazard the append atomicity contract forbids — would fail this, because
+			// ensureChildConversation() relies on the child `conversation_created` and
+			// parent `child_session_retained` landing together or not at all.
+			const { stream } = await create();
+			await stream.createStream('agents/echo/contract', {
+				agentName: 'echo',
+				instanceId: 'contract',
+			});
+			const producer = await stream.acquireProducer('agents/echo/contract', 'coordinator');
+			const result = await stream.append({
+				path: 'agents/echo/contract',
+				producerId: producer.producerId,
+				producerEpoch: producer.producerEpoch,
+				incarnation: producer.incarnation,
+				producerSequence: 0,
+				records: [userRecord('record_1', 'entry_1'), userRecord('record_2', 'entry_2')],
+			});
+
+			const after = await stream.read('agents/echo/contract', { offset: result.offset });
+			expect(after.batches).toEqual([]);
+			expect(after.upToDate).toBe(true);
+		});
+
 		it('returns the original offset for an exact producer retry', async () => {
 			const { stream } = await create();
 			await stream.createStream('agents/echo/contract', {

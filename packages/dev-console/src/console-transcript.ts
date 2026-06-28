@@ -4,9 +4,7 @@ const CONVERSATION_CHUNK_TYPES = new Set<ConversationStreamChunk['type']>([
 	'conversation-reset',
 	'message-appended',
 	'message-started',
-	'part-start',
-	'part-delta',
-	'part-end',
+	'message-delta',
 	'tool-input',
 	'tool-output',
 	'tool-output-error',
@@ -108,27 +106,23 @@ function reduceEvent(
 
 function reduceChunk(state: ConsoleTranscript, chunk: ConversationStreamChunk): ConsoleTranscript {
 	switch (chunk.type) {
-		case 'part-delta': {
-			const key = `${chunk.kind}:${chunk.partId}`;
-			return { ...state, streaming: { ...state.streaming, [key]: `${state.streaming[key] ?? ''}${chunk.delta}` } };
+		case 'message-delta': {
+			// A `kind` change closes the previous streaming block into a record;
+			// streaming content for the current kind accumulates until then or until
+			// the message completes.
+			const other = chunk.kind === 'text' ? 'reasoning' : 'text';
+			const flushed = flushStreamingKind(state, other);
+			return {
+				...flushed,
+				streaming: { ...flushed.streaming, [chunk.kind]: `${flushed.streaming[chunk.kind] ?? ''}${chunk.delta}` },
+			};
 		}
-		case 'part-end': {
-			const textKey = `text:${chunk.partId}`;
-			if (state.streaming[textKey] !== undefined) {
-				const text = state.streaming[textKey] ?? '';
-				const { [textKey]: _removed, ...streaming } = state.streaming;
-				return text ? append({ ...state, streaming }, text, 'normal') : { ...state, streaming };
-			}
-			const reasoningKey = `reasoning:${chunk.partId}`;
-			if (state.streaming[reasoningKey] !== undefined) {
-				const text = state.streaming[reasoningKey] ?? '';
-				const { [reasoningKey]: _removed, ...streaming } = state.streaming;
-				return text ? append({ ...state, streaming }, `Thinking...\n${text}`, 'dim', 'thinking') : { ...state, streaming };
-			}
-			return state;
+		case 'message-completed':
+			return flushStreamingKind(flushStreamingKind(state, 'reasoning'), 'text');
+		case 'tool-input': {
+			const flushed = flushStreamingKind(flushStreamingKind(state, 'reasoning'), 'text');
+			return append(flushed, `tool  ${chunk.toolName} ${toolDetail(chunk.toolName, chunk.input)}`, 'dim');
 		}
-		case 'tool-input':
-			return append(state, `tool  ${chunk.toolName} ${toolDetail(chunk.toolName, chunk.input)}`, 'dim');
 		case 'tool-output':
 			return append(state, `tool done  ${detail(chunk.output)}`, 'dim');
 		case 'tool-output-error':
@@ -140,6 +134,19 @@ function reduceChunk(state: ConsoleTranscript, chunk: ConversationStreamChunk): 
 		default:
 			return state;
 	}
+}
+
+function flushStreamingKind(
+	state: ConsoleTranscript,
+	kind: 'text' | 'reasoning',
+): ConsoleTranscript {
+	const value = state.streaming[kind];
+	if (value === undefined) return state;
+	const { [kind]: _removed, ...streaming } = state.streaming;
+	if (!value) return { ...state, streaming };
+	return kind === 'reasoning'
+		? append({ ...state, streaming }, `Thinking...\n${value}`, 'dim', 'thinking')
+		: append({ ...state, streaming }, value, 'normal');
 }
 
 function append(

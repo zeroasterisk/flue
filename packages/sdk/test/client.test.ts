@@ -408,7 +408,7 @@ describe('createFlueClient', () => {
 					offsets.push(url.searchParams.get('offset'));
 					return dsJsonResponse(
 						[
-							{ type: 'part-delta', conversationId: 'c1', messageId: 'a1', partId: 'b1', kind: 'text', sequence: 0, delta: 'hello' },
+							{ type: 'message-delta', conversationId: 'c1', messageId: 'a1', kind: 'text', delta: 'hello' },
 							{ type: 'submission-settled', conversationId: 'c1', submissionId: 'other', outcome: 'completed', result: { text: 'ignore' } },
 							{ type: 'submission-settled', conversationId: 'c1', submissionId: 'submission-1', outcome: 'completed', result: { text: 'done' } },
 						] satisfies ConversationStreamChunk[],
@@ -428,7 +428,7 @@ describe('createFlueClient', () => {
 				),
 			).resolves.toEqual({ text: 'done' });
 			expect(offsets).toEqual(['admission-offset']);
-			expect(seenEvents).toEqual(['part-delta', 'submission-settled', 'submission-settled']);
+			expect(seenEvents).toEqual(['message-delta', 'submission-settled', 'submission-settled']);
 		});
 
 		it('throws a structured SDK error when the submission fails', async () => {
