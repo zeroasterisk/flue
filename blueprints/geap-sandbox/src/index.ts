@@ -85,11 +85,15 @@ export interface GeapSandboxOptions {
 
 // ─── GEAP REST API client ──────────────────────────────────────────────────
 
-/** Response envelope from the GEAP executeCode endpoint. */
+/**
+ * Normalized response from GEAP code execution.
+ * The raw API returns base64 JSON chunks; GeapClient.executeCode()
+ * decodes them into this internal envelope so callers see stdout/stderr
+ * as plain strings.
+ */
 interface ExecuteCodeResponse {
 	stdout?: string;
 	stderr?: string;
-	outputFiles?: Array<{ name: string; contents: string }>;
 	executionError?: { errorMessage?: string; errorType?: string };
 }
 
@@ -110,6 +114,38 @@ interface SandboxEnvironmentResource {
 	spec?: Record<string, unknown>;
 }
 
+/** Raw response from the GEAP :execute endpoint. */
+interface GeapExecuteRawResponse {
+	outputs?: Array<{ data: string; mimeType: string }>;
+}
+
+/** Decoded output from a GEAP execute response chunk. */
+interface GeapDecodedOutput {
+	exit_status_int: number;
+	msg_out: string;
+	msg_err: string;
+}
+
+/** Encode a UTF-8 string to base64 (works with non-ASCII code/paths). */
+function toBase64(str: string): string {
+	const bytes = new TextEncoder().encode(str);
+	let binary = '';
+	for (let i = 0; i < bytes.length; i++) {
+		binary += String.fromCharCode(bytes[i]);
+	}
+	return btoa(binary);
+}
+
+/** Decode a base64 string to UTF-8. */
+function fromBase64(base64: string): string {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) {
+		bytes[i] = binary.charCodeAt(i);
+	}
+	return new TextDecoder().decode(bytes);
+}
+
 class GeapClient {
 	private readonly baseUrl: string;
 	private readonly projectId: string;
@@ -119,7 +155,7 @@ class GeapClient {
 	constructor(options: GeapSandboxOptions) {
 		this.projectId = options.projectId;
 		this.region = options.region ?? 'us-central1';
-		this.baseUrl = `https://${this.region}-aiplatform.googleapis.com/v1`;
+		this.baseUrl = `https://${this.region}-aiplatform.googleapis.com/v1beta1`;
 
 		const tokenSource = options.accessToken;
 		if (typeof tokenSource === 'function') {
@@ -171,7 +207,10 @@ class GeapClient {
 		const op = await this.request<Operation>(
 			'POST',
 			`${this.projectPath}/reasoningEngines`,
-			{ displayName },
+			{
+				displayName,
+				spec: { agentFramework: 'custom', classMethods: [] },
+			},
 		);
 		const resolved = await this.pollOperation(op.name);
 		// Extract the reasoning engine resource name from the operation response.
@@ -195,7 +234,7 @@ class GeapClient {
 	): Promise<SandboxEnvironmentResource> {
 		const spec: Record<string, unknown> = {
 			codeExecutionEnvironment: {
-				...(options.language ? { language: options.language } : {}),
+				codeLanguage: options.language ?? 'LANGUAGE_PYTHON',
 				...(options.machineConfig
 					? { machineConfig: options.machineConfig }
 					: {}),
@@ -205,10 +244,7 @@ class GeapClient {
 		const op = await this.request<Operation>(
 			'POST',
 			`${reasoningEngineName}/sandboxEnvironments`,
-			{
-				displayName: options.displayName ?? 'flue-sandbox',
-				spec,
-			},
+			{ spec },
 		);
 
 		const resolved = await this.pollOperation(op.name);
@@ -222,23 +258,83 @@ class GeapClient {
 		return { ...resource, name } as SandboxEnvironmentResource;
 	}
 
-	/** Execute code in a sandbox environment. */
+	/**
+	 * Execute code in a sandbox environment via the GEAP :execute endpoint.
+	 *
+	 * The GEAP Code Execution API uses a Chunk-based wire format:
+	 * - Input: base64(JSON.stringify({code, files?})) wrapped in {inputs: [{data, mimeType}]}
+	 * - Output: base64(JSON.stringify({exit_status_int, msg_out, msg_err})) in {outputs: [{data, mimeType}]}
+	 *
+	 * This method handles the encoding/decoding and returns a normalized
+	 * ExecuteCodeResponse so callers don't need to know about the wire format.
+	 *
+	 * TODO: GEAP also offers a Managed Agents sandbox with full shell access,
+	 * filesystem, pip/npm install, and custom containers (BYOC) via a different
+	 * API path. A separate adapter for that mode would provide richer capabilities.
+	 */
 	async executeCode(
 		sandboxName: string,
 		code: string,
 		inputFiles?: Array<{ name: string; contents: string }>,
 	): Promise<ExecuteCodeResponse> {
-		const body: Record<string, unknown> = { code };
+		// Build input_data payload: {code, files?}
+		const inputData: Record<string, unknown> = { code };
 		if (inputFiles && inputFiles.length > 0) {
-			body.inputFiles = inputFiles;
+			inputData.files = inputFiles.map((f) => ({
+				name: f.name,
+				content: f.contents,
+				mime_type: 'text/plain',
+			}));
 		}
-		// Allow generous HTTP timeout since code execution can take up to 300s.
-		return this.request<ExecuteCodeResponse>(
+
+		// Encode as a JSON Chunk: base64(JSON.stringify(inputData))
+		const inputBase64 = toBase64(JSON.stringify(inputData));
+
+		const body = {
+			inputs: [{ data: inputBase64, mimeType: 'application/json' }],
+		};
+
+		// POST to :execute with generous timeout (code execution can take up to 300s)
+		const raw = await this.request<GeapExecuteRawResponse>(
 			'POST',
-			`${sandboxName}:executeCode`,
+			`${sandboxName}:execute`,
 			body,
 			330_000,
 		);
+
+		// Decode the base64 JSON output chunk
+		const outputChunk = raw.outputs?.[0];
+		if (!outputChunk?.data) {
+			return { stdout: '', stderr: '' };
+		}
+
+		let decoded: GeapDecodedOutput;
+		try {
+			decoded = JSON.parse(fromBase64(outputChunk.data));
+		} catch {
+			throw new Error(
+				'[flue:geap] Failed to decode execute response output chunk.',
+			);
+		}
+
+		// Normalize into the internal ExecuteCodeResponse envelope
+		const result: ExecuteCodeResponse = {
+			stdout: decoded.msg_out ?? '',
+			stderr: decoded.msg_err ?? '',
+		};
+
+		// If the Python process exited non-zero without producing stdout,
+		// treat it as an execution-level error (e.g. syntax error, crash).
+		if (decoded.exit_status_int !== 0 && !(result.stdout ?? '').trim()) {
+			result.executionError = {
+				errorMessage:
+					result.stderr ||
+					`Process exited with code ${decoded.exit_status_int}`,
+				errorType: 'ExecutionError',
+			};
+		}
+
+		return result;
 	}
 
 	/** Delete a sandbox environment. */
