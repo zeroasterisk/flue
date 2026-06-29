@@ -352,10 +352,15 @@ export function createAgentMsgChannel<E extends Env = Env>(
 					'POST',
 					`${relayUrl}/mailbox/${encodeURIComponent(agentId)}/ack`,
 					{ message_ids: ackIds },
-				).catch(() => {
-					// Ack failure is non-fatal — messages will be re-processed
-					// next poll (relay marks them DELIVERED, not PENDING, so
-					// they won't appear again anyway).
+				).catch(async () => {
+					// Retry once — un-acked messages WILL reappear on the next
+					// poll (the relay returns both PENDING and DELIVERED messages).
+					await relayFetch(
+						fetchFn,
+						'POST',
+						`${relayUrl}/mailbox/${encodeURIComponent(agentId)}/ack`,
+						{ message_ids: ackIds },
+					).catch(() => {});
 				});
 			}
 		} finally {
@@ -435,14 +440,13 @@ export function createAgentMsgChannel<E extends Env = Env>(
 			}
 		}
 
-		// Ack pushed messages
+		// Ack pushed messages (retry once on failure — un-acked messages reappear)
 		if (ackIds.length > 0) {
-			relayFetch(
-				fetchFn,
-				'POST',
-				`${relayUrl}/mailbox/${encodeURIComponent(agentId)}/ack`,
-				{ message_ids: ackIds },
-			).catch(() => {});
+			const ackUrl = `${relayUrl}/mailbox/${encodeURIComponent(agentId)}/ack`;
+			const ackBody = { message_ids: ackIds };
+			relayFetch(fetchFn, 'POST', ackUrl, ackBody).catch(async () => {
+				await relayFetch(fetchFn, 'POST', ackUrl, ackBody).catch(() => {});
+			});
 		}
 
 		return c.json({ ok: true }, 200);
