@@ -203,7 +203,7 @@ const ArdSearchInput = v.object({
 	publishers: v.optional(v.array(v.string())),
 	registries: v.optional(v.array(v.string())),
 	federation: v.optional(v.picklist(['auto', 'referrals', 'none'])),
-	pageSize: v.optional(v.number()),
+	pageSize: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100))),
 });
 
 const ArdLookupInput = v.object({

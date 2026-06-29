@@ -150,7 +150,7 @@ function buildSkillEntry(
 		identifier: generateUrn(publisher, skill.id, namespace ? `${namespace}:skill` : 'skill'),
 		displayName: skill.name,
 		type: 'text/markdown; profile=ai-skill',
-		url: '', // Skills are described inline via the catalog.
+		data: skill.description, // Inline the description as the artifact content.
 		description: skill.description,
 	};
 
@@ -174,7 +174,7 @@ function buildToolEntry(
 		identifier: generateUrn(publisher, tool.name, namespace ? `${namespace}:tool` : 'tool'),
 		displayName: tool.name,
 		type: 'application/mcp-server+json',
-		url: '', // Tools are capabilities on the agent, not standalone endpoints.
+		data: { name: tool.name, description: tool.description }, // Inline tool descriptor.
 		description: tool.description,
 	};
 }

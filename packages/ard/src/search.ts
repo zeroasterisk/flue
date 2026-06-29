@@ -25,6 +25,40 @@ const MAX_NESTING_DEPTH = 4;
 /** Well-known path for ai-catalog.json. */
 const WELL_KNOWN_PATH = '/.well-known/ai-catalog.json';
 
+/** Maximum allowed response body size (5 MB). */
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Regex matching hostnames that resolve to private/internal network addresses.
+ * Covers localhost, IPv4 private ranges (RFC 1918), link-local, loopback, and IPv6 loopback.
+ */
+const BLOCKED_HOSTS =
+	/^(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|\[::1\]|0\.0\.0\.0)$/i;
+
+/** Regex for a valid domain name (no ports, paths, or special characters). */
+const VALID_DOMAIN = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i;
+
+/**
+ * Validates that a URL is safe to fetch — blocks private/internal addresses
+ * and non-HTTP(S) protocols to prevent SSRF attacks.
+ */
+function validateFetchUrl(url: string): void {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new ArdFetchError(`Invalid URL: ${url}`, url, 0);
+	}
+
+	if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+		throw new ArdFetchError(`Unsupported protocol: ${parsed.protocol}`, url, 0);
+	}
+
+	if (BLOCKED_HOSTS.test(parsed.hostname)) {
+		throw new ArdFetchError('Fetching private/internal addresses is not allowed', url, 0);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
@@ -184,6 +218,12 @@ async function lookupByUrn(
 	const publisher = extractPublisherFromUrn(urn);
 	if (!publisher) return null;
 
+	// Validate the publisher looks like a real domain — prevents SSRF via
+	// crafted URNs like urn:ai:169.254.169.254:agent:foo.
+	if (!VALID_DOMAIN.test(publisher) || BLOCKED_HOSTS.test(publisher)) {
+		return null;
+	}
+
 	const catalogUrl = `https://${publisher}${WELL_KNOWN_PATH}`;
 	const catalog = await fetchCatalog(catalogUrl, options);
 	if (!catalog) return null;
@@ -250,6 +290,9 @@ export async function fetchWellKnownCatalog(
 	domain: string,
 	options?: LookupOptions,
 ): Promise<AICatalog | null> {
+	if (!VALID_DOMAIN.test(domain)) {
+		return null;
+	}
 	return fetchCatalog(`https://${domain}${WELL_KNOWN_PATH}`, options);
 }
 
@@ -353,51 +396,57 @@ interface FetchJsonOptions {
 }
 
 async function fetchJson<T>(url: string, options: FetchJsonOptions): Promise<T> {
+	// SSRF: validate before any network access.
+	validateFetchUrl(url);
+
 	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), timeoutMs);
+	// Compose timeout + optional external signal via AbortSignal.any()
+	// (available in Node 20+; required engine is >=22.19.0).
+	const signal = options.signal
+		? AbortSignal.any([AbortSignal.timeout(timeoutMs), options.signal])
+		: AbortSignal.timeout(timeoutMs);
 
-	// Link external signal.
-	if (options.signal) {
-		if (options.signal.aborted) {
-			controller.abort(options.signal.reason);
-		} else {
-			options.signal.addEventListener('abort', () => controller.abort(options.signal!.reason), {
-				once: true,
-			});
-		}
+	const headers: Record<string, string> = {
+		Accept: 'application/json, application/ai-catalog+json',
+	};
+	const init: RequestInit = { method: options.method, headers, signal };
+
+	if (options.body) {
+		headers['Content-Type'] = 'application/json';
+		init.body = JSON.stringify(options.body);
 	}
 
-	try {
-		const headers: Record<string, string> = {
-			Accept: 'application/json, application/ai-catalog+json',
-		};
-		const init: RequestInit = {
-			method: options.method,
-			headers,
-			signal: controller.signal,
-		};
+	const response = await fetch(url, init);
 
-		if (options.body) {
-			headers['Content-Type'] = 'application/json';
-			init.body = JSON.stringify(options.body);
-		}
-
-		const response = await fetch(url, init);
-
-		if (!response.ok) {
-			throw new ArdFetchError(
-				`ARD request failed: ${response.status} ${response.statusText}`,
-				url,
-				response.status,
-			);
-		}
-
-		return (await response.json()) as T;
-	} finally {
-		clearTimeout(timeout);
+	if (!response.ok) {
+		throw new ArdFetchError(
+			`ARD request failed: ${response.status} ${response.statusText}`,
+			url,
+			response.status,
+		);
 	}
+
+	// Guard against excessively large responses (OOM/DoS).
+	const contentLength = response.headers.get('content-length');
+	if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_BYTES) {
+		throw new ArdFetchError(
+			`Response too large: ${contentLength} bytes (limit ${MAX_RESPONSE_BYTES})`,
+			url,
+			413,
+		);
+	}
+
+	const text = await response.text();
+	if (text.length > MAX_RESPONSE_BYTES) {
+		throw new ArdFetchError(
+			`Response body too large: ${text.length} bytes (limit ${MAX_RESPONSE_BYTES})`,
+			url,
+			413,
+		);
+	}
+
+	return JSON.parse(text) as T;
 }
 
 /** Error thrown when an ARD HTTP request fails. */
