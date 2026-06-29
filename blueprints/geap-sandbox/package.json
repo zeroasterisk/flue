@@ -1,0 +1,35 @@
+{
+	"name": "@flue/geap-sandbox",
+	"version": "0.1.0",
+	"description": "GEAP (Gemini Enterprise Agent Platform) Code Execution Sandbox adapter for Flue",
+	"type": "module",
+	"license": "Apache-2.0",
+	"homepage": "https://flueframework.com/",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/withastro/flue",
+		"directory": "blueprints/geap-sandbox"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"src"
+	],
+	"scripts": {
+		"build": "tsc",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@flue/runtime": "^1.0.0-beta.0"
+	},
+	"devDependencies": {
+		"@flue/runtime": "workspace:*",
+		"typescript": "^5.8.0"
+	}
+}
