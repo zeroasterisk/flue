@@ -560,11 +560,14 @@ except Exception as e:
 			if (base64Content.length < 1_000_000) {
 				await this.run<null>(pyWriteFileBinary(path, base64Content));
 			} else {
-				// Large binary: use inputFiles with base64 decode on the sandbox side.
+				// Large binary: use inputFiles with base64, decode on the sandbox side.
 				const code = `
-import json, base64, shutil, sys
+import json, base64, sys
 try:
-    shutil.copy('/input/upload', ${pyStr(path)})
+    with open('/input/upload', 'r') as f:
+        data = base64.b64decode(f.read())
+    with open(${pyStr(path)}, 'wb') as f:
+        f.write(data)
     print(json.dumps({"ok": True, "data": None}))
 except Exception as e:
     print(json.dumps({"ok": False, "error": str(e)}))
