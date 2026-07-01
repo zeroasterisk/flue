@@ -4,15 +4,20 @@ import type {
 	A2AMessage,
 	A2AMessageHandlerInput,
 	A2AMessageHandlerResult,
-	A2ASendMessageRequest,
 	A2ASendMessageResponse,
 	A2ATask,
-	A2ATaskState,
 } from './index.ts';
-import { A2A_ERROR_REASONS } from './types.ts';
+import {
+	A2A_CONTENT_TYPE,
+	A2A_ERROR_REASONS,
+	AgentCard,
+	Message,
+	Role,
+	SendMessageConfiguration,
+	Task,
+} from './types.ts';
 
 const DEFAULT_BODY_LIMIT = 1024 * 1024; // 1 MiB
-const A2A_CONTENT_TYPE = 'application/a2a+json';
 const JSON_CONTENT_TYPE = 'application/json';
 
 interface AgentCardHandlerOptions {
@@ -22,7 +27,7 @@ interface AgentCardHandlerOptions {
 export function createAgentCardHandler<E extends Env>(
 	options: AgentCardHandlerOptions,
 ): Handler<E> {
-	const cardJson = JSON.stringify(options.agentCard);
+	const cardJson = JSON.stringify(AgentCard.toJSON(options.agentCard));
 	const headers = {
 		'Content-Type': JSON_CONTENT_TYPE,
 		'Cache-Control': 'public, max-age=3600',
@@ -74,28 +79,36 @@ export function createSendMessageHandler<E extends Env>(
 		const parsed = parseJson(body);
 		if (!isRecord(parsed)) return a2aErrorResponse(400, 'Invalid JSON body.');
 
-		// Validate as SendMessageRequest
-		const sendRequest = parsed as unknown as A2ASendMessageRequest;
-		if (!sendRequest.message || !isRecord(sendRequest.message)) {
+		// Validate presence of required fields before SDK conversion
+		if (!parsed.message || !isRecord(parsed.message)) {
 			return a2aErrorResponse(400, 'Missing or invalid "message" field.');
 		}
 
-		const message = sendRequest.message as A2AMessage;
-		if (!message.messageId || typeof message.messageId !== 'string') {
+		const rawMessage = parsed.message as Record<string, unknown>;
+		if (!rawMessage.messageId || typeof rawMessage.messageId !== 'string') {
 			return a2aErrorResponse(400, 'Missing or invalid "message.messageId".');
 		}
-		if (!message.role || typeof message.role !== 'string') {
+		if (!rawMessage.role || typeof rawMessage.role !== 'string') {
 			return a2aErrorResponse(400, 'Missing or invalid "message.role".');
 		}
-		if (!Array.isArray(message.parts) || message.parts.length === 0) {
+		if (!Array.isArray(rawMessage.parts) || rawMessage.parts.length === 0) {
 			return a2aErrorResponse(400, 'Missing or empty "message.parts".');
 		}
+
+		// Convert to SDK types
+		const message: A2AMessage = Message.fromJSON(parsed.message);
+		const taskId = message.taskId || undefined;
+		const contextId = message.contextId || undefined;
+		const configuration = isRecord(parsed.configuration)
+			? SendMessageConfiguration.fromJSON(parsed.configuration)
+			: undefined;
+		const metadata = isRecord(parsed.metadata)
+			? (parsed.metadata as Record<string, unknown>)
+			: undefined;
 
 		// Terminal-state validation for taskId (spec Section 3.1.1: sending to
 		// a terminal task MUST return UnsupportedOperationError) is delegated
 		// to the onMessage callback, which owns task-state lookups.
-		const taskId = message.taskId;
-		const contextId = message.contextId;
 
 		// Invoke the application callback
 		try {
@@ -104,8 +117,8 @@ export function createSendMessageHandler<E extends Env>(
 				message,
 				taskId,
 				contextId,
-				configuration: sendRequest.configuration,
-				metadata: sendRequest.metadata,
+				configuration,
+				metadata,
 			});
 
 			return serializeResponse(result);
@@ -150,7 +163,7 @@ export function createGetTaskHandler<E extends Env>(
 					A2A_ERROR_REASONS.TASK_NOT_FOUND,
 				);
 			}
-			return Response.json(task, {
+			return Response.json(Task.toJSON(task), {
 				status: 200,
 				headers: { 'Content-Type': A2A_CONTENT_TYPE },
 			});
@@ -220,7 +233,7 @@ export function createCancelTaskHandler<E extends Env>(
 					A2A_ERROR_REASONS.TASK_NOT_FOUND,
 				);
 			}
-			return Response.json(task, {
+			return Response.json(Task.toJSON(task), {
 				status: 200,
 				headers: { 'Content-Type': A2A_CONTENT_TYPE },
 			});
@@ -271,7 +284,16 @@ export function createUnsupportedHandler<E extends Env>(
 function serializeResponse(value: A2ASendMessageResponse | undefined | Response): Response {
 	if (value === undefined) return new Response(null, { status: 200 });
 	if (Object.prototype.toString.call(value) === '[object Response]') return value as Response;
-	return Response.json(value, {
+
+	// Narrow to A2ASendMessageResponse after excluding undefined and Response
+	const result = value as A2ASendMessageResponse;
+
+	// Serialize the Flue response envelope — convert SDK objects to wire format
+	const wireFormat: Record<string, unknown> = {};
+	if (result.task) wireFormat.task = Task.toJSON(result.task);
+	if (result.message) wireFormat.message = Message.toJSON(result.message);
+
+	return Response.json(wireFormat, {
 		status: 200,
 		headers: { 'Content-Type': A2A_CONTENT_TYPE },
 	});

@@ -8,12 +8,34 @@ import {
 	createSendMessageHandler,
 	createUnsupportedHandler,
 } from './handlers.ts';
+import { AgentCard } from './types.ts';
 
 export { A2AProtocolError } from './handlers.ts';
 export { InvalidA2AConversationKeyError, InvalidA2AInputError } from './errors.ts';
 export {
+	A2A_CONTENT_TYPE,
 	A2A_ERROR_REASONS,
 	TERMINAL_TASK_STATES,
+	// SDK value re-exports (MessageFns with fromJSON/toJSON)
+	AgentCard,
+	AgentCapabilities,
+	AgentInterface,
+	AgentProvider,
+	AgentSkill,
+	Artifact,
+	Message,
+	Part,
+	Role,
+	SendMessageConfiguration,
+	SendMessageRequest,
+	SendMessageResponse,
+	Task,
+	TaskState,
+	roleFromJSON,
+	roleToJSON,
+	taskStateFromJSON,
+	taskStateToJSON,
+	// Type aliases (A2A-prefixed)
 	type A2AAgentCapabilities,
 	type A2AAgentCard,
 	type A2AAgentInterface,
@@ -27,7 +49,6 @@ export {
 	type A2ARpcStatus,
 	type A2ASendMessageConfiguration,
 	type A2ASendMessageRequest,
-	type A2ASendMessageResponse,
 	type A2ATask,
 	type A2ATaskState,
 	type A2ATaskStatus,
@@ -56,21 +77,33 @@ export interface A2ATaskRef {
 export interface A2AMessageHandlerInput<E extends Env = Env> {
 	/** Hono context. */
 	c: Context<E>;
-	/** The A2A message from the client. */
+	/** The A2A message from the client (SDK type). */
 	message: import('./types.ts').A2AMessage;
 	/** Task ID if this message continues an existing task. */
 	taskId?: string;
 	/** Context ID for grouping related interactions. */
 	contextId?: string;
-	/** Request configuration. */
+	/** Request configuration (SDK type). */
 	configuration?: import('./types.ts').A2ASendMessageConfiguration;
 	/** Additional metadata from the request. */
 	metadata?: Record<string, unknown>;
 }
 
+/**
+ * Flue-specific response envelope for the onMessage callback.
+ * Contains either a task or a direct message response.
+ * The handler serializes SDK objects to wire format via `toJSON()`.
+ */
+export interface A2ASendMessageResponse {
+	/** Task created or updated by the message (SDK type). */
+	task?: import('./types.ts').A2ATask;
+	/** Direct message response (SDK type). */
+	message?: import('./types.ts').A2AMessage;
+}
+
 type A2AMessageHandlerValue =
 	| undefined
-	| import('./types.ts').A2ASendMessageResponse
+	| A2ASendMessageResponse
 	| Response;
 
 /**
@@ -91,10 +124,18 @@ export interface A2AAgentCardConfig {
 	version: string;
 	/** Base URL where the agent is deployed. */
 	url: string;
-	/** Agent skills. */
-	skills: import('./types.ts').A2AAgentSkill[];
+	/** Agent skills (loose input — missing array fields default to empty). */
+	skills: Array<{
+		id: string;
+		name: string;
+		description: string;
+		tags: string[];
+		examples?: string[];
+		inputModes?: string[];
+		outputModes?: string[];
+	}>;
 	/** Agent provider. */
-	provider?: import('./types.ts').A2AAgentProvider;
+	provider?: { url: string; organization: string };
 	/** Documentation URL. */
 	documentationUrl?: string;
 	/** Icon URL. */
@@ -121,7 +162,7 @@ export interface A2AChannelOptions<E extends Env = Env> {
 	 * Return a `Response` to reject the request (e.g. 401/403), or
 	 * `undefined`/`void` to allow it through.
 	 *
-	 * **⚠️ WARNING:** This channel has **no built-in authentication**.
+	 * **WARNING:** This channel has **no built-in authentication**.
 	 * Any internet-facing deployment MUST provide an `authenticate`
 	 * callback to prevent unauthorized access. The A2A spec (Section 8)
 	 * requires agents to declare and enforce security schemes.
@@ -286,7 +327,9 @@ function normalizeAgentCard(
 ): import('./types.ts').A2AAgentCard {
 	if (isFullAgentCard(input)) return input;
 
-	return {
+	// Use AgentCard.fromJSON to properly construct an SDK-typed agent card
+	// with all default values filled in.
+	return AgentCard.fromJSON({
 		name: input.name,
 		description: input.description,
 		version: input.version,
@@ -307,7 +350,7 @@ function normalizeAgentCard(
 		defaultOutputModes: input.defaultOutputModes ?? ['text/plain'],
 		skills: input.skills,
 		iconUrl: input.iconUrl,
-	};
+	});
 }
 
 // ---------------------------------------------------------------------------
